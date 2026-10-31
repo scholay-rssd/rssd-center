@@ -18,6 +18,9 @@ export class RssdController {
   constructor(private rssd: RssdService) {}
   @Get('/identity') identity(@Req() req: any) { return {protocolVersion: 1, ...req.rssd}; }
   @Get('/health') health(@Req() req: any) { return health(this.rssd.store, req.rssd); }
+  @Get('/guestbooks') guestbooks(@Req() req: any) { return this.rssd.guestbook.books(req.rssd); }
+  @Get('/guestbooks/:siteId/messages') guestbookMessages(@Req() req: any, @Param('siteId') siteId: string, @Query('status') status: string) { return this.rssd.guestbook.moderation(req.rssd, siteId, status); }
+  @Post('/guestbooks/:siteId/messages/:id/review') reviewGuestbook(@Req() req: any, @Param('siteId') siteId: string, @Param('id') id: string, @Body() body: any) { return this.rssd.guestbook.review(req.rssd, siteId, id, body.status); }
   @Post('/media') uploadMedia(@Req() req: any, @Body() body: any) { return this.rssd.media.upload(req.rssd, body); }
   @Get('/media/:id') media(@Req() req: any, @Param('id') id: string) { return this.rssd.media.status(req.rssd, id); }
   @Get('/media/:id/raw') async rawMedia(@Req() req: any, @Param('id') id: string, @Res() res: any) {

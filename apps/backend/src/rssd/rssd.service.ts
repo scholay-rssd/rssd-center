@@ -10,6 +10,7 @@ const { RssdStore } = require('../../../../rssd/store.cjs');
 const { RssdPublisher } = require('../../../../rssd/publisher.cjs');
 const { RssdMedia } = require('../../../../rssd/media.cjs');
 const { RssdPostiz } = require('../../../../rssd/postiz.cjs');
+const { RssdGuestbook } = require('../../../../rssd/guestbook.cjs');
 
 @Injectable()
 export class RssdService implements OnModuleInit, OnModuleDestroy {
@@ -17,9 +18,11 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   readonly publisher: any;
   readonly media: any;
   readonly postiz: any;
+  readonly guestbook: any;
   private timer?: ReturnType<typeof setInterval>;
   constructor(prisma: PrismaService, posts: PostsService, temporal: TemporalService) {
     this.store = new RssdStore(prisma);
+    this.guestbook = new RssdGuestbook(this.store, {secret: process.env.RSSD_ENCRYPTION_KEY || process.env.JWT_SECRET});
     this.media = new RssdMedia(this.store, {directory: process.env.RSSD_MEDIA_DIRECTORY, origin: process.env.FRONTEND_URL});
     this.postiz = new RssdPostiz(this.store, {
       validate: (org: string, values: any[]) => posts.validatePosts(org, values),

@@ -64,3 +64,4 @@ i18n.cache
 apps/frontend/public/g.js
 # Generated in CI from the pinned Prisma model.
 /rssd/postiz-schema.sql
+__pycache__/

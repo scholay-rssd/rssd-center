@@ -11,6 +11,7 @@ const {RssdMedia}=require('./media.cjs');
 const mediaProtocol=require('./rssd-media.cjs');
 const {RssdMigration}=require('./migration.cjs');
 const p=require('./protocol.cjs');
+const {RssdGuestbook}=require('./guestbook.cjs');
 let pool,db,store;
 function adapter(client) {
   return {$queryRawUnsafe:async(sql,...values)=>(await client.query(sql,values)).rows,
@@ -34,6 +35,52 @@ async function fixture() {
   const packet={requestId:randomUUID(),workId:randomUUID(),workspaceId:'research',sectionId:'methods',editions:[{locale:'en',title:'English original',bodyMarkdown:'Original body.'}]};
   return {owner,worker,ctx,packet};
 }
+
+async function guestFixture(){
+ const f=await fixture(),siteId='fixture-'+randomUUID(),secret='a'.repeat(64),proxyToken='fixture-'+randomUUID();
+ const service=new RssdGuestbook(store,{secret:'test encryption key '.repeat(3),now:()=>Date.parse('2026-11-01T04:00:00Z')});
+ const bundle={version:1,siteId,workspaceId:'research',config:{siteId,name:'Fixture',home:'https://example.org',timezone:'Asia/Shanghai',dailyLimit:2,forms:[{id:'message',label:'交流',fields:[]}]},source:{guestbook_meta:[{key:'site',value:siteId},{key:'secret',value:secret}],messages:[],guard:[]}};
+ bundle.sourceHash=p.hash(bundle.source);await service.importLegacy(f.owner,bundle,proxyToken);
+ const headers={'x-rssd-site-token':proxyToken,'x-rssd-client-ip':'192.0.2.1',origin:'https://example.org'};
+ return {...f,siteId,secret,proxyToken,service,bundle,headers};
+}
+test('guestbook migration keeps signed visitor identity, old receipt, moderation and quota',async()=>{
+ const f=await guestFixture(),v='b'.repeat(48),hash=value=>require('node:crypto').createHmac('sha256',f.secret).update(f.siteId+':'+value).digest('hex');
+ const payload={kind:'message',name:'Synthetic visitor',message:'Archived message',contact:'private@example.org',details:{}};
+ f.bundle.source.messages.push({id:randomUUID(),visitor:hash('visitor:'+v),day:'2026-11-01',request_key:'original-request-key',payload:JSON.stringify(payload),status:'approved',created:1793505600000,reviewed:1793505600001,reviewer:'original-owner'});
+ f.bundle.sourceHash=p.hash(f.bundle.source);await f.service.importLegacy(f.owner,f.bundle,f.proxyToken);
+ await assert.rejects(f.service.session(f.siteId,f.headers,{}),{status:403});
+ await assert.rejects(f.service.activate(f.owner,f.siteId,f.bundle.sourceHash,{}),{status:409});
+ await f.service.activate(f.owner,f.siteId,f.bundle.sourceHash,{oldWriterDisabled:true});
+ const cookies={['__Host-today-guest-'+f.siteId]:v+'.'+hash('cookie:'+v)},session=await f.service.session(f.siteId,f.headers,cookies);
+ assert.equal(session.cookie,undefined);assert.equal(session.body.remaining,1);
+ const result=await f.service.submit(f.siteId,{...f.headers,'x-guestbook-csrf':session.body.csrf},cookies,{...payload,requestKey:'original-request-key'});
+ assert.equal(result.replayed,true);assert.equal(result.id,f.bundle.source.messages[0].id);assert.equal(result.remaining,1);
+ const publicResult=await f.service.publicMessages(f.siteId,f.headers);assert.equal(publicResult.messages[0].message,payload.message);assert(!JSON.stringify(publicResult).includes('private@example.org'));
+ assert.equal((await f.service.moderation(f.owner,f.siteId,'approved')).messages[0].contact,payload.contact);
+ const stored=await oneForTest('SELECT * FROM rssd_guestbooks WHERE "siteId"=$1',f.siteId);assert(!JSON.stringify(stored).includes(f.secret));
+ await assert.rejects(f.service.importLegacy(f.owner,f.bundle,f.proxyToken),{status:409});
+});
+const oneForTest=async(sql,...values)=>(await db.$queryRawUnsafe(sql,...values))[0];
+test('concurrent guestbook posts admit two per browser and preserve replay without exposing contacts',async()=>{
+ const f=await guestFixture();await f.service.activate(f.owner,f.siteId,f.bundle.sourceHash,{oldWriterDisabled:true});
+ const session=await f.service.session(f.siteId,f.headers,{}),cookies={[session.cookie.name]:session.cookie.value},headers={...f.headers,'x-guestbook-csrf':session.body.csrf};
+ const body={kind:'message',name:'Fixture',message:'Plain <script>text</script>',contact:'private phone',details:{}};
+ const requests=Array.from({length:4},(_,i)=>({...body,requestKey:'fixture-request-'+i}));
+ const results=await Promise.allSettled(requests.map(b=>f.service.submit(f.siteId,headers,cookies,b)));
+ assert.equal(results.filter(r=>r.status==='fulfilled').length,2);results.filter(r=>r.status==='rejected').forEach(r=>assert.equal(r.reason.status,429));
+ assert.deepEqual((await f.service.publicMessages(f.siteId,headers)).messages,[]);
+ const i=results.findIndex(r=>r.status==='fulfilled'),first=results[i].value;
+ assert.equal((await f.service.submit(f.siteId,headers,cookies,requests[i])).id,first.id);
+ await assert.rejects(f.service.submit(f.siteId,headers,cookies,{...requests[i],message:'different'}),{status:409});
+ await f.service.review(f.owner,f.siteId,first.id,'approved');
+ assert.deepEqual(Object.keys((await f.service.publicMessages(f.siteId,headers)).messages[0]).sort(),['created','id','kind','message','name']);
+ await assert.rejects(f.service.review({...f.owner,orgId:randomUUID()},f.siteId,first.id,'rejected'),{status:404});
+ await assert.rejects(f.service.moderation(f.ctx,f.siteId),{status:403});
+ await assert.rejects(f.service.submit(f.siteId,{...headers,origin:'https://evil.example'},cookies,requests[i]),{status:403});
+ await assert.rejects(f.service.session(f.siteId,{...headers,'x-rssd-site-token':'wrong'},cookies),{status:403});
+ await assert.rejects(f.service.session(f.siteId,{...headers,'x-rssd-client-ip':'spoofed'},cookies),{status:403});
+});
 test('one demand is claimed exactly once by concurrent devices',async()=>{
   const f=await fixture();await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'One task'});
   const contexts=await Promise.all(Array.from({length:12},async(_,i)=>store.authenticate((await store.createWorker(f.owner,{name:'Device '+i,workspaceIds:['research']})).token)));

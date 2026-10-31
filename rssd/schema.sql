@@ -1,4 +1,20 @@
 -- Additive RSSD v1 schema. Existing Postiz tables and publications are untouched.
+CREATE TABLE IF NOT EXISTS rssd_guestbooks (
+ "siteId" TEXT PRIMARY KEY,"orgId" TEXT NOT NULL,"workspaceId" TEXT NOT NULL,
+ config JSONB NOT NULL,"sealedSecret" TEXT NOT NULL,"proxyTokenHash" TEXT NOT NULL,
+ enabled BOOLEAN NOT NULL DEFAULT false,"sourceHash" TEXT,"legacySource" JSONB,
+ "updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS rssd_guestbook_messages (
+ "siteId" TEXT NOT NULL,id TEXT NOT NULL,visitor TEXT NOT NULL,day TEXT NOT NULL,"requestKey" TEXT NOT NULL,
+ payload JSONB NOT NULL,status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected')),
+ created BIGINT NOT NULL,reviewed BIGINT,reviewer TEXT,
+ PRIMARY KEY ("siteId",id),UNIQUE ("siteId",visitor,"requestKey")
+);
+CREATE INDEX IF NOT EXISTS rssd_guestbook_quota ON rssd_guestbook_messages ("siteId",visitor,day);
+CREATE TABLE IF NOT EXISTS rssd_guestbook_guard (
+ "siteId" TEXT NOT NULL,key TEXT NOT NULL,count INTEGER NOT NULL,expires BIGINT NOT NULL,PRIMARY KEY ("siteId",key)
+);
 CREATE TABLE IF NOT EXISTS rssd_migrations (
  "orgId" TEXT NOT NULL, "siteId" TEXT NOT NULL, "workspaceId" TEXT NOT NULL,
  state TEXT NOT NULL, manifest JSONB NOT NULL, ancillary JSONB NOT NULL, report JSONB NOT NULL DEFAULT '{}',
