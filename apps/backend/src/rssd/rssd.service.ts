@@ -12,6 +12,7 @@ const { RssdMedia } = require('../../../../rssd/media.cjs');
 const { RssdPostiz } = require('../../../../rssd/postiz.cjs');
 const { RssdGuestbook } = require('../../../../rssd/guestbook.cjs');
 const { RssdLabels } = require('../../../../rssd/labels.cjs');
+const { RssdCommunity } = require('../../../../rssd/community.cjs');
 
 @Injectable()
 export class RssdService implements OnModuleInit, OnModuleDestroy {
@@ -21,9 +22,11 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   readonly postiz: any;
   readonly guestbook: any;
   readonly labels = new RssdLabels();
+  readonly community: any;
   private timer?: ReturnType<typeof setInterval>;
   constructor(prisma: PrismaService, posts: PostsService, temporal: TemporalService) {
     this.store = new RssdStore(prisma);
+    this.community = new RssdCommunity(this.store);
     this.guestbook = new RssdGuestbook(this.store, {secret: process.env.RSSD_ENCRYPTION_KEY || process.env.JWT_SECRET});
     this.media = new RssdMedia(this.store, {directory: process.env.RSSD_MEDIA_DIRECTORY, origin: process.env.FRONTEND_URL});
     this.postiz = new RssdPostiz(this.store, {
@@ -53,5 +56,5 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
       this.publisher.tick().catch(() => console.error('RSSD publisher could not access its queue'));
     }, 3000);
   }
-  onModuleDestroy() { if (this.timer) clearInterval(this.timer); this.labels.close(); }
+  async onModuleDestroy() { if (this.timer) clearInterval(this.timer); this.labels.close(); await this.community.close(); }
 }

@@ -9,6 +9,16 @@ class RssdService {}
 require.cache[path]={id:path,filename:path,loaded:true,exports:{RssdService}};
 const {RssdController}=require('../apps/backend/dist/apps/backend/src/rssd/rssd.controller.js');
 const {RssdGuestbookController}=require('../apps/backend/dist/apps/backend/src/rssd/rssd.guestbook.controller.js');
+const {RssdCommunityController}=require('../apps/backend/dist/apps/backend/src/rssd/rssd.community.controller.js');
+
+test('forum webhook receives original signed bytes and enforces the small raw body limit',async t=>{
+ const original=Buffer.from('{ "post": { "cooked": "虚构正文" } }\n');let calls=0;
+ const module=await Test.createTestingModule({controllers:[RssdCommunityController],providers:[{provide:RssdService,useValue:{community:{accept:async(raw,headers)=>{calls++;assert(Buffer.isBuffer(raw));assert(raw.equals(original));assert.equal(headers['x-discourse-event-signature'],'fixture-signature');return {statusCode:200,body:{ok:true}};}}}}]}).compile();
+ const app=module.createNestApplication();app.useLogger(false);app.use('/rssd/public/v1/community/discourse',require('express').raw({type:'application/json',limit:'512kb'}));await app.listen(0,'127.0.0.1');t.after(()=>app.close());
+ const url=await app.getUrl()+'/rssd/public/v1/community/discourse',headers={'content-type':'application/json','x-discourse-event-signature':'fixture-signature'};
+ assert.equal((await fetch(url,{method:'POST',headers,body:original})).status,200);
+ assert.equal((await fetch(url,{method:'POST',headers,body:'x'.repeat(512*1024+1)})).status,413);assert.equal(calls,1);
+});
 
 test('guestbook HTTP session keeps secure same-site cookies and owner fields out of public messages',async t=>{
  const service={guestbook:{

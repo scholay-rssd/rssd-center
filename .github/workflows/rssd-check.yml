@@ -36,7 +36,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec prisma migrate diff --from-empty --to-schema-datamodel libraries/nestjs-libraries/src/database/prisma/schema.prisma --script --output rssd/postiz-schema.sql
-      - run: node --test rssd/store.test.cjs rssd/discourse.test.cjs rssd/postiz.test.cjs rssd/initialize-database.test.cjs rssd/owner-context.test.cjs rssd/health.test.cjs rssd/labels.test.cjs
+      - run: node --test rssd/store.test.cjs rssd/discourse.test.cjs rssd/postiz.test.cjs rssd/initialize-database.test.cjs rssd/owner-context.test.cjs rssd/health.test.cjs rssd/labels.test.cjs rssd/community.test.cjs
       - run: pnpm --filter postiz-backend build
       - run: node --test rssd/http.test.cjs
       - run: pnpm exec tsc --noEmit -p apps/frontend/tsconfig.json

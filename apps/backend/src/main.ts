@@ -3,7 +3,7 @@ initializeSentry('backend', true);
 import compression from 'compression';
 
 import { loadSwagger } from '@gitroom/helpers/swagger/load.swagger';
-import { json } from 'express';
+import { json, raw } from 'express';
 import { Runtime } from '@temporalio/worker';
 Runtime.install({ shutdownSignals: [] });
 
@@ -71,6 +71,7 @@ async function start() {
     json({ limit: '50mb' })(req, res, next);
   });
 
+  app.use('/rssd/public/v1/community/discourse', raw({type:'application/json',limit:'512kb'}));
   app.use(cookieParser());
   app.use(compression());
   app.useGlobalFilters(new SubscriptionExceptionFilter());

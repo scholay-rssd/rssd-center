@@ -58,6 +58,7 @@ import { OauthProvider } from '@gitroom/backend/services/auth/providers/oauth.pr
 import { StripeController } from '@gitroom/backend/api/routes/stripe.controller';
 import { RssdController } from '../rssd/rssd.controller';
 import { RssdGuestbookController } from '../rssd/rssd.guestbook.controller';
+import { RssdCommunityController } from '../rssd/rssd.community.controller';
 import { RssdService } from '../rssd/rssd.service';
 import { RssdMiddleware } from '../rssd/rssd.middleware';
 
@@ -97,6 +98,7 @@ const authenticatedController = [
         PaymentController,
         RssdController,
         RssdGuestbookController,
+        RssdCommunityController,
         StripeController,
         AuthController,
         PublicController,
