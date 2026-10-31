@@ -1,18 +1,44 @@
 import React from 'react';
+import {randomUUID} from 'node:crypto';
 import {render,screen,fireEvent,waitFor,act,cleanup} from '@testing-library/react';
 import {RssdWorkspace} from '../apps/frontend/src/components/rssd/workspace';
 
 const mockFetch=jest.fn();
 jest.mock('@gitroom/helpers/utils/custom.fetch',()=>({useFetch:()=>mockFetch}));
 jest.mock('@gitroom/frontend/components/layout/user.context',()=>({useUser:()=>({orgId:'fixture'})}));
-jest.mock('next/dynamic',()=>()=>()=>null);
+jest.mock('next/dynamic',()=>()=>({value,onChange,textareaProps}:any)=><textarea {...textareaProps} value={value} onChange={e=>onChange(e.target.value)}/>);
 jest.mock('../apps/frontend/src/components/rssd/configuration',()=>({WorkspacePolicy:()=>null,DestinationSettings:()=>null}));
 jest.mock('../apps/frontend/src/components/rssd/platform-content',()=>({PlatformContent:()=>null}));
 
 const response=(value:unknown)=>({ok:true,json:async()=>value});
 const deferred=()=>{let resolve!:(value:any)=>void;const promise=new Promise<any>(r=>resolve=r);return {promise,resolve};};
-beforeEach(()=>{mockFetch.mockReset();localStorage.clear();sessionStorage.clear();});
+beforeEach(()=>{mockFetch.mockReset();localStorage.clear();sessionStorage.clear();Object.defineProperty(crypto,'randomUUID',{value:randomUUID,configurable:true});});
 afterEach(cleanup);
+
+test('a pending save keeps the work, language and workspace fixed until its receipt arrives',async()=>{
+  const saved=deferred();
+  const edition={locale:'zh-CN',revision:1,payload:{title:'Fixture work',bodyMarkdown:'Fixture body',media:[]}};
+  const work={id:'w1',workspaceId:'one',sectionId:'methods',editions:[edition]};
+  mockFetch.mockImplementation(async(path:string,options:any)=>{
+    if(path.endsWith('/registry'))return response({workspaces:[{id:'one',name:'One',sections:[]}]});
+    if(path.includes('/works?'))return response([{id:'w1',editions:[{...edition,title:'Fixture work'}]}]);
+    if(path.endsWith('/works/w1'))return response(work);
+    if(path.endsWith('/drafts')&&options.method==='POST')return saved.promise;
+    return response([]);
+  });
+  render(<RssdWorkspace/>);
+  fireEvent.click(screen.getByRole('button',{name:'作品库',exact:true}));
+  fireEvent.click(await screen.findByRole('button',{name:'Fixture work'}));
+  await screen.findByRole('textbox',{name:'文章正文'});
+  await waitFor(()=>expect((screen.getByRole('button',{name:'保存草稿'}) as HTMLButtonElement).disabled).toBe(false));
+  fireEvent.click(screen.getByRole('button',{name:'保存草稿'}));
+  expect((screen.getByRole('button',{name:'English'}) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button',{name:'返回作品库'}) as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByLabelText('工作空间') as HTMLSelectElement).disabled).toBe(true);
+  await act(async()=>saved.resolve(response({workId:'w1',status:'draft_saved'})));
+  await screen.findByText('草稿已保存');
+  expect((screen.getByRole('button',{name:'English'}) as HTMLButtonElement).disabled).toBe(false);
+});
 
 test('tab changes hide the prior row type immediately and ignore late responses',async()=>{
   const workRequest=deferred();

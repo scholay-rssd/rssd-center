@@ -101,6 +101,9 @@ def regular_files(source):
 
 def snapshot(config, remote=None):
     state = pathlib.Path(config['stateDirectory']).resolve(); state.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for item in config.get('configuration', []) + config.get('archives', []):
+        source = pathlib.Path(item['source']).resolve()
+        if state.is_relative_to(source): raise ValueError('Backup state cannot be inside a source directory')
     local = state / 'snapshots'; local.mkdir(exist_ok=True, mode=0o700)
     index_file, status_file = state / 'objects.json', state / 'status.json'
     index = json.loads(index_file.read_text()) if index_file.exists() else {}
