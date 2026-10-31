@@ -3,11 +3,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends g++ make python
     && rm -rf /var/lib/apt/lists/*
 RUN npm --no-update-notifier --no-fund --global install pnpm@10.6.1
 WORKDIR /app
-COPY . /app
+# Keep dependencies in a reusable layer across ordinary product revisions.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY apps/backend/package.json apps/backend/package.json
+COPY apps/frontend/package.json apps/frontend/package.json
+COPY apps/frontend/scripts/fetch-gtm.mjs apps/frontend/scripts/fetch-gtm.mjs
+COPY apps/orchestrator/package.json apps/orchestrator/package.json
+COPY apps/commands/package.json apps/commands/package.json
+COPY apps/extension/package.json apps/extension/package.json
+COPY apps/sdk/package.json apps/sdk/package.json
+COPY libraries/nestjs-libraries/src/database/prisma/schema.prisma libraries/nestjs-libraries/src/database/prisma/schema.prisma
 RUN pnpm install --frozen-lockfile
+COPY . /app
 RUN pnpm exec prisma migrate diff --from-empty --to-schema-datamodel libraries/nestjs-libraries/src/database/prisma/schema.prisma --script --output rssd/postiz-schema.sql
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm run build
 RUN node -e "for(const n of ['store','publisher','media','migration'])require('./apps/backend/dist/rssd/'+n+'.cjs')"
+# Build caches are not runtime inputs; source stays available at the pinned
+# public repository revision identified by the OCI label.
+RUN rm -rf apps/frontend/.next/cache apps/frontend/.next/build
 
 FROM node:22.20.0-bookworm-slim
 ARG RSSD_REVISION
@@ -20,7 +33,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends nginx ca-certif
     && mkdir -p /www /config/rssd /uploads && chown -R www:www /www /var/lib/nginx
 RUN npm --no-update-notifier --no-fund --global install pm2@7.0.4
 WORKDIR /app
-COPY --from=build /app /app
+COPY --from=build /app/node_modules /app/node_modules
+COPY --from=build /app/apps/backend/dist /app/apps/backend/dist
+COPY --from=build /app/apps/orchestrator/dist /app/apps/orchestrator/dist
+COPY --from=build /app/apps/frontend/.next /app/apps/frontend/.next
+COPY --from=build /app/apps/frontend/public /app/apps/frontend/public
+COPY --from=build /app/apps/frontend/package.json /app/apps/frontend/next.config.js /app/apps/frontend/
+COPY --from=build /app/rssd /app/rssd
+COPY --from=build /app/LICENSE /app/package.json /app/
 COPY var/docker/nginx.conf /etc/nginx/nginx.conf
 ENV NODE_ENV=production RSSD_DISPATCH_ENABLED=0
 EXPOSE 5000
