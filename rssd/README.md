@@ -16,6 +16,12 @@ the main Prisma schema so the existing Postiz startup procedure cannot treat
 them as unknown tables. Back up the existing database before applying changes.
 Do not use schema reset or accept-data-loss to deploy this change.
 
+For a new self-hosted installation only, set `RSSD_INITIALIZE_EMPTY_DATABASE=1`.
+CI generates the initial schema from the pinned Prisma model and packages it in
+the image. Startup uses that SQL without downloading a Prisma engine. Initialization
+refuses a partially populated database; an existing Postiz database receives only
+the additive RSSD migration. The first-install flag does not reset existing data.
+
 `protocol.cjs` is a versioned MIT protocol dependency from the RSSD core repository;
 `protocol.source.json` records its source fingerprint. Core maintains its source.
 

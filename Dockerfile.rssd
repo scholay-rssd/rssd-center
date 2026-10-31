@@ -5,6 +5,7 @@ RUN npm --no-update-notifier --no-fund --global install pnpm@10.6.1
 WORKDIR /app
 COPY . /app
 RUN pnpm install --frozen-lockfile
+RUN pnpm exec prisma migrate diff --from-empty --to-schema-datamodel libraries/nestjs-libraries/src/database/prisma/schema.prisma --script --output rssd/postiz-schema.sql
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm run build
 RUN node -e "for(const n of ['store','publisher','media','migration'])require('./apps/backend/dist/rssd/'+n+'.cjs')"
 

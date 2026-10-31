@@ -35,7 +35,8 @@ jobs:
           node-version: '22.19.0'
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: node --test rssd/store.test.cjs rssd/discourse.test.cjs
+      - run: pnpm exec prisma migrate diff --from-empty --to-schema-datamodel libraries/nestjs-libraries/src/database/prisma/schema.prisma --script --output rssd/postiz-schema.sql
+      - run: node --test rssd/store.test.cjs rssd/discourse.test.cjs rssd/initialize-database.test.cjs
       - run: pnpm --filter postiz-backend build
       - run: pnpm exec tsc --noEmit -p apps/frontend/tsconfig.json
       - name: Verify packaged domain runtime

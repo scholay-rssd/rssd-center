@@ -1,6 +1,7 @@
 'use strict';
 const {readFileSync}=require('node:fs'),{join}=require('node:path'),{PrismaClient}=require('@prisma/client');
 async function main(){
+ await require('./initialize-database.cjs').initializeConfiguredDatabase();
  const db=new PrismaClient();try{
   // Only additive RSSD DDL runs at startup. Postiz's existing schema is preserved.
   await db.$transaction(async tx=>{
