@@ -18,7 +18,7 @@ const when = (value?:string) => value ? new Date(value).toLocaleString('zh-CN',{
 export function RssdWorkspace() {
   const fetch = useFetch(), user=useUser();
   const [tab,setTab]=useState<Tab>('demands'),[registry,setRegistry]=useState<Row[]>([]),[space,setSpace]=useState('');
-  const [rows,setRows]=useState<Row[]>([]),[search,setSearch]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('');
+  const [listing,setListing]=useState<{key:string;rows:Row[]}>({key:'',rows:[]}),[search,setSearch]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[creating,setCreating]=useState(false);
   const [selected,setSelected]=useState<Row|null>(null),[language,setLanguage]=useState('zh-CN'),[title,setTitle]=useState(''),[body,setBody]=useState('');
   const [token,setToken]=useState(''),[pending,setPending]=useState<Row|null>(null);
@@ -28,6 +28,10 @@ export function RssdWorkspace() {
   const [demandSource,setDemandSource]=useState<Row|null>(null),[demandKind,setDemandKind]=useState('write');
   const [conflict,setConflict]=useState<Row|null>(null);
   const requestGeneration=useRef(0);
+  const listKey=JSON.stringify([tab,space,search,offset]);
+  // A tab changes before its request finishes. Never render another tab's row shape.
+  const rows=listing.key===listKey?listing.rows:[];
+  const listLoading=loading||listing.key!==listKey;
   const active=registry.find(w=>w.id===space);
   const storageKey='rssd:pending:'+user?.orgId;
   const draftKey='rssd:editor-drafts:'+user?.orgId;
@@ -47,12 +51,12 @@ export function RssdWorkspace() {
     try{
       const query=new URLSearchParams({limit:'50',offset:String(offset)});if(space)query.set('workspaceId',space);if(search)query.set('search',search);
       const result=['settings','destinations'].includes(tab)?[]:await api('/'+tab+(tab==='workers'?'':'?'+query));
-      if(generation===requestGeneration.current)setRows(result);
+      if(generation===requestGeneration.current)setListing({key:listKey,rows:result});
     }catch(err){if(generation===requestGeneration.current)setError((err as Error).message);}
     finally{if(generation===requestGeneration.current)setLoading(false);}
-  },[api,tab,space,search,offset]);
+  },[api,tab,space,search,offset,listKey]);
   useEffect(()=>{loadRegistry().catch(err=>setError(err.message));},[loadRegistry]);
-  useEffect(()=>{const timeout=setTimeout(refresh,180);return()=>clearTimeout(timeout);},[refresh]);
+  useEffect(()=>{const timeout=setTimeout(refresh,180);return()=>{clearTimeout(timeout);requestGeneration.current++;};},[refresh]);
   useEffect(()=>{setDraftsLoaded(false);try{const saved=localStorage.getItem(draftKey);setDrafts(saved?JSON.parse(saved):{});const queued=localStorage.getItem(storageKey)||sessionStorage.getItem(storageKey);setPending(queued?JSON.parse(queued):null);setDraftsLoaded(true);}catch{setError('无法读取此浏览器保存的草稿，请检查浏览器存储。');}},[storageKey,draftKey]);
   useEffect(()=>{
     if(!selected||!draftsLoaded)return;
@@ -146,7 +150,7 @@ export function RssdWorkspace() {
       <label>插入配图<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy||Boolean(pending)} onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file)void action(()=>upload(file));}}/></label>
       <Editor value={body} onChange={value=>setBody(value||'')} height={560} previewOptions={{skipHtml:true}} textareaProps={{'aria-label':'文章正文',disabled:busy||Boolean(pending)}}/>
       <PlatformContent api={api} workspaceId={selected.workspaceId} value={platformContent} onChange={setPlatformContent} attachments={attachments} disabled={busy||Boolean(pending)}/>
-    </div>:!creating&&tab!=='destinations'&&<div className="rssd-list" aria-busy={loading}>
+    </div>:!creating&&tab!=='destinations'&&<div className="rssd-list" aria-busy={listLoading}>
       {tab==='settings'?registry.map(w=><article className="rssd-row" key={w.id}><div><h2>{w.name}</h2><p>{w.sections.map((s:Row)=>s.name).join(' · ')}</p></div><span>{w.siteId||'尚未关联站点'}</span></article>):rows.length?rows.map(row=><article className="rssd-row" key={row.id}>
         <div className="rssd-row-main"><h2>{tab==='works'?<button className="rssd-work-link" onClick={()=>void action(()=>openWork(row.id))}>{row.editions[0]?.title||'未命名作品'}</button>:row.title||row.name||row.workId}</h2><p>{tab==='demands'?active?.sections.find((s:Row)=>s.id===row.sectionId)?.name||row.sectionId:tab==='works'?row.editions.map((e:Row)=>`${e.locale} · v${e.revision}`).join(' / '):tab==='workers'?row.details?.message||row.workspaceIds.join(' · '):`${row.locale} · v${row.revision} → ${row.destinationId}`}</p>{row.error&&<p className="rssd-error">{row.error}</p>}</div>
         {row.state&&<span className={'rssd-state rssd-state-'+row.state}>{label(row.state)}</span>}<time>{when(row.heartbeatAt||row.updatedAt||row.createdAt)}</time>
@@ -154,7 +158,7 @@ export function RssdWorkspace() {
         {tab==='workers'&&!row.revokedAt&&<button disabled={busy} onClick={()=>void action(async()=>{await api('/workers/'+row.id+'/revoke','POST',{});await refresh();})}>撤销连接</button>}
         {tab==='publications'&&row.state==='blocked'&&<button disabled={busy} onClick={()=>void action(async()=>{await api('/publications/'+row.id+'/retry','POST',{});await refresh();})}>恢复原发布</button>}
         {tab==='publications'&&['published','legacy_published'].includes(row.state)&&row.receipt?.url&&/^https?:\/\//.test(row.receipt.url)&&<a href={row.receipt.url} target="_blank" rel="noreferrer">查看成品</a>}
-      </article>):<div className="rssd-empty"><h2>{loading?'正在读取…':tab==='demands'?'需求池里还没有任务':tab==='works'?'还没有作品':tab==='workers'?'尚未连接执行设备':'暂无发布记录'}</h2><p>{tab==='demands'?'添加选题后，在 PC 或无头版开启工作模式。':tab==='works'?'作品可以从生产设备提交，也可以在这里创建。':tab==='workers'?'连接凭据按工作空间授权，智能体账号留在设备上。':'提交作品后，各个目的地的结果会分别记录在这里。'}</p></div>}
+      </article>):<div className="rssd-empty"><h2>{listLoading?'正在读取…':tab==='demands'?'需求池里还没有任务':tab==='works'?'还没有作品':tab==='workers'?'尚未连接执行设备':'暂无发布记录'}</h2><p>{tab==='demands'?'添加选题后，在 PC 或无头版开启工作模式。':tab==='works'?'作品可以从生产设备提交，也可以在这里创建。':tab==='workers'?'连接凭据按工作空间授权，智能体账号留在设备上。':'提交作品后，各个目的地的结果会分别记录在这里。'}</p></div>}
     </div>}
     {!selected&&!creating&&['works','demands','publications'].includes(tab)&&<div className="rssd-form-actions"><button disabled={loading||offset===0} onClick={()=>setOffset(Math.max(0,offset-50))}>上一页</button><span>第 {Math.floor(offset/50)+1} 页</span><button disabled={loading||rows.length<50} onClick={()=>setOffset(offset+50)}>下一页</button></div>}
     <footer className="rssd-footer"><a href="https://github.com/scholay-rssd/rssd-center" target="_blank" rel="noreferrer">RSSD 中心源码 · AGPL-3.0</a><span>基于 Postiz</span></footer>

@@ -40,5 +40,6 @@ jobs:
       - run: pnpm --filter postiz-backend build
       - run: node --test rssd/http.test.cjs
       - run: pnpm exec tsc --noEmit -p apps/frontend/tsconfig.json
+      - run: pnpm exec jest --config rssd/jest-ui.config.cjs --runInBand
       - name: Verify packaged domain runtime
         run: node -e "for(const name of ['store','publisher','media','migration'])require('./apps/backend/dist/rssd/'+name+'.cjs')"
