@@ -1,0 +1,42 @@
+name: RSSD center checks
+on:
+  pull_request:
+  push:
+    branches: [main, 'codex/rssd-*']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  center:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: rssd_test
+          POSTGRES_PASSWORD: fixture-only-password
+          POSTGRES_DB: rssd_center_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U rssd_test -d rssd_center_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      RSSD_TEST_DATABASE_URL: postgresql://rssd_test:fixture-only-password@localhost:5432/rssd_center_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node --test rssd/store.test.cjs
+      - run: pnpm --filter postiz-backend build
+      - run: pnpm exec tsc --noEmit -p apps/frontend/tsconfig.json
+      - name: Verify packaged domain runtime
+        run: node -e "require('./apps/backend/dist/rssd/store.cjs'); require('./apps/backend/dist/rssd/protocol.cjs')"

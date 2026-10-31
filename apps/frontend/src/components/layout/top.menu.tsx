@@ -34,6 +34,11 @@ export const useMenuItem = () => {
 
   const firstMenu = [
     {
+      name: 'RSSD 中心',
+      path: '/rssd',
+      icon: <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"/></svg>,
+    },
+    {
       name: isGeneral ? t('calendar', 'Calendar') : t('launches', 'Launches'),
       icon: (
         <svg

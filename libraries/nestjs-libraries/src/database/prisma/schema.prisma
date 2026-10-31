@@ -8,6 +8,125 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// RSSD owns these additive tables. Keep the existing Postiz schema intact.
+model RssdWorkspace {
+  orgId String
+  id String
+  revision Int @default(1)
+  payload Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, id])
+  @@map("rssd_workspaces")
+}
+model RssdWorker {
+  orgId String
+  id String
+  name String
+  tokenHash String @unique
+  workspaceIds Json
+  state String @default("idle")
+  details Json @default("{}")
+  revokedAt DateTime? @db.Timestamptz(3)
+  heartbeatAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, id])
+  @@map("rssd_workers")
+}
+model RssdDemand {
+  orgId String
+  id String
+  workspaceId String
+  sectionId String
+  kind String
+  title String
+  state String @default("queued")
+  priority Int @default(0)
+  generation Int @default(0)
+  workerId String?
+  claimToken String?
+  payload Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, id])
+  @@index([orgId, state, priority(sort: Desc), createdAt], map: "rssd_demands_queue")
+  @@map("rssd_demands")
+}
+model RssdWork {
+  orgId String
+  id String
+  workspaceId String
+  sectionId String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, id])
+  @@map("rssd_works")
+}
+model RssdEdition {
+  orgId String
+  workId String
+  locale String
+  revision Int
+  payload Json
+  hash String
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, workId, locale, revision])
+  @@map("rssd_editions")
+}
+model RssdSubmission {
+  orgId String
+  requestId String
+  payloadHash String
+  workspaceId String
+  workId String
+  result Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, requestId])
+  @@map("rssd_submissions")
+}
+model RssdDestination {
+  orgId String
+  id String
+  name String
+  kind String
+  workspaceIds Json
+  config Json
+  enabled Boolean @default(false)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, id])
+  @@map("rssd_destinations")
+}
+model RssdPublication {
+  orgId String
+  id String
+  workId String
+  workspaceId String
+  locale String
+  revision Int
+  destinationId String
+  state String @default("queued")
+  payload Json
+  receipt Json @default("{}")
+  error String?
+  attempts Int @default(0)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, id])
+  @@unique([orgId, workId, locale, revision, destinationId])
+  @@index([orgId, state, createdAt], map: "rssd_publications_queue")
+  @@map("rssd_publications")
+}
+model RssdAudit {
+  orgId String
+  id String
+  actor String
+  action String
+  payload Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, id])
+  @@map("rssd_audit")
+}
+
 model Organization {
   id                  String               @id @default(uuid())
   name                String

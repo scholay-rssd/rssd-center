@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "repository": "scholay-rssd/rssd",
+  "path": "contracts/rssd-v1.cjs",
+  "sha256": "ee999bb16f4347bfb3399b234b9d0878b0b7ba698332375cb62ecd6063e21031",
+  "license": "MIT"
+}

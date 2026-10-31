@@ -56,6 +56,9 @@ import { FarcasterProvider } from '@gitroom/backend/services/auth/providers/farc
 import { WalletProvider } from '@gitroom/backend/services/auth/providers/wallet.provider';
 import { OauthProvider } from '@gitroom/backend/services/auth/providers/oauth.provider';
 import { StripeController } from '@gitroom/backend/api/routes/stripe.controller';
+import { RssdController } from '../rssd/rssd.controller';
+import { RssdService } from '../rssd/rssd.service';
+import { RssdMiddleware } from '../rssd/rssd.middleware';
 
 const authenticatedController = [
   UsersController,
@@ -91,6 +94,7 @@ const authenticatedController = [
     : [
         RootController,
         PaymentController,
+        RssdController,
         StripeController,
         AuthController,
         PublicController,
@@ -103,6 +107,8 @@ const authenticatedController = [
         ...authenticatedController,
       ],
   providers: [
+    RssdService,
+    RssdMiddleware,
     AuthService,
     StripeService,
     PaymentService,
@@ -133,6 +139,7 @@ const authenticatedController = [
 export class ApiModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
     consumer.apply(AuthMiddleware).forRoutes(...authenticatedController);
+    consumer.apply(RssdMiddleware).forRoutes(RssdController);
     consumer.apply(UploadWidgetAuthMiddleware).forRoutes(MediaWidgetController);
     consumer
       .apply(ClippingWidgetAuthMiddleware)
