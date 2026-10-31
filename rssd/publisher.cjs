@@ -16,7 +16,7 @@ class CredentialCipher {
 }
 function visibleDestination(row){const {sealedToken,...config}=row.config;return {...row,config,hasCredential:Boolean(sealedToken)};}
 class RssdPublisher {
-  constructor(store,{secret,fetchImpl=fetch}={}){this.store=store;this.db=store.db;this.fetch=fetchImpl;this.secret=secret;this.running=false;}
+  constructor(store,{secret,fetchImpl=fetch,media}={}){this.store=store;this.db=store.db;this.fetch=fetchImpl;this.secret=secret;this.media=media;this.running=false;}
   cipher(){return new CredentialCipher(this.secret);}
   async destinations(ctx){admin(ctx);return (await query(this.db,'SELECT * FROM rssd_destinations WHERE "orgId"=$1 ORDER BY id',ctx.orgId)).map(visibleDestination);}
   async saveDestination(ctx,input){
@@ -73,9 +73,16 @@ class RssdPublisher {
     if(newer)return this.finish(row,{state:'superseded',error:'A newer revision is already published'});
     const config=destination.config,token=this.cipher().open(config.sealedToken,row.orgId+':'+destination.id);
     const old=await one(this.db,`SELECT receipt FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND state='published' ORDER BY revision DESC LIMIT 1`,row.orgId,row.workId,row.locale,row.destinationId);
-    const path=old?.receipt.url?new URL(old.receipt.url).pathname:row.payload.edition.metadata?.publication?.path||((row.locale==='en'?'/en':'')+'/news/'+row.workId+'/');
-    const content=publicContent(row.payload.edition);if(!content.metadata.date)content.metadata.date=new Date(row.createdAt).toISOString().slice(0,10);
-    const packet=publication({version:1,requestId:row.id,siteId:config.siteId,workspaceId:row.workspaceId,sectionId:row.payload.sectionId,workId:row.workId,locale:row.locale,revision:row.revision,contentHash:row.payload.hash,content,route:path});
+    const path=old?.receipt.url?new URL(old.receipt.url).pathname:row.payload.edition.metadata?.publication?.path||((row.locale==='en'?'/en':'')+'/news/'+p.hash(row.workId).slice(0,32)+'/');
+    if(row.payload.edition.media?.length&&!this.media)p.fail('Media storage is unavailable',400,'missing_media');
+    const prepared=this.media?await this.media.publication(row.orgId,row.workspaceId,row.payload.edition):{edition:row.payload.edition,assets:[],uploads:[]};
+    const content=publicContent(prepared.edition);if(!content.metadata.date)content.metadata.date=new Date(row.createdAt).toISOString().slice(0,10);
+    const packet=publication({version:1,requestId:row.id,siteId:config.siteId,workspaceId:row.workspaceId,sectionId:row.payload.sectionId,workId:row.workId,locale:row.locale,revision:row.revision,contentHash:row.payload.hash,content,route:path,...(prepared.assets.length?{assets:prepared.assets}:{})});
+    for(const upload of prepared.uploads){
+      const url=origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/media/'+upload.manifest.sha256;
+      let stored;try{stored=await this.request(url,{token});}catch(error){if(error.status!==404)throw error;const {bytes}=await this.media.bytes({orgId:row.orgId,admin:true,workspaceIds:null},upload.id);stored=await this.request(url,{token,method:'POST',body:{...upload.manifest,data:bytes.toString('base64')}});}
+      if(p.hash(stored)!==p.hash(upload.manifest))p.fail('Site media receipt mismatch',409,'media_conflict');
+    }
     const base=origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/submissions';
     let receipt;try{receipt=await this.request(base+'/'+row.id,{token});}catch(error){if(error.status!==404)throw error;receipt=await this.request(base,{token,method:'POST',body:packet});}
     if(receipt.state==='failed'&&row.receipt.manualRetry)receipt=await this.request(base+'/'+row.id+'/retry',{token,method:'POST',body:{}});

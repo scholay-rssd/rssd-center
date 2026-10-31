@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseFilters, Catch, ExceptionFilter, ArgumentsHost } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Req, Res, UseFilters, Catch, ExceptionFilter, ArgumentsHost } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { RssdService } from './rssd.service';
 const { ProtocolError } = require('../../../../rssd/protocol.cjs');
@@ -16,6 +16,12 @@ class RssdProtocolFilter implements ExceptionFilter {
 export class RssdController {
   constructor(private rssd: RssdService) {}
   @Get('/identity') identity(@Req() req: any) { return {protocolVersion: 1, ...req.rssd}; }
+  @Post('/media') uploadMedia(@Req() req: any, @Body() body: any) { return this.rssd.media.upload(req.rssd, body); }
+  @Get('/media/:id') media(@Req() req: any, @Param('id') id: string) { return this.rssd.media.status(req.rssd, id); }
+  @Get('/media/:id/raw') async rawMedia(@Req() req: any, @Param('id') id: string, @Res() res: any) {
+    const {bytes,row}=await this.rssd.media.bytes(req.rssd,id);
+    res.set({'Content-Type':row.manifest.mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}).send(bytes);
+  }
   @Get('/registry') registry(@Req() req: any) { return this.rssd.store.registry(req.rssd); }
   @Post('/workspaces') workspace(@Req() req: any, @Body() body: any) { return this.rssd.store.saveWorkspace(req.rssd, body.workspace, body.baseRevision); }
   @Get('/workers') workers(@Req() req: any) { return this.rssd.store.workers(req.rssd); }

@@ -7,6 +7,8 @@ const {randomUUID} = require('node:crypto');
 const {Pool} = require('pg');
 const {RssdStore} = require('./store.cjs');
 const {RssdPublisher,CredentialCipher}=require('./publisher.cjs');
+const {RssdMedia}=require('./media.cjs');
+const mediaProtocol=require('./rssd-media.cjs');
 const p=require('./protocol.cjs');
 let pool,db,store;
 function adapter(client) {
@@ -142,4 +144,16 @@ test('concurrent publisher instances cannot acquire the same publication lease',
   const f=await publishingFixture(fakeSite().fetchImpl);
   const results=await Promise.all(Array.from({length:6},()=>f.publisher.claim(f.owner.orgId)));
   assert.equal(results.filter(Boolean).length,1);
+});
+test('private center media is idempotent, workspace-scoped and rewritten only for publication',async()=>{
+ const f=await fixture(),directory=await fs.promises.mkdtemp(path.join(require('node:os').tmpdir(),'rssd-media-test-'));
+ try{
+  const media=new RssdMedia(store,{directory,origin:'https://center.example'}),bytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYZkAAAAASUVORK5CYII=','base64'),manifest=mediaProtocol.imageManifest(bytes);
+  const input={workspaceId:'research',name:'figure.png',...manifest,data:bytes.toString('base64')};const a=await media.upload(f.ctx,input),b=await media.upload(f.ctx,input);assert.equal(a.id,b.id);assert.deepEqual((await media.bytes(f.ctx,a.id)).bytes,bytes);
+  await assert.rejects(media.status({...f.ctx,workspaceIds:[]},a.id),{status:403});await assert.rejects(media.status({...f.owner,orgId:randomUUID()},a.id),{status:404});
+  const edition={...f.packet.editions[0],bodyMarkdown:'![Evidence]('+a.url+')',media:[{id:a.id,alt:'Evidence'}]},packet={...f.packet,editions:[edition]};await store.submit(f.ctx,packet);
+  const output=await media.publication(f.owner.orgId,'research',edition);assert.equal(output.edition.bodyMarkdown,'![Evidence]('+manifest.path+')');assert.deepEqual(output.assets,[manifest]);assert.equal(output.uploads[0].id,a.id);
+  await assert.rejects(media.publication(f.owner.orgId,'research',{...edition,media:[]}),{code:'missing_media'});
+  await store.revokeWorker(f.owner,f.worker.id);await assert.rejects(media.upload(f.ctx,input),{status:401});
+ }finally{await fs.promises.rm(directory,{recursive:true,force:true});}
 });

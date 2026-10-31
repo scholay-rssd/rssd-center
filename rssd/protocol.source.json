@@ -3,5 +3,10 @@
   "repository": "scholay-rssd/rssd",
   "path": "contracts/rssd-v1.cjs",
   "sha256": "ee999bb16f4347bfb3399b234b9d0878b0b7ba698332375cb62ecd6063e21031",
+  "files": {
+    "contracts/rssd-v1.cjs": "ee999bb16f4347bfb3399b234b9d0878b0b7ba698332375cb62ecd6063e21031",
+    "contracts/rssd-publication.cjs": "e919e96c59b7c87c6838fec11add521d8643ed7ef71582913e87fa123188948a",
+    "contracts/rssd-media.cjs": "e2179ca5c6fd7ba2592bc8034800a4fc2cb05ea8abb00fab8b3ede729dc5f136"
+  },
   "license": "MIT"
 }

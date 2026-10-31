@@ -191,7 +191,11 @@ class RssdStore {
         if(demand?.kind==='translate' && (!edition.translationOf || p.hash(edition.translationOf)!==p.hash(demand.payload.source)))p.fail('Translation must identify the requested source revision',409,'source_conflict');
         const head=await one(db,'SELECT revision FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 ORDER BY revision DESC LIMIT 1',ctx.orgId,value.workId,edition.locale);
         if((head?.revision||0)!==value.baseRevisions[edition.locale])p.fail('Edition changed; keep local changes and reload',409,'revision_conflict');
-        for(const media of edition.media){const found=await one(db,'SELECT id FROM "Media" WHERE "organizationId"=$1 AND id=$2 AND "deletedAt" IS NULL',ctx.orgId,media.id);if(!found)p.fail('Media not found in this organization',400,'invalid_media');}
+        for(const media of edition.media){
+          const own=await one(db,'SELECT id,"workspaceId" FROM rssd_media WHERE "orgId"=$1 AND id=$2',ctx.orgId,media.id);
+          if(own&&own.workspaceId!==value.workspaceId)p.fail('Media belongs to another workspace',403,'invalid_media');
+          const found=own||await one(db,'SELECT id FROM "Media" WHERE "organizationId"=$1 AND id=$2 AND "deletedAt" IS NULL',ctx.orgId,media.id);if(!found)p.fail('Media not found in this organization',400,'invalid_media');
+        }
         if(edition.translationOf){
           if(edition.translationOf.workId!==value.workId || edition.translationOf.locale===edition.locale)p.fail('Invalid translation source');
           const sourceInPacket=value.editions.find(e=>e.locale===edition.translationOf.locale);

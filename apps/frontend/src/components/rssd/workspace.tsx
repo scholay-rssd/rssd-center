@@ -21,6 +21,7 @@ export function RssdWorkspace() {
   const [loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[creating,setCreating]=useState(false);
   const [selected,setSelected]=useState<Row|null>(null),[language,setLanguage]=useState('zh-CN'),[title,setTitle]=useState(''),[body,setBody]=useState('');
   const [token,setToken]=useState(''),[pending,setPending]=useState<Row|null>(null);
+  const [attachments,setAttachments]=useState<Row[]>([]);
   const requestGeneration=useRef(0);
   const active=registry.find(w=>w.id===space);
   const storageKey='rssd:pending:'+user?.orgId;
@@ -50,12 +51,12 @@ export function RssdWorkspace() {
   const openWork=async(id:string)=>{
     const work=await api('/works/'+encodeURIComponent(id));setSelected(work);setCreating(false);
     const edition=work.editions.find((e:Row)=>e.locale===language)||work.editions[0];
-    setLanguage(edition?.locale||'zh-CN');setTitle(edition?.payload.title||'');setBody(edition?.payload.bodyMarkdown||'');
+    setLanguage(edition?.locale||'zh-CN');setTitle(edition?.payload.title||'');setBody(edition?.payload.bodyMarkdown||'');setAttachments(edition?.payload.media||[]);
   };
   const chooseLanguage=(locale:string)=>{
     const current=selected?.editions.find((e:Row)=>e.locale===language);
     if((title!==(current?.payload.title||'')||body!==(current?.payload.bodyMarkdown||''))&&!window.confirm('当前语言有未保存的修改，确定切换吗？'))return;
-    const edition=selected?.editions.find((e:Row)=>e.locale===locale);setLanguage(locale);setTitle(edition?.payload.title||'');setBody(edition?.payload.bodyMarkdown||'');
+    const edition=selected?.editions.find((e:Row)=>e.locale===locale);setLanguage(locale);setTitle(edition?.payload.title||'');setBody(edition?.payload.bodyMarkdown||'');setAttachments(edition?.payload.media||[]);
   };
   const rememberPending=(value:Row|null)=>{setPending(value);if(value)sessionStorage.setItem(storageKey,JSON.stringify(value));else sessionStorage.removeItem(storageKey);};
   const accepted=async(result:Row)=>{rememberPending(null);setNotice(result.status==='draft_saved'?'草稿已保存':'作品已接收，发布结果可在“发布记录”查看');await openWork(result.workId);await refresh();};
@@ -63,7 +64,7 @@ export function RssdWorkspace() {
     if(!selected)return;
     const previous=selected.editions.find((e:Row)=>e.locale===language);
     const packet={requestId:crypto.randomUUID(),workId:selected.id,workspaceId:selected.workspaceId,sectionId:selected.sectionId,
-      baseRevisions:{[language]:previous?.revision||0},editions:[{...(previous?.payload||{}),locale:language,title,bodyMarkdown:body}]};
+      baseRevisions:{[language]:previous?.revision||0},editions:[{...(previous?.payload||{}),locale:language,title,bodyMarkdown:body,media:attachments}]};
     const request={path:publish?'/submissions':'/drafts',packet};rememberPending(request);
     try{await accepted(await api(request.path,'POST',packet));}
     catch(err){if(err instanceof ApiError&&err.status<500)rememberPending(null);throw err;}
@@ -89,7 +90,14 @@ export function RssdWorkspace() {
   };
   const newWork=(form:HTMLFormElement)=>{
     const values=new FormData(form);setSelected({id:crypto.randomUUID(),workspaceId:space,sectionId:values.get('section'),editions:[]});
-    setLanguage(values.get('language') as string);setTitle('');setBody('');setCreating(false);
+    setLanguage(values.get('language') as string);setTitle('');setBody('');setAttachments([]);setCreating(false);
+  };
+  const upload=async(file:File)=>{
+    if(!selected)return;if(file.size>20*1024*1024)throw Error('配图不能超过 20 MiB');
+    const bytes=await file.arrayBuffer(),sha256=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(n=>n.toString(16).padStart(2,'0')).join('');
+    const data=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(Error('图片读取失败'));reader.readAsDataURL(file);});
+    const result=await api('/media','POST',{workspaceId:selected.workspaceId,sha256,mime:file.type,bytes:file.size,data,name:file.name});
+    setAttachments(old=>[...old.filter(m=>m.id!==result.id),{id:result.id,alt:file.name}]);setBody(old=>old+'\n\n!['+file.name.replace(/[\[\]\\\n\r]/g,' ')+']('+result.url+')\n');setNotice('配图已保存到中心，保存文章后会保留引用');
   };
   return <section className="rssd-workspace">
     <header className="rssd-header"><div><div className="rssd-overline">RSSD / 内容生产</div><h1>工作中心</h1></div>
@@ -114,6 +122,7 @@ export function RssdWorkspace() {
     {token&&<div className="rssd-message"><strong>连接凭据只显示这一次</strong><p>复制到对应设备的 RSSD 中心设置中。</p><input aria-label="设备连接凭据" readOnly type="password" value={token}/><button onClick={()=>void navigator.clipboard.writeText(token).then(()=>setNotice('连接凭据已复制')).catch(()=>setError('复制失败，请选择后复制'))}>复制凭据</button><button onClick={()=>setToken('')}>关闭</button></div>}
     {!creating&&selected&&tab==='works'?<div className="rssd-editor"><div className="rssd-editor-toolbar"><button onClick={()=>setSelected(null)}>返回作品库</button><div><button aria-pressed={language==='zh-CN'} onClick={()=>chooseLanguage('zh-CN')}>中文</button><button aria-pressed={language==='en'} onClick={()=>chooseLanguage('en')}>English</button></div><span>版本 {selected.editions.find((e:Row)=>e.locale===language)?.revision||0}</span><button disabled={busy||Boolean(pending)||!title.trim()||!body.trim()} onClick={()=>void action(()=>sendEdition(false))}>保存草稿</button><button className="rssd-primary" disabled={busy||Boolean(pending)||!title.trim()||!body.trim()} onClick={()=>void action(()=>sendEdition(true))}>提交发布</button></div>
       <input className="rssd-title-input" aria-label="文章标题" placeholder="文章标题" value={title} onChange={e=>setTitle(e.target.value)} disabled={busy||Boolean(pending)}/>
+      <label>插入配图<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy||Boolean(pending)} onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file)void action(()=>upload(file));}}/></label>
       <Editor value={body} onChange={value=>setBody(value||'')} height={560} previewOptions={{skipHtml:true}} textareaProps={{'aria-label':'文章正文',disabled:busy||Boolean(pending)}}/>
     </div>:!creating&&tab!=='destinations'&&<div className="rssd-list" aria-busy={loading}>
       {tab==='settings'?registry.map(w=><article className="rssd-row" key={w.id}><div><h2>{w.name}</h2><p>{w.sections.map((s:Row)=>s.name).join(' · ')}</p></div><span>{w.siteId||'尚未关联站点'}</span></article>):rows.length?rows.map(row=><article className="rssd-row" key={row.id}>

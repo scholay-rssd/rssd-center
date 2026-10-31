@@ -9,6 +9,17 @@ datasource db {
 }
 
 // RSSD owns these additive tables. Keep the existing Postiz schema intact.
+model RssdMedia {
+  orgId       String
+  id          String
+  workspaceId String
+  name        String
+  manifest    Json
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, id])
+  @@map("rssd_media")
+}
+
 model RssdWorkspace {
   orgId String
   id String

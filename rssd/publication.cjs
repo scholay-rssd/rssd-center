@@ -1,5 +1,6 @@
 'use strict';
 const p=require('./rssd-v1.cjs');
+const {mediaManifest}=require('./rssd-media.cjs');
 function route(value) {
   if(typeof value!=='string'||!/^\/(?:[A-Za-z0-9_\-\u0080-\uFFFF]+\/)+$/.test(value)||value.length>1000)p.fail('Invalid public article route');
   if(/^\/(?:manage|api|rssd-content|article-media|downloads|assets|fonts)\//.test(value))p.fail('Reserved public route');
@@ -19,6 +20,7 @@ function publication(input) {
     workId:p.id(input.workId),locale:p.locale(input.locale),revision:p.integer(input.revision,'revision',1),
     contentHash:p.text(input.contentHash,'contentHash',64),content,route:route(input.route)};
   if(value.locale!==content.locale||!/^[a-f0-9]{64}$/.test(value.contentHash))p.fail('Publication content identity mismatch');
+  if(input.assets!==undefined){value.assets=p.array(input.assets,'public media',500).map(mediaManifest);if(new Set(value.assets.map(a=>a.sha256)).size!==value.assets.length)p.fail('Duplicate public media');}
   return value;
 }
 const contentKey=value=>p.hash([value.workId,value.locale]);
