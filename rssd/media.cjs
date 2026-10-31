@@ -26,10 +26,12 @@ class RssdMedia {
  async publication(orgId,workspaceId,edition){
   const ctx={orgId,admin:true,workspaceIds:null},assets=[],uploads=[];let bodyMarkdown=edition.bodyMarkdown;
   for(const media of edition.media||[]){
+   const escaped=media.id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+   const reference=new RegExp('(?:https?:\\/\\/[^/\\s)]+)?/api/rssd/v1/media/'+escaped+'/raw','g');
+   if(!reference.test(bodyMarkdown))continue;
    const row=await this.row(ctx,media.id);if(row.workspaceId!==workspaceId)p.fail('Publication media belongs to a different workspace',403);
    if(!assets.some(a=>a.sha256===row.manifest.sha256)){assets.push(row.manifest);uploads.push({manifest:row.manifest,id:row.id});}
-   const escaped=row.id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-   bodyMarkdown=bodyMarkdown.replace(new RegExp('(?:https?:\\/\\/[^/\\s)]+)?/api/rssd/v1/media/'+escaped+'/raw','g'),row.manifest.path);
+   bodyMarkdown=bodyMarkdown.replace(reference,row.manifest.path);
   }
   if(/\/api\/rssd\/v1\/media\//.test(bodyMarkdown))p.fail('Article references media missing from its edition manifest',400,'missing_media');
   return {edition:{...edition,bodyMarkdown},assets,uploads};

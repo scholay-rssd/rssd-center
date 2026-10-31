@@ -26,6 +26,9 @@ async function dispatchDiscourse(publisher,row,destination,old){
  const request=(path,options={})=>discourseRequest(publisher.fetch,config.origin,path,{token,username:config.username,...options});
  const edition=row.payload.edition;let raw=edition.bodyMarkdown;
  for(const asset of edition.media||[]){
+  const escaped=asset.id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+  const reference=new RegExp('(?:https?:\\/\\/[^/\\s)]+)?/api/rssd/v1/media/'+escaped+'/raw','g');
+  if(!reference.test(raw))continue;
   if(!publisher.media)p.fail('Forum image storage is unavailable',400,'missing_media');
   const {bytes,row:mediaRow}=await publisher.media.bytes({orgId:row.orgId,admin:true,workspaceIds:null},asset.id);
   if(mediaRow.workspaceId!==row.workspaceId)p.fail('Forum media belongs to another workspace',403);
@@ -33,8 +36,7 @@ async function dispatchDiscourse(publisher,row,destination,old){
   const uploaded=await request('/uploads.json',{method:'POST',form});
   let url;try{url=new URL(uploaded.url,config.origin);}catch{p.fail('Forum returned an invalid image URL',409);}
   if(!['http:','https:'].includes(url.protocol)||url.username||url.password)p.fail('Forum returned an unsafe image URL',409);
-  const escaped=asset.id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
-  raw=raw.replace(new RegExp('(?:https?:\\/\\/[^/\\s)]+)?/api/rssd/v1/media/'+escaped+'/raw','g'),url.href);
+  raw=raw.replace(reference,url.href);
  }
  if(/\/api\/rssd\/v1\/media\//.test(raw))p.fail('Forum article references an undeclared image',400,'missing_media');
  const marker=`<!-- rssd:${externalId}:${row.revision}:${row.payload.hash} -->`,expected=raw+'\n\n'+marker;

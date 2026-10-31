@@ -154,6 +154,7 @@ test('private center media is idempotent, workspace-scoped and rewritten only fo
   await assert.rejects(media.status({...f.ctx,workspaceIds:[]},a.id),{status:403});await assert.rejects(media.status({...f.owner,orgId:randomUUID()},a.id),{status:404});
   const edition={...f.packet.editions[0],bodyMarkdown:'![Evidence]('+a.url+')',media:[{id:a.id,alt:'Evidence'}]},packet={...f.packet,editions:[edition]};await store.submit(f.ctx,packet);
   const output=await media.publication(f.owner.orgId,'research',edition);assert.equal(output.edition.bodyMarkdown,'![Evidence]('+manifest.path+')');assert.deepEqual(output.assets,[manifest]);assert.equal(output.uploads[0].id,a.id);
+  const platformOnly=await media.publication(f.owner.orgId,'research',{...edition,bodyMarkdown:'Article without an inline image.'});assert.deepEqual(platformOnly.assets,[]);assert.deepEqual(platformOnly.uploads,[]);
   await assert.rejects(media.publication(f.owner.orgId,'research',{...edition,media:[]}),{code:'missing_media'});
   await store.revokeWorker(f.owner,f.worker.id);await assert.rejects(media.upload(f.ctx,input),{status:401});
  }finally{await fs.promises.rm(directory,{recursive:true,force:true});}

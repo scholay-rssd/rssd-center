@@ -48,3 +48,8 @@ test('lookup redirects cannot leak credentials to a different origin',async()=>{
 test('administrator-only readback cannot be reported as public publication',async()=>{
  const f=fixture({privateTopic:true});await assert.rejects(f.send(),{status:403});assert.equal(f.creates,1);
 });
+
+test('media prepared only for another platform is not uploaded with the forum article',async()=>{
+ const f=fixture();f.row.payload.edition.media=[{id:'platform-only-image',alt:'Social artwork'}];
+ assert.equal((await f.send()).state,'published');assert.equal(f.creates,1);
+});
