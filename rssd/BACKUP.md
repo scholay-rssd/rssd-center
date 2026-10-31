@@ -10,6 +10,26 @@ access to files created by that app, rather than existing unrelated Drive files.
 Use an owner-managed OAuth client; do not copy a chat connector's credentials.
 See [rclone Drive configuration](https://rclone.org/drive/#scopes).
 
+For first-time authorization on an owner PC, create a Google Cloud Desktop app
+OAuth client, enable Drive API, and download its client JSON privately. Configure
+only `https://www.googleapis.com/auth/drive.file` in the consent screen. For a
+personal External application, complete the owner's consent and publishing steps
+in Google Cloud so that a Testing-mode grant does not expire after seven days.
+No payment, broad Drive scope, or shared chat-connector credential is required.
+Use a current official rclone build on the PC and backup host, then run:
+
+```sh
+python3 rssd/authorize-drive.py --client-json /private/google-desktop-client.json --rclone /path/to/rclone
+```
+
+The helper protects its configuration directory, passes the client secret through
+stdin, requests `drive.file`, and lets the owner complete Google's browser flow.
+It writes `~/.rssd-recovery/drive/rclone.conf`; do not paste that file or the OAuth
+JSON into chat or a repository. Copy the verified configuration over SSH to the
+backup host's private directory. Create `RSSD-recovery` through this new remote;
+an existing folder created by another application may not be visible with this
+scope. `--prepare-only` prepares a configuration without opening a browser.
+
 Example `/etc/rssd-backup/config.json` (all values below are placeholders):
 
 ```json
