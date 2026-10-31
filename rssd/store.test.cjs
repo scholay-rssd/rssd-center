@@ -98,7 +98,10 @@ async function publishingFixture(fetchImpl){
   await publisher.saveDestination(f.owner,{id:'site',name:'Example site',kind:'site',workspaceIds:['research'],config:{origin:'https://example.test',siteId:'demo'},token:'fixture-only-site-credential-000000000',enabled:true});
   await store.saveWorkspace(f.owner,{id:'research',name:'Research',sections:[{id:'methods',name:'Methods',policy:{version:2,targets:[{destinationId:'site',locale:'en'}]}}]},1);
   const submitted=await store.submit(f.ctx,f.packet);
-  const ready=()=>db.$executeRawUnsafe('UPDATE rssd_publications SET "nextAttemptAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1',f.owner.orgId);
+  // timestamptz(3) rounds sub-millisecond timestamps. Put the fixture safely
+  // in the past instead of depending on how quickly the next transaction runs.
+  const ready=()=>db.$executeRawUnsafe('UPDATE rssd_publications SET "nextAttemptAt"=CURRENT_TIMESTAMP-interval \'1 second\' WHERE "orgId"=$1',f.owner.orgId);
+  await ready();
   return {...f,publisher,submitted,ready,tick:()=>publisher.tick({orgId:f.owner.orgId})};
 }
 function fakeSite({losePost=false,wrongReadback=false}={}){
