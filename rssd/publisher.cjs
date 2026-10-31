@@ -3,6 +3,7 @@ const {createHash,createCipheriv,createDecipheriv,randomBytes,randomUUID}=requir
 const p=require('./protocol.cjs');
 const {admin}=require('./store.cjs');
 const {publication,publicContent,contentKey}=require('./publication.cjs');
+const {dispatchDiscourse}=require('./discourse.cjs');
 const json=JSON.stringify;
 const query=(db,sql,...values)=>db.$queryRawUnsafe(sql,...values);
 const execute=(db,sql,...values)=>db.$executeRawUnsafe(sql,...values);
@@ -21,15 +22,16 @@ class RssdPublisher {
   async destinations(ctx){admin(ctx);return (await query(this.db,'SELECT * FROM rssd_destinations WHERE "orgId"=$1 ORDER BY id',ctx.orgId)).map(visibleDestination);}
   async saveDestination(ctx,input){
     admin(ctx);const id=p.id(input.id),name=p.text(input.name,'name',200),kind=input.kind;
-    if(kind!=='site')p.fail('This connector is not implemented yet',400,'unsupported_connector');
+    if(!['site','discourse'].includes(kind))p.fail('This connector is not implemented yet',400,'unsupported_connector');
     const workspaceIds=[...new Set(p.array(input.workspaceIds,'workspaceIds').map(x=>p.id(x)))];if(!workspaceIds.length)p.fail('Choose a workspace');
     for(const w of workspaceIds)await this.store.workspace(this.db,ctx,w);
-    const config={origin:origin(input.config?.origin),siteId:p.id(input.config?.siteId)};
+    const config={origin:origin(input.config?.origin),...(kind==='site'?{siteId:p.id(input.config?.siteId)}:{username:p.text(input.config?.username,'forum username',100),categoryId:p.integer(input.config?.categoryId,'forum category',1)})};
+    if(config.username&&/[\r\n]/.test(config.username))p.fail('Invalid forum username');
     if(typeof input.enabled!=='boolean')p.fail('Explicit enabled state required');
     return this.store.transaction(async db=>{
       await execute(db,'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',ctx.orgId+':destination:'+id);
       const old=await one(db,'SELECT * FROM rssd_destinations WHERE "orgId"=$1 AND id=$2',ctx.orgId,id);
-      if(old&&(old.kind!==kind||old.config.origin!==config.origin||old.config.siteId!==config.siteId))p.fail('Destination identity is immutable; create a new destination',409);
+      if(old&&(old.kind!==kind||old.config.origin!==config.origin||old.config.siteId!==config.siteId||old.config.username!==config.username||old.config.categoryId!==config.categoryId))p.fail('Destination identity is immutable; create a new destination',409);
       if(input.token){p.text(input.token,'credential',4096);if(input.token.length<32||/[\r\n]/.test(input.token))p.fail('Credential too short or invalid');config.sealedToken=this.cipher().seal(input.token,ctx.orgId+':'+id);}
       else config.sealedToken=old?.config.sealedToken;
       if(!config.sealedToken)p.fail('Destination credential required');
@@ -59,6 +61,11 @@ class RssdPublisher {
       "nextAttemptAt"=CURRENT_TIMESTAMP+($7::integer * interval '1 millisecond'),"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2 AND "leaseToken"=$3`,row.orgId,row.id,row.leaseToken,state,json(receipt),error,delay);
     return {id:row.id,state,error};
   }
+  async checkpoint(row,receipt){
+    const changed=await execute(this.db,'UPDATE rssd_publications SET receipt=receipt || $4::jsonb WHERE "orgId"=$1 AND id=$2 AND "leaseToken"=$3',row.orgId,row.id,row.leaseToken,json(receipt));
+    if(!changed)p.fail('Publication lease changed; reconcile before continuing',409,'lease_revoked');
+    row.receipt={...row.receipt,...receipt};
+  }
   async request(url,{token,method='GET',body}={}){
     const response=await this.fetch(url,{method,redirect:'error',headers:{Accept:'application/json',...(token?{Authorization:'Bearer '+token}:{}),...(body?{'Content-Type':'application/json'}:{})},body:body?json(body):undefined,signal:AbortSignal.timeout(20000)});
     if(!response.ok)throw Object.assign(Error('Destination returned HTTP '+response.status),{status:response.status});
@@ -68,11 +75,12 @@ class RssdPublisher {
   async dispatch(row){
     const destination=await one(this.db,'SELECT * FROM rssd_destinations WHERE "orgId"=$1 AND id=$2',row.orgId,row.destinationId);
     if(!destination?.enabled||!destination.workspaceIds.includes(row.workspaceId))return this.finish(row,{state:'blocked',error:'Destination is disabled or workspace authorization was removed'});
-    if(destination.kind!=='site')return this.finish(row,{state:'blocked',error:'Connector is not implemented'});
     const newer=await one(this.db,`SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND revision>$5 AND state='published'`,row.orgId,row.workId,row.locale,row.destinationId,row.revision);
     if(newer)return this.finish(row,{state:'superseded',error:'A newer revision is already published'});
-    const config=destination.config,token=this.cipher().open(config.sealedToken,row.orgId+':'+destination.id);
     const old=await one(this.db,`SELECT receipt FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND state IN ('published','legacy_published') ORDER BY revision DESC LIMIT 1`,row.orgId,row.workId,row.locale,row.destinationId);
+    if(destination.kind==='discourse')return dispatchDiscourse(this,row,destination,old);
+    if(destination.kind!=='site')return this.finish(row,{state:'blocked',error:'Connector is not implemented'});
+    const config=destination.config,token=this.cipher().open(config.sealedToken,row.orgId+':'+destination.id);
     const path=old?.receipt.url?new URL(old.receipt.url).pathname:row.payload.edition.metadata?.publication?.path||((row.locale==='en'?'/en':'')+'/news/'+p.hash(row.workId).slice(0,32)+'/');
     if(row.payload.edition.media?.length&&!this.media)p.fail('Media storage is unavailable',400,'missing_media');
     const prepared=this.media?await this.media.publication(row.orgId,row.workspaceId,row.payload.edition):{edition:row.payload.edition,assets:[],uploads:[]};

@@ -54,8 +54,15 @@ checks the original request before retrying uncertain delivery. Publication beco
 `published` only after the receiver activates a release and the corresponding
 unauthenticated `rssd-content` file matches the submitted packet. Failed builds or
 missing authorization become `blocked`; an owner can resume the original request.
-The existing Postiz social publishing service continues independently; demand-pool
-adapters for social networks and Discourse are not implemented in this checkpoint.
+Discourse destinations use the existing forum API key and username, an explicit
+category, and a stable external topic identity. They retain a creation intent
+before sending; an uncertain missing topic needs reconciliation instead of an
+automatic second creation. Updates compare the previous accepted raw body before
+changing the same first post. Public readback is checked without API credentials.
+The contract follows the [Discourse API](https://docs.discourse.org/), including
+external-ID lookup and original-text conflict checks. Tests use a synthetic forum.
+The existing Postiz social publishing service continues independently; its
+demand-pool adapter is still being integrated.
 
 Publication intents are distinct from published receipts. Until destination
 dispatch and verified readback are configured, a queued intent is not a public

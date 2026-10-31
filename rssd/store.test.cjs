@@ -200,3 +200,22 @@ test('HTTP pagination accepts numeric query strings and searches full latest bod
  assert.equal((await store.demands(f.owner,{search:'Brief-only needle',limit:'1',offset:'0'})).length,1);
  assert.deepEqual(await store.publications(f.owner,{limit:'1',offset:'0'}),[]);
 });
+
+test('forum dispatch persists uncertain creation before sending and recovers one public topic',async()=>{
+ const f=await fixture();let topic=null,post=null,creates=0;
+ const response=(value,status=200)=>new Response(JSON.stringify(value),{status});
+ const publisher=new RssdPublisher(store,{secret:'fixture-only-encryption-key-not-production',fetchImpl:async(url,options)=>{
+  const path=new URL(url).pathname;
+  if(path.startsWith('/t/external_id/'))return topic?response(topic):response({},404);
+  if(path==='/posts.json'){creates++;const body=JSON.parse(options.body);topic={id:17,title:body.title,post_stream:{posts:[{id:21,post_number:1}]}};post={id:21,topic_id:17,post_number:1,raw:body.raw};throw Error('Response lost after database commit');}
+  if(path==='/t/17.json')return response(topic);
+  if(path==='/posts/21.json')return response(post);
+  throw Error('Unexpected forum route');
+ }});
+ await publisher.saveDestination(f.owner,{id:'forum',name:'Example forum',kind:'discourse',workspaceIds:['research'],config:{origin:'https://forum.example',username:'publisher',categoryId:5},token:'fixture-only-forum-credential-000000000',enabled:true});
+ await store.saveWorkspace(f.owner,{id:'research',name:'Research',sections:[{id:'methods',name:'Methods',policy:{version:2,targets:[{destinationId:'forum',locale:'en'}]}}]},1);
+ await store.submit(f.ctx,f.packet);
+ const tick=async()=>{await db.$executeRawUnsafe('UPDATE rssd_publications SET "nextAttemptAt"=CURRENT_TIMESTAMP-interval \'1 second\' WHERE "orgId"=$1',f.owner.orgId);return publisher.tick({orgId:f.owner.orgId});};
+ assert.equal((await tick()).state,'queued');assert.equal((await store.publications(f.ctx))[0].receipt.createIntent,true);
+ assert.equal((await tick()).state,'published');assert.equal(creates,1);assert.equal((await store.publications(f.ctx))[0].receipt.topicId,17);
+});
