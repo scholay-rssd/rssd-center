@@ -48,6 +48,9 @@ CREATE TABLE IF NOT EXISTS rssd_publications (
   UNIQUE ("orgId", "workId", locale, revision, "destinationId")
 );
 CREATE INDEX IF NOT EXISTS rssd_publications_queue ON rssd_publications ("orgId", state, "createdAt");
+ALTER TABLE rssd_publications ADD COLUMN IF NOT EXISTS "leaseToken" TEXT;
+ALTER TABLE rssd_publications ADD COLUMN IF NOT EXISTS "leaseUntil" TIMESTAMPTZ(3);
+ALTER TABLE rssd_publications ADD COLUMN IF NOT EXISTS "nextAttemptAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
 CREATE TABLE IF NOT EXISTS rssd_audit (
   "orgId" TEXT NOT NULL, id TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, payload JSONB NOT NULL,
   "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY ("orgId", id)

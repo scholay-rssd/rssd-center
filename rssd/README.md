@@ -2,7 +2,7 @@
 
 RSSD extends the pinned Postiz v2.25.1 product with a multilingual work library,
 workspace-scoped demand pool, device credentials, immutable revisions and durable
-publication intents. It retains Postiz authentication and integrations. This is an
+publication intents and verified site delivery. It retains Postiz authentication and integrations. This is an
 AGPL-3.0 derivative; see the repository LICENSE and upstream notices.
 
 The owner interface is `/rssd`. The backend routes are `/rssd/v1`; the existing
@@ -35,7 +35,27 @@ node --test rssd/store.test.cjs
 
 Tests use synthetic organizations, works and devices. They cover concurrent
 claims, request replay, stale revisions, revoked claims/credentials, partial
-language submissions, frozen policies, organization isolation and rollback.
+language submissions, frozen policies, organization isolation, rollback, fenced
+publisher leases, lost delivery responses and public content verification.
+
+## Site publishing
+
+Configure site destinations and workspace section policies in the owner interface.
+Each destination has a separate receiver credential, encrypted with AES-256-GCM.
+Set a persistent `RSSD_ENCRYPTION_KEY` of at least 32 characters (otherwise the
+existing `JWT_SECRET` is used). Include that key in the encrypted recovery backup;
+changing it without re-encrypting credentials makes existing destinations unusable.
+Device APIs never return destination secrets.
+
+The dispatcher starts only with `RSSD_DISPATCH_ENABLED=1`. Keep it off during
+migration and restore until publication identities have been reconciled. It uses
+the core receiver's `/api/rssd-receiver/v1/sites/:siteId/submissions` contract and
+checks the original request before retrying uncertain delivery. Publication becomes
+`published` only after the receiver activates a release and the corresponding
+unauthenticated `rssd-content` file matches the submitted packet. Failed builds or
+missing authorization become `blocked`; an owner can resume the original request.
+The existing Postiz social publishing service continues independently; demand-pool
+adapters for social networks and Discourse are not implemented in this checkpoint.
 
 Publication intents are distinct from published receipts. Until destination
 dispatch and verified readback are configured, a queued intent is not a public

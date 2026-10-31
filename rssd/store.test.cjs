@@ -6,6 +6,8 @@ const path = require('node:path');
 const {randomUUID} = require('node:crypto');
 const {Pool} = require('pg');
 const {RssdStore} = require('./store.cjs');
+const {RssdPublisher,CredentialCipher}=require('./publisher.cjs');
+const p=require('./protocol.cjs');
 let pool,db,store;
 function adapter(client) {
   return {$queryRawUnsafe:async(sql,...values)=>(await client.query(sql,values)).rows,
@@ -89,4 +91,52 @@ test('invalid second edition rolls back the complete submission',async()=>{
   await assert.rejects(store.submit(f.ctx,{...f.packet,editions:[...f.packet.editions,{locale:'zh-CN',title:'中文',bodyMarkdown:'正文',media:[{id:'missing-media'}]}]}),{code:'invalid_media'});
   await assert.rejects(store.work(f.ctx,f.packet.workId),{status:404});
   assert.equal((await db.$queryRawUnsafe('SELECT * FROM rssd_editions WHERE "orgId"=$1',f.owner.orgId)).length,0);
+});
+
+async function publishingFixture(fetchImpl){
+  const f=await fixture(),publisher=new RssdPublisher(store,{secret:'fixture-only-encryption-key-not-production',fetchImpl});
+  await publisher.saveDestination(f.owner,{id:'site',name:'Example site',kind:'site',workspaceIds:['research'],config:{origin:'https://example.test',siteId:'demo'},token:'fixture-only-site-credential-000000000',enabled:true});
+  await store.saveWorkspace(f.owner,{id:'research',name:'Research',sections:[{id:'methods',name:'Methods',policy:{version:2,targets:[{destinationId:'site',locale:'en'}]}}]},1);
+  const submitted=await store.submit(f.ctx,f.packet);
+  const ready=()=>db.$executeRawUnsafe('UPDATE rssd_publications SET "nextAttemptAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1',f.owner.orgId);
+  return {...f,publisher,submitted,ready,tick:()=>publisher.tick({orgId:f.owner.orgId})};
+}
+function fakeSite({losePost=false,wrongReadback=false}={}){
+  let packet,posts=0,done=false;
+  const response=(value,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
+  const receipt=()=>({...packet,packetHash:p.hash(packet),state:done?'success':'queued',release:'example-release'});
+  const fetchImpl=async(url,options)=>{
+    assert.equal(options.redirect,'error');
+    if(url.includes('/rssd-content/')){assert.equal(options.headers.Authorization,undefined);return response(wrongReadback?{wrong:true}:packet);}
+    assert.match(options.headers.Authorization,/^Bearer fixture-only/);
+    if(options.method==='POST'){posts++;packet=JSON.parse(options.body);if(losePost){done=true;throw Error('Lost response');}return response(receipt());}
+    return packet?response(receipt()):response({},404);
+  };
+  return {fetchImpl,get posts(){return posts;},complete(){done=true;}};
+}
+test('publication waits for successful build and matching unauthenticated public readback',async()=>{
+  const remote=fakeSite(),f=await publishingFixture(remote.fetchImpl);
+  assert.equal((await f.tick()).state,'queued');assert.equal(remote.posts,1);
+  remote.complete();await f.ready();assert.equal((await f.tick()).state,'published');assert.equal(remote.posts,1);
+  assert.equal((await store.publications(f.ctx))[0].receipt.verifiedAt.length>0,true);
+});
+test('lost publication response is queried under the original identity without another POST',async()=>{
+  const remote=fakeSite({losePost:true}),f=await publishingFixture(remote.fetchImpl);
+  assert.equal((await f.tick()).state,'queued');await f.ready();assert.equal((await f.tick()).state,'published');assert.equal(remote.posts,1);
+});
+test('a successful receipt cannot hide mismatched public content',async()=>{
+  const remote=fakeSite({wrongReadback:true}),f=await publishingFixture(remote.fetchImpl);
+  await f.tick();remote.complete();await f.ready();assert.equal((await f.tick()).state,'queued');assert.match((await store.publications(f.ctx))[0].error,/converged/);
+});
+test('destination credentials are encrypted, scoped to their identity, and omitted from reads',async()=>{
+  const f=await publishingFixture(fakeSite().fetchImpl);const visible=await f.publisher.destinations(f.owner);
+  assert.equal(visible[0].hasCredential,true);assert.equal(visible[0].config.sealedToken,undefined);assert(!JSON.stringify(visible).includes('fixture-only-site-credential'));
+  const raw=await db.$queryRawUnsafe('SELECT config FROM rssd_destinations WHERE "orgId"=$1',f.owner.orgId);assert(!JSON.stringify(raw).includes('fixture-only-site-credential'));
+  const cipher=new CredentialCipher('fixture-only-encryption-key-not-production');assert.throws(()=>cipher.open(raw[0].config.sealedToken,'other-org:site'));
+  await assert.rejects(f.publisher.destinations(f.ctx),{status:403});
+});
+test('concurrent publisher instances cannot acquire the same publication lease',async()=>{
+  const f=await publishingFixture(fakeSite().fetchImpl);
+  const results=await Promise.all(Array.from({length:6},()=>f.publisher.claim(f.owner.orgId)));
+  assert.equal(results.filter(Boolean).length,1);
 });

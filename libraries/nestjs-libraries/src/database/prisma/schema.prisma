@@ -109,6 +109,9 @@ model RssdPublication {
   receipt Json @default("{}")
   error String?
   attempts Int @default(0)
+  leaseToken String?
+  leaseUntil DateTime? @db.Timestamptz(3)
+  nextAttemptAt DateTime @default(now()) @db.Timestamptz(3)
   createdAt DateTime @default(now()) @db.Timestamptz(3)
   updatedAt DateTime @default(now()) @db.Timestamptz(3)
   @@id([orgId, id])
