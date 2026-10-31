@@ -31,8 +31,8 @@ export class RssdController {
   @Get('/demands') demands(@Req() req: any, @Query() query: any) { return this.rssd.store.demands(req.rssd, query); }
   @Post('/demands') createDemand(@Req() req: any, @Body() body: any) { return this.rssd.store.createDemand(req.rssd, body); }
   @Patch('/demands/:id') changeDemand(@Req() req: any, @Param('id') id: string, @Body() body: any) { return this.rssd.store.changeDemand(req.rssd, id, body); }
-  @Post('/claims') claim(@Req() req: any, @Body() body: any) { return this.rssd.store.claim(req.rssd, body); }
-  @Get('/claims/current') activeClaim(@Req() req: any) { return this.rssd.store.activeClaim(req.rssd); }
+  @Post('/claims') async claim(@Req() req: any, @Body() body: any, @Res() res: any) { res.status(201).json(await this.rssd.store.claim(req.rssd, body)); }
+  @Get('/claims/current') async activeClaim(@Req() req: any, @Res() res: any) { res.json(await this.rssd.store.activeClaim(req.rssd)); }
   @Get('/works') works(@Req() req: any, @Query() query: any) { return this.rssd.store.works(req.rssd, query); }
   @Get('/works/:id') work(@Req() req: any, @Param('id') id: string) { return this.rssd.store.work(req.rssd, id); }
   @Get('/works/:id/editions/:locale/:revision') edition(@Req() req: any, @Param('id') id: string, @Param('locale') locale: string, @Param('revision') revision: string) { return this.rssd.store.edition(req.rssd, id, locale, Number(revision)); }

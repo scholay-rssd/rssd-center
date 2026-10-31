@@ -2,6 +2,7 @@ import { Injectable, NestMiddleware, HttpException } from '@nestjs/common';
 import { Request, Response, NextFunction } from 'express';
 import { AuthMiddleware } from '@gitroom/backend/services/auth/auth.middleware';
 import { RssdService } from './rssd.service';
+const { ownerContext } = require('../../../../rssd/owner-context.cjs');
 
 @Injectable()
 export class RssdMiddleware implements NestMiddleware {
@@ -23,9 +24,7 @@ export class RssdMiddleware implements NestMiddleware {
       }
       await this.auth.use(req, res, () => {
         const user = (req as any).user, org = (req as any).org;
-        const role = org?.users?.find((member: any) => member.userId === user?.id)?.role;
-        if (!org?.id || !user?.id || !['SUPERADMIN', 'ADMIN'].includes(role)) throw new HttpException('Owner access required', 403);
-        (req as any).rssd = {orgId: org.id, userId: user.id, admin: true, workspaceIds: null};
+        (req as any).rssd = ownerContext(user, org);
         next();
       });
     } catch (error: any) {
