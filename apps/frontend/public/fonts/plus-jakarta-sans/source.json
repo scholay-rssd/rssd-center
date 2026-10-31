@@ -1,0 +1,9 @@
+{
+  "source": "https://github.com/google/fonts/tree/8b0a1d0f5983c89bc2b93f1b5fb55f9e252744b5/ofl/plusjakartasans",
+  "license": "SIL-OFL-1.1",
+  "sha256": {
+    "regular.ttf": "89b3fb38aa0d275d7a731d0d817a4f1622b316b4d7fbdedcf02ee9099ff68bc8",
+    "italic.ttf": "9529eb888668b6a3c6dd75b6341a2fc5263fb6c9e788822e6117c29dd9e8b115",
+    "OFL.txt": "995c7199cab65954f545996326755daee7b63cc6b42b06c13da1f9502ab08a99"
+  }
+}
