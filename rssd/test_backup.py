@@ -1,4 +1,4 @@
-import importlib.util, io, json, os, pathlib, shutil, tarfile, tempfile, unittest
+import importlib.util, io, json, os, pathlib, shutil, sqlite3, tarfile, tempfile, unittest
 from unittest.mock import patch
 import backup
 
@@ -20,6 +20,28 @@ class FixtureRemote:
     def download(self, key, destination): shutil.copyfile(self.directory / key, destination)
 
 class BackupTests(unittest.TestCase):
+    def test_sqlite_backup_retains_committed_wal_rows_and_integrity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory); source = root / 'labels.sqlite'
+            writer = sqlite3.connect(source)
+            try:
+                writer.execute('PRAGMA journal_mode=WAL'); writer.execute('CREATE TABLE ledger(id TEXT PRIMARY KEY, reserved INTEGER)')
+                writer.execute("INSERT INTO ledger VALUES ('uncertain-original-request', 10000)"); writer.commit()
+                remote_root = root / 'remote'; remote_root.mkdir(); remote = FixtureRemote(remote_root)
+                config = {'stateDirectory': str(root / 'state'), 'databases': [], 'sqlite': [{'label': 'labels', 'source': str(source)}], 'recipient': 'fixture'}
+                with patch.object(backup, 'encrypt', side_effect=lambda c,s,o: shutil.copyfile(s,o)):
+                    receipt = backup.snapshot(config, remote)
+                output = root / 'restored'; output.mkdir()
+                restore_backup.safe_extract(root / 'state/snapshots' / receipt['name'], output)
+                restored = sqlite3.connect(output / 'labels.sqlite')
+                try:
+                    self.assertEqual(restored.execute('PRAGMA integrity_check').fetchone()[0], 'ok')
+                    self.assertEqual(restored.execute('SELECT * FROM ledger').fetchall(), [('uncertain-original-request', 10000)])
+                    entry = json.loads((output / 'manifest.json').read_text())['databases'][0]
+                    self.assertEqual(entry['kind'], 'sqlite'); self.assertEqual(entry['sha256'], backup.digest(output / 'labels.sqlite'))
+                finally: restored.close()
+            finally: writer.close()
+
     def test_article_versions_archive_only_new_rows_and_require_previous_batches(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory); remote_root = root / 'remote'; remote_root.mkdir(); remote = FixtureRemote(remote_root)

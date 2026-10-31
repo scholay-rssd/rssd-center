@@ -5,7 +5,7 @@ Requires Python 3.11+, age, rclone and Docker. Credentials stay in the private
 configuration files; subprocess output never includes configuration or tokens.
 """
 import argparse, contextlib, datetime as dt, hashlib, json, os, pathlib, re
-import shutil, subprocess, tarfile, tempfile, uuid
+import shutil, sqlite3, subprocess, tarfile, tempfile, uuid
 
 STAMP = re.compile(r'^rssd-(\d{8}T\d{6}Z)-([a-f0-9]{8})\.tar\.age$')
 ARTICLE_QUERY = '''SELECT jsonb_build_object('work',to_jsonb(w),'edition',to_jsonb(e))::text
@@ -130,6 +130,18 @@ def snapshot(config, remote=None):
                     os.chmod(output, 0o600)
                     run(['docker', 'exec', database['container'], 'sh', '-c', 'exec pg_dumpall -U "$POSTGRES_USER"'], stdout=stream)
                 manifest['databases'].append({'path': output.name, 'sha256': digest(output)})
+            # The legacy labels budget remains an independent SQLite ledger.
+            # Online backup includes committed WAL data without copying live files.
+            for database in config.get('sqlite', []):
+                label = database['label']; source = pathlib.Path(database['source'])
+                if not re.fullmatch(r'[a-z][a-z0-9-]{0,60}', label) or not source.is_file() or source.is_symlink():
+                    raise ValueError('Invalid SQLite backup source')
+                output = work / (label + '.sqlite')
+                if output.exists(): raise ValueError('Duplicate SQLite backup label')
+                with contextlib.closing(sqlite3.connect(source.resolve().as_uri() + '?mode=ro', uri=True)) as reader, contextlib.closing(sqlite3.connect(output)) as writer:
+                    os.chmod(output, 0o600); reader.backup(writer)
+                    if writer.execute('PRAGMA integrity_check').fetchone()[0] != 'ok': raise ValueError('SQLite backup integrity failed')
+                manifest['databases'].append({'path': output.name, 'sha256': digest(output), 'kind': 'sqlite'})
             # Small private configuration files go inside every recovery package.
             for item in config.get('configuration', []):
                 label = item['label']

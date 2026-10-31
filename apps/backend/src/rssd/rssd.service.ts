@@ -11,6 +11,7 @@ const { RssdPublisher } = require('../../../../rssd/publisher.cjs');
 const { RssdMedia } = require('../../../../rssd/media.cjs');
 const { RssdPostiz } = require('../../../../rssd/postiz.cjs');
 const { RssdGuestbook } = require('../../../../rssd/guestbook.cjs');
+const { RssdLabels } = require('../../../../rssd/labels.cjs');
 
 @Injectable()
 export class RssdService implements OnModuleInit, OnModuleDestroy {
@@ -19,6 +20,7 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   readonly media: any;
   readonly postiz: any;
   readonly guestbook: any;
+  readonly labels = new RssdLabels();
   private timer?: ReturnType<typeof setInterval>;
   constructor(prisma: PrismaService, posts: PostsService, temporal: TemporalService) {
     this.store = new RssdStore(prisma);
@@ -51,5 +53,5 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
       this.publisher.tick().catch(() => console.error('RSSD publisher could not access its queue'));
     }, 3000);
   }
-  onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
+  onModuleDestroy() { if (this.timer) clearInterval(this.timer); this.labels.close(); }
 }

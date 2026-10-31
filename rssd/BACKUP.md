@@ -72,3 +72,11 @@ and uploads, and start the matching RSSD image with `RSSD_DISPATCH_ENABLED=0` an
 `RSSD_POSTIZ_ORCHESTRATOR_ENABLED=0`. Verify works, revisions, destination identities
 and uncertain receipts before enabling either dispatcher. Do not run restored
 publishers while the original center is still writing to the same destinations.
+# SQLite operational ledgers
+
+Add `sqlite` entries with a unique `label` and existing host `source` path for
+the migrated labels ledger. The backup uses SQLite's online backup API and
+checks integrity; it includes committed WAL data without copying live files.
+These snapshots are verified with the other database files during recovery.
+Keep live SQLite files out of ordinary `archives` and `configuration` inputs.
+

@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/scholay-rssd/rssd",
+  "revision": "c2f9cee3efd2df481cfadcc85e4f281b0cf132c4",
+  "license": "MIT",
+  "files": {
+    "admin/sqlite.mjs": "380f9755350c5c319cd55c6af4e56d8e7bfa175f06dcca29de270c1daaa34dcc",
+    "admin/labels-store.mjs": "8a54c321a7552c4f72feb672b05640eea922275503668ee9514e84306dcec230",
+    "admin/labels-provider.mjs": "bec089ec49dfb088dba7a4a545e7b161b0a3916686ccab5849122a1678b18eed",
+    "admin/labels-collector.mjs": "c1129fbb31cce996f534f3b34b5bd7fa5c0acd3444265f0875e0a204f1d7b27f"
+  }
+}
