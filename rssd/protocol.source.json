@@ -2,9 +2,9 @@
   "version": 1,
   "repository": "scholay-rssd/rssd",
   "path": "contracts/rssd-v1.cjs",
-  "sha256": "ee999bb16f4347bfb3399b234b9d0878b0b7ba698332375cb62ecd6063e21031",
+  "sha256": "2cb89985b43ea6b80d31f33888e27ea1a51fa9d5ddc42e164d533b698fda4a99",
   "files": {
-    "contracts/rssd-v1.cjs": "ee999bb16f4347bfb3399b234b9d0878b0b7ba698332375cb62ecd6063e21031",
+    "contracts/rssd-v1.cjs": "2cb89985b43ea6b80d31f33888e27ea1a51fa9d5ddc42e164d533b698fda4a99",
     "contracts/rssd-publication.cjs": "a5d54b15a19e5cb19f6932b9a3cfffbd9f9c7a1757f22d5d6caf5b246f250b1d",
     "contracts/rssd-media.cjs": "e2179ca5c6fd7ba2592bc8034800a4fc2cb05ea8abb00fab8b3ede729dc5f136",
     "contracts/rssd-record.cjs": "6ab6f7f928d020acceafe739bf79efca0219082a506b539b6a2f5effef347932"

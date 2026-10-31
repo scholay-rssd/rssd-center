@@ -92,7 +92,7 @@ function edition(input) {
   return {locale: locale(value.locale), title: text(value.title, 'edition title', 1000),
     bodyMarkdown: text(value.bodyMarkdown, 'bodyMarkdown', 2000000),
     summary: text(value.summary || '', 'summary', 10000, true), sources, media,
-    metadata: json(value.metadata || {}, 'metadata'), translationOf};
+    metadata: json(value.metadata || {}, 'metadata', 2000000), translationOf};
 }
 function submission(input) {
   const value = object(input, 'submission');
