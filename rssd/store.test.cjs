@@ -173,7 +173,30 @@ test('legacy import preserves revisions and receipts, is replayable, and fences 
   assert.equal((await store.work(f.owner,value.workId)).editions[0].hash,value.editions[0].hash);
   const pubs=await store.publications(f.owner);assert.equal(pubs.length,1);assert.equal(pubs[0].state,'legacy_published');assert.equal(pubs[0].receipt.requests[0].key,'original-request');
   await assert.rejects(store.submit(f.owner,{...f.packet,baseRevisions:{en:1}}),{code:'migration_staged'});
+  assert.equal((await store.registry(f.owner)).workspaces[0].writable,false);
+  await assert.rejects(store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Cannot start before cutover'}),{code:'migration_staged'});
+  assert.equal(await store.claim(f.ctx),null);
   await fs.promises.writeFile(path.join(directory,'document.json'),'corrupted');await assert.rejects(migration.import(f.owner,directory),/checksum/);
   assert.equal((await migration.inspect(f.owner,siteId)).state,'staged');
+  const evidence={receiptId:'fixture-cutover',oldWriterDisabled:true,inFlightCount:0,pendingWorkReconciled:true,receiverRelease:'fixture-release',rollbackReference:'fixture-only-readonly-snapshot',sourceDatabaseSha256:manifest.databaseSha256,editionIndexSha256:first.editionIndexSha256,baselineSha256:manifest.baseline.sha256};
+  await assert.rejects(migration.activate(f.owner,siteId,{...evidence,oldWriterDisabled:false}),{code:'handoff_incomplete'});
+  await assert.rejects(migration.activate(f.owner,siteId,{...evidence,baselineSha256:'b'.repeat(64)}),{code:'stale_snapshot'});
+  assert.equal((await migration.activate(f.owner,siteId,evidence)).state,'active');
+  assert.equal((await migration.activate(f.owner,siteId,evidence)).state,'active');
+  await assert.rejects(migration.import(f.owner,directory),/active workspace/);
+  assert.equal((await store.registry(f.owner)).workspaces[0].writable,true);
+  await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Now available'});assert.ok(await store.claim(f.ctx));
  }finally{await fs.promises.rm(directory,{recursive:true,force:true});}
+});
+
+test('HTTP pagination accepts numeric query strings and searches full latest bodies without crossing scope',async()=>{
+ const f=await fixture();
+ for(let i=0;i<3;i++)await store.submit(f.owner,{...f.packet,requestId:randomUUID(),workId:randomUUID(),editions:[{...f.packet.editions[0],title:'Untitled '+i,bodyMarkdown:'Body-only needle '+i}]},{publish:false});
+ const first=await store.works(f.owner,{search:'Body-only needle',limit:'2',offset:'0'}),second=await store.works(f.owner,{search:'Body-only needle',limit:'2',offset:'2'});
+ assert.equal(first.length,2);assert.equal(second.length,1);assert.equal(new Set([...first,...second].map(w=>w.id)).size,3);
+ assert.deepEqual(await store.works({...f.ctx,workspaceIds:[]},{search:'Body-only needle',limit:'2'}),[]);
+ for(const limit of ['1.5','Infinity','-1','201'])await assert.rejects(store.works(f.owner,{limit}),{status:400});
+ await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Untitled demand',brief:'Brief-only needle'});
+ assert.equal((await store.demands(f.owner,{search:'Brief-only needle',limit:'1',offset:'0'})).length,1);
+ assert.deepEqual(await store.publications(f.owner,{limit:'1',offset:'0'}),[]);
 });

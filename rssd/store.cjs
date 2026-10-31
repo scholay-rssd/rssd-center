@@ -12,12 +12,20 @@ function scope(ctx, workspaceId) {
 }
 function admin(ctx) { if (!ctx?.admin || !ctx.orgId) p.fail('Owner access required', 403, 'forbidden'); }
 function safeDemand(row) { if (!row) return null; const {claimToken, ...rest} = row; return rest; }
+function pageNumber(value,name,min,max) {
+  if(typeof value==='string'&&/^(0|[1-9][0-9]*)$/.test(value))value=Number(value);
+  return p.integer(value,name,min,max);
+}
 async function audit(db, ctx, action, payload) {
   await execute(db, 'INSERT INTO rssd_audit ("orgId",id,actor,action,payload) VALUES ($1,$2,$3,$4,$5::jsonb)',ctx.orgId,randomUUID(),ctx.workerId || ctx.userId || 'owner',action,encoded(payload));
 }
 class RssdStore {
   constructor(db) { this.db = db; }
   transaction(fn) { return this.db.$transaction(fn, {maxWait:10000,timeout:20000}); }
+  async writable(db,ctx,workspaceId) {
+    const migration=await one(db,'SELECT state FROM rssd_migrations WHERE "orgId"=$1 AND "workspaceId"=$2',ctx.orgId,workspaceId);
+    if(migration&&migration.state!=='active')p.fail('This workspace is staged for migration; its original writer is still active',409,'migration_staged');
+  }
   async workspace(db, ctx, workspaceId, sectionId) {
     scope(ctx, workspaceId);
     const row = await one(db, 'SELECT * FROM rssd_workspaces WHERE "orgId"=$1 AND id=$2',ctx.orgId,workspaceId);
@@ -27,8 +35,8 @@ class RssdStore {
     return {row,section};
   }
   async registry(ctx) {
-    const all = await rows(this.db,'SELECT * FROM rssd_workspaces WHERE "orgId"=$1 ORDER BY id',ctx.orgId);
-    return {protocolVersion:p.VERSION,workspaces:all.filter(w => ctx.workspaceIds === null || ctx.workspaceIds.includes(w.id)).map(w => ({...w.payload,revision:w.revision}))};
+    const all = await rows(this.db,'SELECT w.*,m.state AS "migrationState" FROM rssd_workspaces w LEFT JOIN rssd_migrations m ON m."orgId"=w."orgId" AND m."workspaceId"=w.id WHERE w."orgId"=$1 ORDER BY w.id',ctx.orgId);
+    return {protocolVersion:p.VERSION,workspaces:all.filter(w => ctx.workspaceIds === null || ctx.workspaceIds.includes(w.id)).map(w => ({...w.payload,revision:w.revision,migrationState:w.migrationState||null,writable:!w.migrationState||w.migrationState==='active'}))};
   }
   async saveWorkspace(ctx, input, baseRevision = 0) {
     admin(ctx); const value=p.workspace(input);p.integer(baseRevision,'baseRevision');
@@ -82,6 +90,7 @@ class RssdStore {
   }
   async createDemand(ctx,input) {
     const value=p.demand(input);await this.workspace(this.db,ctx,value.workspaceId,value.sectionId);
+    await this.writable(this.db,ctx,value.workspaceId);
     if(value.source) {
       const source=await this.work(ctx,value.source.workId);
       if(source.workspaceId!==value.workspaceId)p.fail('Source workspace differs');
@@ -92,12 +101,12 @@ class RssdStore {
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT ("orgId",id) DO NOTHING RETURNING *`,ctx.orgId,value.id,value.workspaceId,value.sectionId,value.kind,value.title,value.priority,encoded(value));
     if(!result)p.fail('Demand identity already exists',409,'identity_conflict');return safeDemand(result);
   }
-  async demands(ctx,{workspaceId,state,search='',limit=100}={}) {
-    if(workspaceId)scope(ctx,p.id(workspaceId));p.integer(limit,'limit',1,200);p.text(search,'search',500,true);
+  async demands(ctx,{workspaceId,state,search='',limit=100,offset=0}={}) {
+    if(workspaceId)scope(ctx,p.id(workspaceId));limit=pageNumber(limit,'limit',1,200);offset=pageNumber(offset,'offset',0,1000000);p.text(search,'search',500,true);
     const found=await rows(this.db,`SELECT * FROM rssd_demands WHERE "orgId"=$1
       AND ($2::text IS NULL OR "workspaceId"=$2) AND ($3::text IS NULL OR state=$3)
       AND ($4::jsonb IS NULL OR "workspaceId" IN (SELECT jsonb_array_elements_text($4::jsonb)))
-      AND ($5='' OR title ILIKE '%' || $5 || '%') ORDER BY priority DESC,"createdAt",id LIMIT $6`,ctx.orgId,workspaceId||null,state||null,ctx.workspaceIds===null?null:encoded(ctx.workspaceIds),search,limit);
+      AND ($5='' OR title ILIKE '%' || $5 || '%' OR payload->>'brief' ILIKE '%' || $5 || '%') ORDER BY priority DESC,"createdAt",id LIMIT $6 OFFSET $7`,ctx.orgId,workspaceId||null,state||null,ctx.workspaceIds===null?null:encoded(ctx.workspaceIds),search,limit,offset);
     return found.map(safeDemand);
   }
   async claim(ctx,input={}) {
@@ -112,8 +121,9 @@ class RssdStore {
       if(!worker)p.fail('Device revoked',401);
       const active=await one(db,`SELECT id FROM rssd_demands WHERE "orgId"=$1 AND "workerId"=$2 AND state IN ('claimed','blocked')`,ctx.orgId,ctx.workerId);
       if(active)p.fail('Finish, resume or release the current demand first',409,'worker_busy');
-      const demand=await one(db,`SELECT * FROM rssd_demands WHERE "orgId"=$1 AND state='queued'
+      const demand=await one(db,`SELECT * FROM rssd_demands d WHERE "orgId"=$1 AND state='queued'
         AND "workspaceId" IN (SELECT jsonb_array_elements_text($2::jsonb))
+        AND NOT EXISTS (SELECT 1 FROM rssd_migrations m WHERE m."orgId"=d."orgId" AND m."workspaceId"=d."workspaceId" AND m.state<>'active')
         AND ($3::text IS NULL OR id=$3) AND ($4='[]' OR "sectionId" IN (SELECT jsonb_array_elements_text($4::jsonb)))
         ORDER BY priority DESC,"createdAt",id FOR UPDATE SKIP LOCKED LIMIT 1`,ctx.orgId,encoded(workspaceIds),demandId,encoded(sectionIds));
       if(!demand)return null;
@@ -150,14 +160,15 @@ class RssdStore {
       WHERE "orgId"=$1 AND "workId"=$2 ORDER BY locale,revision DESC`,ctx.orgId,id);
     return {...work,editions};
   }
-  async works(ctx,{workspaceId,search='',limit=100}={}) {
-    if(workspaceId)scope(ctx,p.id(workspaceId));p.integer(limit,'limit',1,200);p.text(search,'search',500,true);
+  async works(ctx,{workspaceId,search='',limit=100,offset=0}={}) {
+    if(workspaceId)scope(ctx,p.id(workspaceId));limit=pageNumber(limit,'limit',1,200);offset=pageNumber(offset,'offset',0,1000000);p.text(search,'search',500,true);
     return rows(this.db,`SELECT w.*,COALESCE(e.editions,'[]'::jsonb) AS editions FROM rssd_works w LEFT JOIN LATERAL
-      (SELECT jsonb_agg(jsonb_build_object('locale',x.locale,'revision',x.revision,'title',x.payload->>'title','hash',x.hash)) AS editions FROM
+      (SELECT jsonb_agg(jsonb_build_object('locale',x.locale,'revision',x.revision,'title',x.payload->>'title','hash',x.hash)) AS editions,
+        bool_or(x.payload->>'title' ILIKE '%' || $4 || '%' OR x.payload->>'bodyMarkdown' ILIKE '%' || $4 || '%') AS matches FROM
       (SELECT DISTINCT ON (locale) locale,revision,payload,hash FROM rssd_editions WHERE "orgId"=w."orgId" AND "workId"=w.id ORDER BY locale,revision DESC) x) e ON true
       WHERE w."orgId"=$1 AND ($2::text IS NULL OR w."workspaceId"=$2)
       AND ($3::jsonb IS NULL OR w."workspaceId" IN (SELECT jsonb_array_elements_text($3::jsonb)))
-      AND ($4='' OR e.editions::text ILIKE '%' || $4 || '%') ORDER BY w."updatedAt" DESC,w.id LIMIT $5`,ctx.orgId,workspaceId||null,ctx.workspaceIds===null?null:encoded(ctx.workspaceIds),search,limit);
+      AND ($4='' OR e.matches) ORDER BY w."updatedAt" DESC,w.id LIMIT $5 OFFSET $6`,ctx.orgId,workspaceId||null,ctx.workspaceIds===null?null:encoded(ctx.workspaceIds),search,limit,offset);
   }
   async edition(ctx,workId,locale,revision) {
     await this.work(ctx,workId);p.locale(locale);p.integer(revision,'revision',1);
@@ -174,8 +185,7 @@ class RssdStore {
       // Check revocation inside the transaction, not only at the HTTP boundary.
       if(ctx.workerId){const worker=await one(db,'SELECT id FROM rssd_workers WHERE "orgId"=$1 AND id=$2 AND "revokedAt" IS NULL',ctx.orgId,ctx.workerId);if(!worker)p.fail('Device revoked',401);}
       const {section}=await this.workspace(db,ctx,value.workspaceId,value.sectionId);
-      const migration=await one(db,'SELECT state FROM rssd_migrations WHERE "orgId"=$1 AND "workspaceId"=$2',ctx.orgId,value.workspaceId);
-      if(migration&&migration.state!=='active')p.fail('This workspace is staged for migration; its original writer is still active',409,'migration_staged');
+      await this.writable(db,ctx,value.workspaceId);
       let policy=section.policy,demand=null;
       if(value.demandId){
         demand=await one(db,'SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2 FOR UPDATE',ctx.orgId,value.demandId);
@@ -233,11 +243,11 @@ class RssdStore {
     p.id(requestId);const row=await one(this.db,'SELECT "workspaceId",result FROM rssd_submissions WHERE "orgId"=$1 AND "requestId"=$2',ctx.orgId,requestId);
     if(!row)p.fail('Submission not found',404,'not_found');scope(ctx,row.workspaceId);return row.result;
   }
-  async publications(ctx,{workspaceId,limit=100}={}) {
-    if(workspaceId)scope(ctx,p.id(workspaceId));p.integer(limit,'limit',1,200);
+  async publications(ctx,{workspaceId,limit=100,offset=0}={}) {
+    if(workspaceId)scope(ctx,p.id(workspaceId));limit=pageNumber(limit,'limit',1,200);offset=pageNumber(offset,'offset',0,1000000);
     return rows(this.db,`SELECT id,"workId","workspaceId",locale,revision,"destinationId",state,receipt,error,attempts,"createdAt","updatedAt"
       FROM rssd_publications WHERE "orgId"=$1 AND ($2::text IS NULL OR "workspaceId"=$2)
-      AND ($3::jsonb IS NULL OR "workspaceId" IN (SELECT jsonb_array_elements_text($3::jsonb))) ORDER BY "createdAt" DESC LIMIT $4`,ctx.orgId,workspaceId||null,ctx.workspaceIds===null?null:encoded(ctx.workspaceIds),limit);
+      AND ($3::jsonb IS NULL OR "workspaceId" IN (SELECT jsonb_array_elements_text($3::jsonb))) ORDER BY "createdAt" DESC,id LIMIT $4 OFFSET $5`,ctx.orgId,workspaceId||null,ctx.workspaceIds===null?null:encoded(ctx.workspaceIds),limit,offset);
   }
 }
 module.exports={RssdStore,scope,admin};

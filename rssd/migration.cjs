@@ -7,6 +7,26 @@ const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args),x=(db,sql,...args)=>db
 class RssdMigration {
  constructor(store,media){this.store=store;this.media=media;}
  async inspect(ctx,siteId){admin(ctx);return (await q(this.store.db,'SELECT * FROM rssd_migrations WHERE "orgId"=$1 AND "siteId"=$2',ctx.orgId,p.id(siteId)))[0]||null;}
+ async activate(ctx,siteId,evidence){
+  admin(ctx);p.id(siteId);p.object(evidence,'cutover evidence');
+  if(evidence.oldWriterDisabled!==true||evidence.inFlightCount!==0||evidence.pendingWorkReconciled!==true)p.fail('Disable the old writer, drain publication and reconcile pending work before activation',409,'handoff_incomplete');
+  p.text(evidence.receiptId,'cutover receiptId',200);p.text(evidence.receiverRelease,'receiver release',200);p.text(evidence.rollbackReference,'rollback reference',1000);
+  return this.store.transaction(async db=>{
+   const row=(await q(db,'SELECT * FROM rssd_migrations WHERE "orgId"=$1 AND "siteId"=$2 FOR UPDATE',ctx.orgId,siteId))[0];
+   if(!row)p.fail('Migration not found',404);
+   if(row.state==='active'){
+    if(row.report.cutover?.evidenceHash===p.hash(evidence))return row.report;
+    p.fail('This migration was already activated with different evidence',409,'identity_conflict');
+   }
+   if(row.state!=='staged')p.fail('Import and verify the final snapshot first',409);
+   if(evidence.sourceDatabaseSha256!==row.manifest.databaseSha256||evidence.editionIndexSha256!==row.report.editionIndexSha256||evidence.baselineSha256!==row.manifest.baseline.sha256)p.fail('Cutover evidence does not match the final import',409,'stale_snapshot');
+   const checked=await new RssdMigration({...this.store,db},this.media).verify(ctx,row.manifest);
+   if(checked.editionIndexSha256!==row.report.editionIndexSha256)p.fail('Imported editions changed after verification',409,'stale_snapshot');
+   const report={...checked,state:'active',dispatchEnabled:false,cutover:{...evidence,evidenceHash:p.hash(evidence),activatedAt:new Date().toISOString(),actor:ctx.userId||'owner'}};
+   await x(db,`UPDATE rssd_migrations SET state='active',report=$3::jsonb,"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND "siteId"=$2`,ctx.orgId,siteId,JSON.stringify(report));
+   return report;
+  });
+ }
  async import(ctx,directory){
   admin(ctx);directory=resolve(directory);
   const read=async descriptor=>{const file=resolve(directory,descriptor.path);if(!file.startsWith(directory+sep))p.fail('Unsafe migration path');const bytes=await readFile(file);if(hash(bytes)!==descriptor.sha256)p.fail('Migration file checksum mismatch: '+descriptor.path,409);return bytes;};

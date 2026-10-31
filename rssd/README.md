@@ -60,3 +60,26 @@ adapters for social networks and Discourse are not implemented in this checkpoin
 Publication intents are distinct from published receipts. Until destination
 dispatch and verified readback are configured, a queued intent is not a public
 publication. Migration and browser-export work remain separate delivery gates.
+
+## Legacy cutover
+
+`node rssd/migration-cli.cjs import ORGANIZATION PRIVATE-DIRECTORY` imports a
+verified final legacy bundle without publishing it. Staged workspaces expose
+`writable: false` and cannot create/claim demands or accept submissions. Lists
+support bounded `limit` and `offset`; work search covers the latest full text.
+
+After the original writer is disabled, in-flight publication is drained and every
+pending manuscript has a recorded destination, run
+`node rssd/migration-cli.cjs activate ORGANIZATION SITE PRIVATE-EVIDENCE.json`.
+The private operator receipt must contain `receiptId`, `oldWriterDisabled: true`,
+`inFlightCount: 0`, `pendingWorkReconciled: true`, `receiverRelease`,
+`rollbackReference`, and the final `sourceDatabaseSha256`, `editionIndexSha256`,
+`baselineSha256`. Activation checks these against the imported database and
+preserves the evidence hash. Repeating the same activation is safe; changing its
+evidence or importing over an active workspace is rejected. This operator receipt
+records external cutover checks; it does not itself disable an old server.
+
+Activation does not enable the dispatcher or broaden destination policies.
+During isolated restoration also set `RSSD_POSTIZ_ORCHESTRATOR_ENABLED=0` and
+isolate network access. Real authorization data must never be used by a test
+publisher. Keep the normal Postiz orchestrator enabled in production.

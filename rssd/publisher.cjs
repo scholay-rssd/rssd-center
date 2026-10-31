@@ -72,7 +72,7 @@ class RssdPublisher {
     const newer=await one(this.db,`SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND revision>$5 AND state='published'`,row.orgId,row.workId,row.locale,row.destinationId,row.revision);
     if(newer)return this.finish(row,{state:'superseded',error:'A newer revision is already published'});
     const config=destination.config,token=this.cipher().open(config.sealedToken,row.orgId+':'+destination.id);
-    const old=await one(this.db,`SELECT receipt FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND state='published' ORDER BY revision DESC LIMIT 1`,row.orgId,row.workId,row.locale,row.destinationId);
+    const old=await one(this.db,`SELECT receipt FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND state IN ('published','legacy_published') ORDER BY revision DESC LIMIT 1`,row.orgId,row.workId,row.locale,row.destinationId);
     const path=old?.receipt.url?new URL(old.receipt.url).pathname:row.payload.edition.metadata?.publication?.path||((row.locale==='en'?'/en':'')+'/news/'+p.hash(row.workId).slice(0,32)+'/');
     if(row.payload.edition.media?.length&&!this.media)p.fail('Media storage is unavailable',400,'missing_media');
     const prepared=this.media?await this.media.publication(row.orgId,row.workspaceId,row.payload.edition):{edition:row.payload.edition,assets:[],uploads:[]};
