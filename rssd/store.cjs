@@ -174,6 +174,8 @@ class RssdStore {
       // Check revocation inside the transaction, not only at the HTTP boundary.
       if(ctx.workerId){const worker=await one(db,'SELECT id FROM rssd_workers WHERE "orgId"=$1 AND id=$2 AND "revokedAt" IS NULL',ctx.orgId,ctx.workerId);if(!worker)p.fail('Device revoked',401);}
       const {section}=await this.workspace(db,ctx,value.workspaceId,value.sectionId);
+      const migration=await one(db,'SELECT state FROM rssd_migrations WHERE "orgId"=$1 AND "workspaceId"=$2',ctx.orgId,value.workspaceId);
+      if(migration&&migration.state!=='active')p.fail('This workspace is staged for migration; its original writer is still active',409,'migration_staged');
       let policy=section.policy,demand=null;
       if(value.demandId){
         demand=await one(db,'SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2 FOR UPDATE',ctx.orgId,value.demandId);
@@ -188,6 +190,8 @@ class RssdStore {
       if(work&&(work.workspaceId!==value.workspaceId||work.sectionId!==value.sectionId))p.fail('Work belongs to a different workspace or section',409,'identity_conflict');
       const result={requestId:value.requestId,workId:value.workId,workspaceId:value.workspaceId,status:publish?'accepted':'draft_saved',editions:[],publicationIds:[]};
       for(const edition of value.editions){
+        const deleted=await one(db,'SELECT "documentId" FROM rssd_legacy_documents WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "deletedAt" IS NOT NULL',ctx.orgId,value.workId,edition.locale);
+        if(deleted)p.fail('This historical edition was deleted; restore it explicitly before editing',409,'edition_deleted');
         if(demand?.kind==='translate' && (!edition.translationOf || p.hash(edition.translationOf)!==p.hash(demand.payload.source)))p.fail('Translation must identify the requested source revision',409,'source_conflict');
         const head=await one(db,'SELECT revision FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 ORDER BY revision DESC LIMIT 1',ctx.orgId,value.workId,edition.locale);
         if((head?.revision||0)!==value.baseRevisions[edition.locale])p.fail('Edition changed; keep local changes and reload',409,'revision_conflict');

@@ -1,6 +1,7 @@
 'use strict';
 const p=require('./rssd-v1.cjs');
 const {mediaManifest}=require('./rssd-media.cjs');
+const {record,recordFields}=require('./rssd-record.cjs');
 function route(value) {
   if(typeof value!=='string'||!/^\/(?:[A-Za-z0-9_\-\u0080-\uFFFF]+\/)+$/.test(value)||value.length>1000)p.fail('Invalid public article route');
   if(/^\/(?:manage|api|rssd-content|article-media|downloads|assets|fonts)\//.test(value))p.fail('Reserved public route');
@@ -11,6 +12,7 @@ function route(value) {
 function publicContent(edition) {
   const e=p.edition(edition),metadata={};
   for(const key of ['author','date','category'])if(e.metadata[key]!=null)metadata[key]=p.text(e.metadata[key],key,500,true);
+  if(e.metadata.record){metadata.record=record(e.metadata.record);recordFields(metadata.record,e);}
   return {locale:e.locale,title:e.title,bodyMarkdown:e.bodyMarkdown,summary:e.summary,sources:e.sources,metadata};
 }
 function publication(input) {

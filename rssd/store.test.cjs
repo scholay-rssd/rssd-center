@@ -9,6 +9,7 @@ const {RssdStore} = require('./store.cjs');
 const {RssdPublisher,CredentialCipher}=require('./publisher.cjs');
 const {RssdMedia}=require('./media.cjs');
 const mediaProtocol=require('./rssd-media.cjs');
+const {RssdMigration}=require('./migration.cjs');
 const p=require('./protocol.cjs');
 let pool,db,store;
 function adapter(client) {
@@ -155,5 +156,24 @@ test('private center media is idempotent, workspace-scoped and rewritten only fo
   const output=await media.publication(f.owner.orgId,'research',edition);assert.equal(output.edition.bodyMarkdown,'![Evidence]('+manifest.path+')');assert.deepEqual(output.assets,[manifest]);assert.equal(output.uploads[0].id,a.id);
   await assert.rejects(media.publication(f.owner.orgId,'research',{...edition,media:[]}),{code:'missing_media'});
   await store.revokeWorker(f.owner,f.worker.id);await assert.rejects(media.upload(f.ctx,input),{status:401});
+ }finally{await fs.promises.rm(directory,{recursive:true,force:true});}
+});
+
+test('legacy import preserves revisions and receipts, is replayable, and fences the old writer handoff',async()=>{
+ const f=await fixture(),directory=await fs.promises.mkdtemp(path.join(require('node:os').tmpdir(),'rssd-migration-test-'));
+ try{
+  const siteId='fixture-site',media=new RssdMedia(store,{directory:path.join(directory,'media')}),migration=new RssdMigration(store,media),payload=p.edition(f.packet.editions[0]);
+  const source={document:{id:'original-doc',updated:1700000000000,published_revision:1,permalink:'/en/news/original/'},revisions:[{version:1,payload:JSON.stringify({title:'Original',markdown:'Full body'}),actor:'original-owner'}],requests:[{key:'original-request',revision:1}],jobs:[],tombstone:null};
+  const value={version:1,siteId,workspaceId:'research',workId:f.packet.workId,sectionId:'methods',locale:'en',source,sourceHash:p.hash(source),editions:[{revision:1,payload,hash:p.hash(payload),createdAt:'2026-01-01T00:00:00.000Z'}]};
+  const save=async(name,data)=>{const raw=JSON.stringify(data);await fs.promises.writeFile(path.join(directory,name),raw);return {path:name,sha256:p.hash(raw)};};
+  const doc=await save('document.json',value),baseline=await save('baseline.json',{}),ancillary=await save('ancillary.json',{requests:source.requests});
+  const manifest={version:1,site:{id:siteId,spaceId:'research',origin:'https://example.test'},workspace:{id:'research',siteId,name:'Research',sections:[{id:'methods',name:'Methods',policy:{version:1,targets:[]}}]},databaseSha256:'a'.repeat(64),documents:[{...doc,documentId:'original-doc',workId:value.workId,locale:'en',sourceHash:value.sourceHash,revisions:1,publishedRevision:1,deleted:false}],media:[],baseline,ancillary,counts:{documents:1,revisions:1,published:1,deleted:0,media:0}};
+  await save('manifest.json',manifest);
+  const first=await migration.import(f.owner,directory),second=await migration.import(f.owner,directory);assert.equal(first.editionIndexSha256,second.editionIndexSha256);
+  assert.equal((await store.work(f.owner,value.workId)).editions[0].hash,value.editions[0].hash);
+  const pubs=await store.publications(f.owner);assert.equal(pubs.length,1);assert.equal(pubs[0].state,'legacy_published');assert.equal(pubs[0].receipt.requests[0].key,'original-request');
+  await assert.rejects(store.submit(f.owner,{...f.packet,baseRevisions:{en:1}}),{code:'migration_staged'});
+  await fs.promises.writeFile(path.join(directory,'document.json'),'corrupted');await assert.rejects(migration.import(f.owner,directory),/checksum/);
+  assert.equal((await migration.inspect(f.owner,siteId)).state,'staged');
  }finally{await fs.promises.rm(directory,{recursive:true,force:true});}
 });

@@ -39,4 +39,4 @@ jobs:
       - run: pnpm --filter postiz-backend build
       - run: pnpm exec tsc --noEmit -p apps/frontend/tsconfig.json
       - name: Verify packaged domain runtime
-        run: node -e "require('./apps/backend/dist/rssd/store.cjs'); require('./apps/backend/dist/rssd/protocol.cjs')"
+        run: node -e "for(const name of ['store','publisher','media','migration'])require('./apps/backend/dist/rssd/'+name+'.cjs')"

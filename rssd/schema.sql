@@ -1,4 +1,14 @@
 -- Additive RSSD v1 schema. Existing Postiz tables and publications are untouched.
+CREATE TABLE IF NOT EXISTS rssd_migrations (
+ "orgId" TEXT NOT NULL, "siteId" TEXT NOT NULL, "workspaceId" TEXT NOT NULL,
+ state TEXT NOT NULL, manifest JSONB NOT NULL, ancillary JSONB NOT NULL, report JSONB NOT NULL DEFAULT '{}',
+ "updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY ("orgId","siteId")
+);
+CREATE TABLE IF NOT EXISTS rssd_legacy_documents (
+ "orgId" TEXT NOT NULL,"siteId" TEXT NOT NULL,"documentId" TEXT NOT NULL,"workId" TEXT NOT NULL,
+ locale TEXT NOT NULL,"sourceHash" TEXT NOT NULL,source JSONB NOT NULL,"deletedAt" TIMESTAMPTZ(3),
+ PRIMARY KEY ("orgId","siteId","documentId")
+);
 CREATE TABLE IF NOT EXISTS rssd_media (
   "orgId" TEXT NOT NULL, id TEXT NOT NULL, "workspaceId" TEXT NOT NULL, name TEXT NOT NULL,
   manifest JSONB NOT NULL, "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,

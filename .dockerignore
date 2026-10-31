@@ -15,9 +15,16 @@ dist
 .devcontainer
 **/.git
 **/*.md
-**/LICENSE
 **/npm-debug.log
 **/*.vscode
 .git
 .github
 reports
+.local
+.env
+.env.*
+**/.env
+**/.env.*
+**/.next
+**/dist
+**/*.tsbuildinfo

@@ -9,6 +9,32 @@ datasource db {
 }
 
 // RSSD owns these additive tables. Keep the existing Postiz schema intact.
+model RssdMigration {
+  orgId String
+  siteId String
+  workspaceId String
+  state String
+  manifest Json
+  ancillary Json
+  report Json @default("{}")
+  updatedAt DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, siteId])
+  @@map("rssd_migrations")
+}
+
+model RssdLegacyDocument {
+  orgId String
+  siteId String
+  documentId String
+  workId String
+  locale String
+  sourceHash String
+  source Json
+  deletedAt DateTime? @db.Timestamptz(3)
+  @@id([orgId, siteId, documentId])
+  @@map("rssd_legacy_documents")
+}
+
 model RssdMedia {
   orgId       String
   id          String
