@@ -25,7 +25,9 @@ async function fixture({loseStart=false,unknownStart=false,invalid=false,missing
  await store.saveWorkspace(owner,{id:'research',name:'Research',sections:[{id:'methods',name:'Methods',policy:{targets:[{destinationId:'social',locale:'en'}]}}]},1);
  const packet={requestId:randomUUID(),workId:randomUUID(),workspaceId:'research',sectionId:'methods',editions:[{locale:'en',title:'Synthetic article',bodyMarkdown:'An entire article stays in the content library.',metadata:missingContent?{}:{platformContent:{social:{text:'A synthetic platform post.',mediaIds:[],settings:{}}}}}]};
  await store.submit(owner,packet);
- const ready=()=>db.$executeRawUnsafe('UPDATE rssd_publications SET "nextAttemptAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1',owner.orgId);
+ // TIMESTAMPTZ(3) rounds microseconds; make a due fixture unambiguously past.
+ const ready=()=>db.$executeRawUnsafe('UPDATE rssd_publications SET "nextAttemptAt"=CURRENT_TIMESTAMP-interval \'1 second\' WHERE "orgId"=$1',owner.orgId);
+ await ready();
  const posts=()=>db.$queryRawUnsafe('SELECT * FROM "Post" WHERE "organizationId"=$1',owner.orgId);
  return {owner,integration,bridge,publisher,packet,ready,posts,get starts(){return starts;},tick:()=>publisher.tick({orgId:owner.orgId})};
 }
