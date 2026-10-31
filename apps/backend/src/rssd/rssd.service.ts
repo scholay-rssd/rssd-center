@@ -1,20 +1,47 @@
 import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { PrismaService } from '@gitroom/nestjs-libraries/database/prisma/prisma.service';
+import { PostsService } from '@gitroom/nestjs-libraries/database/prisma/posts/posts.service';
+import { TemporalService } from 'nestjs-temporal-core';
+import { TypedSearchAttributes } from '@temporalio/common';
+import { organizationId, postId } from '@gitroom/nestjs-libraries/temporal/temporal.search.attribute';
+import { UploadFactory } from '@gitroom/nestjs-libraries/upload/upload.factory';
 // The versioned domain runtime is packaged into dist/rssd by the backend build.
 const { RssdStore } = require('../../../../rssd/store.cjs');
 const { RssdPublisher } = require('../../../../rssd/publisher.cjs');
 const { RssdMedia } = require('../../../../rssd/media.cjs');
+const { RssdPostiz } = require('../../../../rssd/postiz.cjs');
 
 @Injectable()
 export class RssdService implements OnModuleInit, OnModuleDestroy {
   readonly store: any;
   readonly publisher: any;
   readonly media: any;
+  readonly postiz: any;
   private timer?: ReturnType<typeof setInterval>;
-  constructor(prisma: PrismaService) {
+  constructor(prisma: PrismaService, posts: PostsService, temporal: TemporalService) {
     this.store = new RssdStore(prisma);
     this.media = new RssdMedia(this.store, {directory: process.env.RSSD_MEDIA_DIRECTORY, origin: process.env.FRONTEND_URL});
-    this.publisher = new RssdPublisher(this.store, {secret: process.env.RSSD_ENCRYPTION_KEY || process.env.JWT_SECRET, media: this.media});
+    this.postiz = new RssdPostiz(this.store, {
+      validate: (org: string, values: any[]) => posts.validatePosts(org, values),
+      uploadMedia: async ({bytes, asset}: any) => UploadFactory.createStorage().uploadFile({buffer: bytes, mimetype: asset.manifest.mime, originalname: asset.name} as Express.Multer.File),
+      workflowStatus: async (id: string) => {
+        const client = temporal.client.getRawClient();
+        if (!client) throw new Error('Temporal is unavailable');
+        try { const info = await client.workflow.getHandle(id).describe(); return {runId: info.runId, status: info.status.name}; }
+        catch (error: any) { if (error.name === 'WorkflowNotFoundError') return null; throw error; }
+      },
+      startWorkflow: async (input: any) => {
+        const client = temporal.client.getRawClient();
+        if (!client) throw new Error('Temporal is unavailable');
+        const handle = await client.workflow.start('postWorkflowV112', {
+          workflowId: input.workflowId, taskQueue: 'main', workflowIdConflictPolicy: 'USE_EXISTING', workflowIdReusePolicy: 'REJECT_DUPLICATE',
+          args: [{taskQueue: input.taskQueue, postId: input.postId, organizationId: input.organizationId}],
+          typedSearchAttributes: new TypedSearchAttributes([{key: postId, value: input.postId}, {key: organizationId, value: input.organizationId}]),
+        });
+        return {runId: handle.firstExecutionRunId};
+      },
+    });
+    this.publisher = new RssdPublisher(this.store, {secret: process.env.RSSD_ENCRYPTION_KEY || process.env.JWT_SECRET, media: this.media, postiz: this.postiz});
   }
   onModuleInit() {
     if (process.env.RSSD_DISPATCH_ENABLED === '1') this.timer = setInterval(() => {

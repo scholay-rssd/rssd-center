@@ -42,5 +42,6 @@ export class RssdController {
   @Get('/publications') publications(@Req() req: any, @Query() query: any) { return this.rssd.store.publications(req.rssd, query); }
   @Post('/publications/:id/retry') retryPublication(@Req() req: any, @Param('id') id: string) { return this.rssd.publisher.retry(req.rssd, id); }
   @Get('/destinations') destinations(@Req() req: any) { return this.rssd.publisher.destinations(req.rssd); }
+  @Get('/channels') channels(@Req() req: any) { return this.rssd.postiz.channels(req.rssd); }
   @Post('/destinations') saveDestination(@Req() req: any, @Body() body: any) { return this.rssd.publisher.saveDestination(req.rssd, body); }
 }

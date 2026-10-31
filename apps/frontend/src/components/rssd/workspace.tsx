@@ -5,6 +5,7 @@ import { useFetch } from '@gitroom/helpers/utils/custom.fetch';
 import { useUser } from '@gitroom/frontend/components/layout/user.context';
 import './workspace.css';
 import {WorkspacePolicy,DestinationSettings} from './configuration';
+import {PlatformContent} from './platform-content';
 
 const Editor = dynamic(() => import('@uiw/react-md-editor'), { ssr: false });
 const names: Record<string,string> = {queued:'待领取',claimed:'进行中',blocked:'待处理',completed:'已交稿',cancelled:'已取消',idle:'空闲',running:'工作中',paused:'已暂停',revoked:'已撤销',accepted:'已接收',submitted:'已提交',verified:'已发布',failed:'失败',unknown:'待核实',draft_saved:'已存草稿'};
@@ -22,6 +23,7 @@ export function RssdWorkspace() {
   const [selected,setSelected]=useState<Row|null>(null),[language,setLanguage]=useState('zh-CN'),[title,setTitle]=useState(''),[body,setBody]=useState('');
   const [token,setToken]=useState(''),[pending,setPending]=useState<Row|null>(null);
   const [attachments,setAttachments]=useState<Row[]>([]);
+  const [platformContent,setPlatformContent]=useState<Row>({});
   const [offset,setOffset]=useState(0),[drafts,setDrafts]=useState<Record<string,Row>>({}),[draftsLoaded,setDraftsLoaded]=useState(false);
   const [demandSource,setDemandSource]=useState<Row|null>(null),[demandKind,setDemandKind]=useState('write');
   const [conflict,setConflict]=useState<Row|null>(null);
@@ -54,9 +56,9 @@ export function RssdWorkspace() {
   useEffect(()=>{setDraftsLoaded(false);try{const saved=localStorage.getItem(draftKey);setDrafts(saved?JSON.parse(saved):{});const queued=localStorage.getItem(storageKey)||sessionStorage.getItem(storageKey);setPending(queued?JSON.parse(queued):null);setDraftsLoaded(true);}catch{setError('无法读取此浏览器保存的草稿，请检查浏览器存储。');}},[storageKey,draftKey]);
   useEffect(()=>{
     if(!selected||!draftsLoaded)return;
-    const key=selected.id+':'+language,value={selected,language,title,body,attachments,savedAt:new Date().toISOString()};
+    const key=selected.id+':'+language,value={selected,language,title,body,attachments,platformContent,savedAt:new Date().toISOString()};
     setDrafts(old=>{const next={...old,[key]:value};try{localStorage.setItem(draftKey,JSON.stringify(next));}catch{setError('浏览器草稿存储已满，请下载原稿或保存到中心后继续。');}return next;});
-  },[selected,language,title,body,attachments,draftKey,draftsLoaded]);
+  },[selected,language,title,body,attachments,platformContent,draftKey,draftsLoaded]);
   const action=async(fn:()=>Promise<void>)=>{setBusy(true);setError('');setNotice('');try{await fn();}catch(err){setError((err as Error).message);}finally{setBusy(false);}};
   const openWork=async(id:string)=>{
     setConflict(null);
@@ -64,13 +66,13 @@ export function RssdWorkspace() {
     if(saved){restoreDraft(saved);setNotice('已恢复此浏览器的草稿；保存时仍会校验原基础版本。');return;}
     setSelected(work);setCreating(false);
     const edition=work.editions.find((e:Row)=>e.locale===language)||work.editions[0];
-    setLanguage(edition?.locale||'zh-CN');setTitle(edition?.payload.title||'');setBody(edition?.payload.bodyMarkdown||'');setAttachments(edition?.payload.media||[]);
+    setLanguage(edition?.locale||'zh-CN');setTitle(edition?.payload.title||'');setBody(edition?.payload.bodyMarkdown||'');setAttachments(edition?.payload.media||[]);setPlatformContent(edition?.payload.metadata?.platformContent||{});
   };
-  const restoreDraft=(saved:Row)=>{setSelected(saved.selected);setLanguage(saved.language);setTitle(saved.title);setBody(saved.body);setAttachments(saved.attachments||[]);setCreating(false);setTab('works');setSpace(saved.selected.workspaceId);};
+  const restoreDraft=(saved:Row)=>{setSelected(saved.selected);setLanguage(saved.language);setTitle(saved.title);setBody(saved.body);setAttachments(saved.attachments||[]);setPlatformContent(saved.platformContent||saved.selected.editions.find((e:Row)=>e.locale===saved.language)?.payload.metadata?.platformContent||{});setCreating(false);setTab('works');setSpace(saved.selected.workspaceId);};
   const discardSavedDraft=(workId:string,locale:string)=>{setDrafts(old=>{const next={...old};delete next[workId+':'+locale];localStorage.setItem(draftKey,JSON.stringify(next));return next;});};
   const chooseLanguage=(locale:string)=>{
     const saved=drafts[selected?.id+':'+locale];if(saved){restoreDraft(saved);return;}
-    const edition=selected?.editions.find((e:Row)=>e.locale===locale);setLanguage(locale);setTitle(edition?.payload.title||'');setBody(edition?.payload.bodyMarkdown||'');setAttachments(edition?.payload.media||[]);
+    const edition=selected?.editions.find((e:Row)=>e.locale===locale);setLanguage(locale);setTitle(edition?.payload.title||'');setBody(edition?.payload.bodyMarkdown||'');setAttachments(edition?.payload.media||[]);setPlatformContent(edition?.payload.metadata?.platformContent||{});
   };
   const rememberPending=(value:Row|null)=>{if(value)localStorage.setItem(storageKey,JSON.stringify(value));else localStorage.removeItem(storageKey);sessionStorage.removeItem(storageKey);setPending(value);};
   const accepted=async(result:Row)=>{rememberPending(null);discardSavedDraft(result.workId,language);setNotice(result.status==='draft_saved'?'草稿已保存':'作品已接收，发布结果可在“发布记录”查看');const work=await api('/works/'+encodeURIComponent(result.workId));setSelected(work);await refresh();};
@@ -78,7 +80,7 @@ export function RssdWorkspace() {
     if(!selected)return;
     const previous=selected.editions.find((e:Row)=>e.locale===language);
     const packet={requestId:crypto.randomUUID(),workId:selected.id,workspaceId:selected.workspaceId,sectionId:selected.sectionId,
-      baseRevisions:{[language]:previous?.revision||0},editions:[{...(previous?.payload||{}),locale:language,title,bodyMarkdown:body,media:attachments}]};
+      baseRevisions:{[language]:previous?.revision||0},editions:[{...(previous?.payload||{}),locale:language,title,bodyMarkdown:body,media:attachments,metadata:{...previous?.payload.metadata,platformContent}}]};
     const request={path:publish?'/submissions':'/drafts',packet};rememberPending(request);
     try{await accepted(await api(request.path,'POST',packet));}
     catch(err){if(err instanceof ApiError&&err.status<500)rememberPending(null);if(err instanceof ApiError&&err.code==='revision_conflict')setConflict(await api('/works/'+encodeURIComponent(selected.id)));throw err;}
@@ -104,7 +106,7 @@ export function RssdWorkspace() {
   };
   const newWork=(form:HTMLFormElement)=>{
     const values=new FormData(form);setSelected({id:crypto.randomUUID(),workspaceId:space,sectionId:values.get('section'),editions:[]});
-    setLanguage(values.get('language') as string);setTitle('');setBody('');setAttachments([]);setCreating(false);
+    setLanguage(values.get('language') as string);setTitle('');setBody('');setAttachments([]);setPlatformContent({});setCreating(false);
   };
   const deriveDemand=(kind:string)=>{if(!selected)return;const edition=selected.editions.find((e:Row)=>e.locale===language);if(!edition)return;setDemandSource({sectionId:selected.sectionId,title:edition.payload.title,source:{workId:selected.id,locale:language,revision:edition.revision}});setDemandKind(kind);setTab('demands');setSelected(null);setCreating(true);};
   const upload=async(file:File)=>{
@@ -143,6 +145,7 @@ export function RssdWorkspace() {
       <input className="rssd-title-input" aria-label="文章标题" placeholder="文章标题" value={title} onChange={e=>setTitle(e.target.value)} disabled={busy||Boolean(pending)}/>
       <label>插入配图<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy||Boolean(pending)} onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file)void action(()=>upload(file));}}/></label>
       <Editor value={body} onChange={value=>setBody(value||'')} height={560} previewOptions={{skipHtml:true}} textareaProps={{'aria-label':'文章正文',disabled:busy||Boolean(pending)}}/>
+      <PlatformContent api={api} workspaceId={selected.workspaceId} value={platformContent} onChange={setPlatformContent} attachments={attachments} disabled={busy||Boolean(pending)}/>
     </div>:!creating&&tab!=='destinations'&&<div className="rssd-list" aria-busy={loading}>
       {tab==='settings'?registry.map(w=><article className="rssd-row" key={w.id}><div><h2>{w.name}</h2><p>{w.sections.map((s:Row)=>s.name).join(' · ')}</p></div><span>{w.siteId||'尚未关联站点'}</span></article>):rows.length?rows.map(row=><article className="rssd-row" key={row.id}>
         <div className="rssd-row-main"><h2>{tab==='works'?<button className="rssd-work-link" onClick={()=>void action(()=>openWork(row.id))}>{row.editions[0]?.title||'未命名作品'}</button>:row.title||row.name||row.workId}</h2><p>{tab==='demands'?active?.sections.find((s:Row)=>s.id===row.sectionId)?.name||row.sectionId:tab==='works'?row.editions.map((e:Row)=>`${e.locale} · v${e.revision}`).join(' / '):tab==='workers'?row.details?.message||row.workspaceIds.join(' · '):`${row.locale} · v${row.revision} → ${row.destinationId}`}</p>{row.error&&<p className="rssd-error">{row.error}</p>}</div>

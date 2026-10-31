@@ -17,24 +17,26 @@ class CredentialCipher {
 }
 function visibleDestination(row){const {sealedToken,...config}=row.config;return {...row,config,hasCredential:Boolean(sealedToken)};}
 class RssdPublisher {
-  constructor(store,{secret,fetchImpl=fetch,media}={}){this.store=store;this.db=store.db;this.fetch=fetchImpl;this.secret=secret;this.media=media;this.running=false;}
+  constructor(store,{secret,fetchImpl=fetch,media,postiz}={}){this.store=store;this.db=store.db;this.fetch=fetchImpl;this.secret=secret;this.media=media;this.postiz=postiz;this.running=false;}
   cipher(){return new CredentialCipher(this.secret);}
   async destinations(ctx){admin(ctx);return (await query(this.db,'SELECT * FROM rssd_destinations WHERE "orgId"=$1 ORDER BY id',ctx.orgId)).map(visibleDestination);}
   async saveDestination(ctx,input){
     admin(ctx);const id=p.id(input.id),name=p.text(input.name,'name',200),kind=input.kind;
-    if(!['site','discourse'].includes(kind))p.fail('This connector is not implemented yet',400,'unsupported_connector');
+    if(!['site','discourse','postiz'].includes(kind))p.fail('This connector is not implemented yet',400,'unsupported_connector');
     const workspaceIds=[...new Set(p.array(input.workspaceIds,'workspaceIds').map(x=>p.id(x)))];if(!workspaceIds.length)p.fail('Choose a workspace');
     for(const w of workspaceIds)await this.store.workspace(this.db,ctx,w);
-    const config={origin:origin(input.config?.origin),...(kind==='site'?{siteId:p.id(input.config?.siteId)}:{username:p.text(input.config?.username,'forum username',100),categoryId:p.integer(input.config?.categoryId,'forum category',1)})};
+    const config=kind==='postiz'?{integrationId:p.id(input.config?.integrationId)}:{origin:origin(input.config?.origin),...(kind==='site'?{siteId:p.id(input.config?.siteId)}:{username:p.text(input.config?.username,'forum username',100),categoryId:p.integer(input.config?.categoryId,'forum category',1)})};
+    if(kind==='postiz'){if(!this.postiz)p.fail('Postiz connector unavailable');await this.postiz.channel(ctx.orgId,config.integrationId);}
     if(config.username&&/[\r\n]/.test(config.username))p.fail('Invalid forum username');
     if(typeof input.enabled!=='boolean')p.fail('Explicit enabled state required');
     return this.store.transaction(async db=>{
       await execute(db,'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',ctx.orgId+':destination:'+id);
       const old=await one(db,'SELECT * FROM rssd_destinations WHERE "orgId"=$1 AND id=$2',ctx.orgId,id);
-      if(old&&(old.kind!==kind||old.config.origin!==config.origin||old.config.siteId!==config.siteId||old.config.username!==config.username||old.config.categoryId!==config.categoryId))p.fail('Destination identity is immutable; create a new destination',409);
+      if(old&&(old.kind!==kind||old.config.origin!==config.origin||old.config.siteId!==config.siteId||old.config.username!==config.username||old.config.categoryId!==config.categoryId||old.config.integrationId!==config.integrationId))p.fail('Destination identity is immutable; create a new destination',409);
+      if(input.token&&kind==='postiz')p.fail('Postiz channels use existing authorization');
       if(input.token){p.text(input.token,'credential',4096);if(input.token.length<32||/[\r\n]/.test(input.token))p.fail('Credential too short or invalid');config.sealedToken=this.cipher().seal(input.token,ctx.orgId+':'+id);}
       else config.sealedToken=old?.config.sealedToken;
-      if(!config.sealedToken)p.fail('Destination credential required');
+      if(kind!=='postiz'&&!config.sealedToken)p.fail('Destination credential required');
       const row=await one(db,`INSERT INTO rssd_destinations ("orgId",id,name,kind,"workspaceIds",config,enabled) VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7)
         ON CONFLICT ("orgId",id) DO UPDATE SET name=EXCLUDED.name,"workspaceIds"=EXCLUDED."workspaceIds",config=EXCLUDED.config,enabled=EXCLUDED.enabled RETURNING *`,ctx.orgId,id,name,kind,json(workspaceIds),json(config),input.enabled);
       return visibleDestination(row);
@@ -79,6 +81,7 @@ class RssdPublisher {
     if(newer)return this.finish(row,{state:'superseded',error:'A newer revision is already published'});
     const old=await one(this.db,`SELECT receipt FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND state IN ('published','legacy_published') ORDER BY revision DESC LIMIT 1`,row.orgId,row.workId,row.locale,row.destinationId);
     if(destination.kind==='discourse')return dispatchDiscourse(this,row,destination,old);
+    if(destination.kind==='postiz'&&this.postiz)return this.postiz.dispatch(this,row,destination,old);
     if(destination.kind!=='site')return this.finish(row,{state:'blocked',error:'Connector is not implemented'});
     const config=destination.config,token=this.cipher().open(config.sealedToken,row.orgId+':'+destination.id);
     const path=old?.receipt.url?new URL(old.receipt.url).pathname:row.payload.edition.metadata?.publication?.path||((row.locale==='en'?'/en':'')+'/news/'+p.hash(row.workId).slice(0,32)+'/');

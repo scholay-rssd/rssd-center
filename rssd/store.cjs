@@ -128,7 +128,14 @@ class RssdStore {
         ORDER BY priority DESC,"createdAt",id FOR UPDATE SKIP LOCKED LIMIT 1`,ctx.orgId,encoded(workspaceIds),demandId,encoded(sectionIds));
       if(!demand)return null;
       const {row,section}=await this.workspace(db,ctx,demand.workspaceId,demand.sectionId);
-      const claimToken=randomUUID(),payload={...demand.payload,policy:section.policy,workspaceRevision:row.revision};
+      const destinations=[];
+      for(const target of section.policy.targets){
+        const destination=await one(db,'SELECT id,name,kind,config FROM rssd_destinations WHERE "orgId"=$1 AND id=$2',ctx.orgId,target.destinationId);
+        if(!destination)continue;
+        const channel=destination.kind==='postiz'?await one(db,'SELECT "providerIdentifier" FROM "Integration" WHERE "organizationId"=$1 AND id=$2',ctx.orgId,destination.config.integrationId):null;
+        destinations.push({...target,name:destination.name,kind:destination.kind,...(channel?{platform:channel.providerIdentifier}:{})});
+      }
+      const claimToken=randomUUID(),payload={...demand.payload,policy:section.policy,workspaceRevision:row.revision,destinations,outputContractVersion:1};
       const result=await one(db,`UPDATE rssd_demands SET state='claimed',"workerId"=$3,"claimToken"=$4,generation=generation+1,
         payload=$5::jsonb,"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2 RETURNING *`,ctx.orgId,demand.id,ctx.workerId,claimToken,encoded(payload));
       await audit(db,ctx,'demand.claim',{id:demand.id,generation:result.generation});return result;
