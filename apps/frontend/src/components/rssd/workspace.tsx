@@ -6,11 +6,12 @@ import { useUser } from '@gitroom/frontend/components/layout/user.context';
 import './workspace.css';
 import {WorkspacePolicy,DestinationSettings} from './configuration';
 import {PlatformContent} from './platform-content';
+import {CenterHealth} from './health';
 
 const Editor = dynamic(() => import('@uiw/react-md-editor'), { ssr: false });
 const names: Record<string,string> = {queued:'待领取',claimed:'进行中',blocked:'待处理',completed:'已交稿',cancelled:'已取消',idle:'空闲',running:'工作中',paused:'已暂停',revoked:'已撤销',accepted:'已接收',submitted:'已提交',verified:'已发布',failed:'失败',unknown:'待核实',draft_saved:'已存草稿'};
 type Row = Record<string, any>;
-type Tab = 'demands'|'works'|'publications'|'workers'|'settings'|'destinations';
+type Tab = 'demands'|'works'|'publications'|'workers'|'settings'|'destinations'|'health';
 class ApiError extends Error { constructor(message:string,public status:number,public code?:string){super(message);} }
 const label = (state:string) => ({published:'已发布',legacy_published:'原系统已发布',dispatching:'正在分发',superseded:'已被新版替代'}[state] || names[state] || state);
 const when = (value?:string) => value ? new Date(value).toLocaleString('zh-CN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '尚未连接';
@@ -50,7 +51,7 @@ export function RssdWorkspace() {
     const generation=++requestGeneration.current;setLoading(true);
     try{
       const query=new URLSearchParams({limit:'50',offset:String(offset)});if(space)query.set('workspaceId',space);if(search)query.set('search',search);
-      const result=['settings','destinations'].includes(tab)?[]:await api('/'+tab+(tab==='workers'?'':'?'+query));
+      const result=['settings','destinations','health'].includes(tab)?[]:await api('/'+tab+(tab==='workers'?'':'?'+query));
       if(generation===requestGeneration.current)setListing({key:listKey,rows:result});
     }catch(err){if(generation===requestGeneration.current)setError((err as Error).message);}
     finally{if(generation===requestGeneration.current)setLoading(false);}
@@ -123,15 +124,16 @@ export function RssdWorkspace() {
   return <section className="rssd-workspace">
     <header className="rssd-header"><div><div className="rssd-overline">RSSD / 内容生产</div><h1>工作中心</h1></div>
       <div className="rssd-header-actions"><label className="rssd-sr-only" htmlFor="rssd-space">工作空间</label><select id="rssd-space" value={space} onChange={e=>{setSpace(e.target.value);setSelected(null);setOffset(0);}}><option value="">全部工作空间</option>{registry.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select><button onClick={()=>void refresh()} disabled={loading}>刷新</button></div></header>
-    <nav className="rssd-tabs" aria-label="中心功能">{([['demands','需求池'],['works','作品库'],['publications','发布记录'],['workers','执行设备'],['destinations','发布渠道'],['settings','工作空间']] as [Tab,string][]).map(([id,name])=><button key={id} aria-current={tab===id?'page':undefined} onClick={()=>{setTab(id);setOffset(0);setCreating(false);setSelected(null);setError('');setSearch('');}}>{name}</button>)}</nav>
+    <nav className="rssd-tabs" aria-label="中心功能">{([['demands','需求池'],['works','作品库'],['publications','发布记录'],['workers','执行设备'],['destinations','发布渠道'],['settings','工作空间'],['health','运行状况']] as [Tab,string][]).map(([id,name])=><button key={id} aria-current={tab===id?'page':undefined} onClick={()=>{setTab(id);setOffset(0);setCreating(false);setSelected(null);setError('');setSearch('');}}>{name}</button>)}</nav>
     {!writable&&<div className="rssd-message">此站点已导入，正在核对迁移。完成旧系统交接后才能在中心创建需求和提交作品。</div>}
     {error&&<div role="alert" className="rssd-message rssd-error">{error}</div>}
     {notice&&<div role="status" className="rssd-message">{notice}</div>}
     {pending&&<div role="status" className="rssd-message">上次提交的结果尚未确认，原稿与请求已保留。<button disabled={busy} onClick={()=>void action(recover)}>查询并恢复原提交</button></div>}
-    {tab!=='destinations'&&<div className="rssd-toolbar"><label className="rssd-search"><span>查找</span><input value={search} onChange={e=>{setSearch(e.target.value);setOffset(0);}} placeholder={tab==='works'?'作品标题或正文':'需求标题或写作要求'} disabled={!['demands','works'].includes(tab)}/></label>
+    {!['destinations','health'].includes(tab)&&<div className="rssd-toolbar"><label className="rssd-search"><span>查找</span><input value={search} onChange={e=>{setSearch(e.target.value);setOffset(0);}} placeholder={tab==='works'?'作品标题或正文':'需求标题或写作要求'} disabled={!['demands','works'].includes(tab)}/></label>
       {tab!=='publications'&&<button className="rssd-primary" disabled={busy||Boolean(pending)||((!space||!writable)&&['demands','works'].includes(tab))} onClick={()=>{setCreating(true);setSelected(null);setDemandSource(null);setDemandKind('write');setToken('');}}>{tab==='demands'?'新建需求':tab==='works'?'新建作品':tab==='workers'?'连接设备':'新建工作空间'}</button>}</div>}
     {tab==='works'&&!selected&&Object.entries(drafts).some(([,d])=>!space||d.selected.workspaceId===space)&&<details className="rssd-message"><summary>此浏览器保留的草稿</summary>{Object.entries(drafts).filter(([,d])=>!space||d.selected.workspaceId===space).map(([id,d])=><p key={id}><button onClick={()=>restoreDraft(d)}>{d.title||'未命名作品'} · {d.language}</button><span> {when(d.savedAt)}</span></p>)}</details>}
     {tab==='destinations'&&<DestinationSettings workspaces={registry} api={api}/>}
+    {tab==='health'&&<CenterHealth api={api}/>}
     {tab==='settings'&&active&&!creating&&<WorkspacePolicy key={active.id} workspace={active} api={api} onSaved={loadRegistry}/>}
     {creating&&<form className="rssd-form" onSubmit={event=>{event.preventDefault();const form=event.currentTarget;if(tab==='works')newWork(form);else void action(()=>create(form));}}>
       <h2>{tab==='demands'?'把需要完成的内容放进需求池':tab==='works'?'创建一件作品':tab==='workers'?'为执行设备生成连接凭据':'建立工作空间'}</h2>
@@ -150,7 +152,7 @@ export function RssdWorkspace() {
       <label>插入配图<input type="file" accept="image/png,image/jpeg,image/webp" disabled={busy||Boolean(pending)} onChange={event=>{const file=event.target.files?.[0];event.target.value='';if(file)void action(()=>upload(file));}}/></label>
       <Editor value={body} onChange={value=>setBody(value||'')} height={560} previewOptions={{skipHtml:true}} textareaProps={{'aria-label':'文章正文',disabled:busy||Boolean(pending)}}/>
       <PlatformContent api={api} workspaceId={selected.workspaceId} value={platformContent} onChange={setPlatformContent} attachments={attachments} disabled={busy||Boolean(pending)}/>
-    </div>:!creating&&tab!=='destinations'&&<div className="rssd-list" aria-busy={listLoading}>
+    </div>:!creating&&!['destinations','health'].includes(tab)&&<div className="rssd-list" aria-busy={listLoading}>
       {tab==='settings'?registry.map(w=><article className="rssd-row" key={w.id}><div><h2>{w.name}</h2><p>{w.sections.map((s:Row)=>s.name).join(' · ')}</p></div><span>{w.siteId||'尚未关联站点'}</span></article>):rows.length?rows.map(row=><article className="rssd-row" key={row.id}>
         <div className="rssd-row-main"><h2>{tab==='works'?<button className="rssd-work-link" onClick={()=>void action(()=>openWork(row.id))}>{row.editions[0]?.title||'未命名作品'}</button>:row.title||row.name||row.workId}</h2><p>{tab==='demands'?active?.sections.find((s:Row)=>s.id===row.sectionId)?.name||row.sectionId:tab==='works'?row.editions.map((e:Row)=>`${e.locale} · v${e.revision}`).join(' / '):tab==='workers'?row.details?.message||row.workspaceIds.join(' · '):`${row.locale} · v${row.revision} → ${row.destinationId}`}</p>{row.error&&<p className="rssd-error">{row.error}</p>}</div>
         {row.state&&<span className={'rssd-state rssd-state-'+row.state}>{label(row.state)}</span>}<time>{when(row.heartbeatAt||row.updatedAt||row.createdAt)}</time>

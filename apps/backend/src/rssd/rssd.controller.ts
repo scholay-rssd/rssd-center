@@ -2,6 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Query, Req, Res, UseFilters,
 import { Throttle } from '@nestjs/throttler';
 import { RssdService } from './rssd.service';
 const { ProtocolError } = require('../../../../rssd/protocol.cjs');
+const { health } = require('../../../../rssd/health.cjs');
 
 @Catch(ProtocolError)
 class RssdProtocolFilter implements ExceptionFilter {
@@ -16,6 +17,7 @@ class RssdProtocolFilter implements ExceptionFilter {
 export class RssdController {
   constructor(private rssd: RssdService) {}
   @Get('/identity') identity(@Req() req: any) { return {protocolVersion: 1, ...req.rssd}; }
+  @Get('/health') health(@Req() req: any) { return health(this.rssd.store, req.rssd); }
   @Post('/media') uploadMedia(@Req() req: any, @Body() body: any) { return this.rssd.media.upload(req.rssd, body); }
   @Get('/media/:id') media(@Req() req: any, @Param('id') id: string) { return this.rssd.media.status(req.rssd, id); }
   @Get('/media/:id/raw') async rawMedia(@Req() req: any, @Param('id') id: string, @Res() res: any) {

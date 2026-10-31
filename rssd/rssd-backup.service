@@ -1,0 +1,16 @@
+[Unit]
+Description=RSSD encrypted recovery backup
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/rssd-backup/backup.py --config /etc/rssd-backup/config.json
+UMask=0077
+Nice=15
+IOSchedulingClass=idle
+CPUQuota=50%
+MemoryMax=512M
+PrivateTmp=true
+NoNewPrivileges=true
+TimeoutStartSec=4h
