@@ -1,0 +1,32 @@
+'use strict';
+const {createHash,randomUUID}=require('node:crypto');
+const p=require('./protocol.cjs'),{admin}=require('./store.cjs');
+const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args),x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
+const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
+function owner(ctx){admin(ctx);if(!ctx.userId||ctx.workerId)p.fail('Owner session required',403,'forbidden');}
+function missing(){p.fail('Private record unavailable',404,'not_found');}
+function cleanPath(path){if(typeof path!=='string'||!path||path.length>2000||path.startsWith('/')||path.includes('\\')||path.includes('\0')||path.split('/').some(v=>!v||v==='.'||v==='..'))p.fail('Invalid private evidence path');return path;}
+class RssdPrivateReview {
+ constructor(store){this.store=store;}
+ // Internal-only handoff: never expose this method as an HTTP or MCP route.
+ // The caller must independently verify the archive and manifest first.
+ async stage(ctx,workspaceId,input){owner(ctx);p.id(workspaceId);const site=p.id(input.siteId),legacyKey=p.id(input.legacyKey),article=p.id(input.articleId),bundle=p.text(input.bundleDigest,'bundle digest',64),metadata=p.json(input.metadata,'private metadata',2000000);
+  if(!/^[a-f0-9]{64}$/.test(bundle)||metadata.siteId!==site||metadata.spaceId!==workspaceId||metadata.requestKey!==legacyKey||metadata.articleId!==article)p.fail('Handoff identity mismatch',409,'identity_conflict');
+  if(!Array.isArray(input.files)||input.files.length>500)p.fail('Invalid private evidence files');const paths=new Set();let total=0;
+  const files=input.files.map(f=>{const path=cleanPath(f.path);if(paths.has(path)||!Buffer.isBuffer(f.data))p.fail('Invalid private evidence file');paths.add(path);const digest=sha(f.data);total+=f.data.length;if(f.data.length>20*1024*1024||total>200*1024*1024||f.bytes!==f.data.length||f.sha256!==digest)p.fail('Private evidence checksum or size mismatch',409,'evidence_conflict');return {path,sha256:digest,bytes:f.data.length,data:f.data};});
+  const one=name=>{const matches=files.filter(f=>f.path.split('/').at(-1)===name);if(matches.length!==1)p.fail('Original identity file is missing',409,'identity_conflict');try{return JSON.parse(matches[0].data.toString('utf8'));}catch{p.fail('Invalid original identity file',409,'identity_conflict');}};
+  const prepared=one('prepared.json'),receipt=one('receipt.json');if(prepared.requestKey!==legacyKey||receipt.requestKey!==legacyKey||prepared.data?.id!==article||!/^[a-f0-9]{64}$/.test(prepared.sourceSha256||'')||prepared.sourceSha256!==receipt.sourceSha256)p.fail('Original request identity mismatch',409,'identity_conflict');
+  const fingerprint=p.hash({org:ctx.orgId,workspace:workspaceId,site,legacyKey,articleId:article,bundleDigest:bundle,metadata,files:files.map(({path,sha256,bytes})=>({path,sha256,bytes})).sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0)});
+  return this.store.transaction(async db=>{const {row:workspace}=await this.store.workspace(db,ctx,workspaceId);if(workspace.payload.siteId!==site)p.fail('Handoff site does not match workspace',409,'identity_conflict');const reviewId=randomUUID();
+   const inserted=await q(db,`INSERT INTO rssd_private_review_items("orgId","workspaceId","siteId","legacyKey","articleId",id,fingerprint,"bundleDigest",metadata) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb) ON CONFLICT("orgId","workspaceId","legacyKey") DO NOTHING RETURNING id`,ctx.orgId,workspaceId,site,legacyKey,article,reviewId,fingerprint,bundle,JSON.stringify(metadata));
+   if(!inserted.length){const [old]=await q(db,'SELECT "siteId","articleId",fingerprint,id FROM rssd_private_review_items WHERE "orgId"=$1 AND "workspaceId"=$2 AND "legacyKey"=$3 FOR UPDATE',ctx.orgId,workspaceId,legacyKey);if(!old||old.siteId!==site||old.articleId!==article||old.fingerprint!==fingerprint)p.fail('Original evidence conflicts with staged evidence',409,'identity_conflict');return {id:old.id,status:'duplicate'};}
+   for(const f of files)await x(db,'INSERT INTO rssd_private_review_files("orgId","workspaceId","legacyKey",path,sha256,bytes,data) VALUES($1,$2,$3,$4,$5,$6,$7)',ctx.orgId,workspaceId,legacyKey,f.path,f.sha256,f.bytes,f.data);
+   return {id:reviewId,status:'staged'};
+  });
+ }
+ async access(db,ctx,workspaceId,action,id=null){await x(db,'INSERT INTO rssd_private_review_access("orgId","workspaceId",actor,action,"reviewId") VALUES($1,$2,$3,$4,$5)',ctx.orgId,workspaceId,ctx.userId,action,id);}
+ async list(ctx,workspaceId){owner(ctx);p.id(workspaceId);return this.store.transaction(async db=>{await this.store.workspace(db,ctx,workspaceId);const rows=await q(db,'SELECT id,"siteId",state FROM rssd_private_review_items WHERE "orgId"=$1 AND "workspaceId"=$2 ORDER BY "createdAt",id LIMIT 100',ctx.orgId,workspaceId);await this.access(db,ctx,workspaceId,'list');return {items:rows};});}
+ async detail(ctx,workspaceId,siteId,id){owner(ctx);p.id(workspaceId);p.id(siteId);p.id(id);return this.store.transaction(async db=>{await this.store.workspace(db,ctx,workspaceId);const [row]=await q(db,'SELECT id,"siteId","articleId","legacyKey","bundleDigest",metadata,state FROM rssd_private_review_items WHERE "orgId"=$1 AND "workspaceId"=$2 AND "siteId"=$3 AND id=$4',ctx.orgId,workspaceId,siteId,id);if(!row)missing();const files=await q(db,'SELECT path,sha256,bytes FROM rssd_private_review_files WHERE "orgId"=$1 AND "workspaceId"=$2 AND "legacyKey"=$3 ORDER BY path',ctx.orgId,workspaceId,row.legacyKey);await this.access(db,ctx,workspaceId,'read',id);return {...row,files:files.map((f,index)=>({...f,index}))};});}
+ async file(ctx,workspaceId,siteId,id,index){owner(ctx);p.id(workspaceId);p.id(siteId);p.id(id);if(!Number.isSafeInteger(index)||index<0||index>=500)missing();return this.store.transaction(async db=>{await this.store.workspace(db,ctx,workspaceId);const [row]=await q(db,'SELECT "legacyKey" FROM rssd_private_review_items WHERE "orgId"=$1 AND "workspaceId"=$2 AND "siteId"=$3 AND id=$4',ctx.orgId,workspaceId,siteId,id);if(!row)missing();const [f]=await q(db,'SELECT data,sha256,bytes FROM rssd_private_review_files WHERE "orgId"=$1 AND "workspaceId"=$2 AND "legacyKey"=$3 ORDER BY path OFFSET $4 LIMIT 1',ctx.orgId,workspaceId,row.legacyKey,index);if(!f)missing();const bytes=Buffer.from(f.data);if(bytes.length!==f.bytes||sha(bytes)!==f.sha256)p.fail('Private evidence failed integrity verification',409,'evidence_conflict');await this.access(db,ctx,workspaceId,'download',id);return bytes;});}
+}
+module.exports={RssdPrivateReview};

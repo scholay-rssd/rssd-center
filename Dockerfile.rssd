@@ -25,7 +25,7 @@ RUN node -e "for(const n of ['body-parsers','store','publisher','media','migrati
 RUN rm -rf apps/frontend/.next/cache apps/frontend/.next/build
 
 FROM node:22.20.0-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends nginx ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends nginx ca-certificates python3 \
     && rm -rf /var/lib/apt/lists/* \
     && addgroup --system www && adduser --system --ingroup www --home /www --shell /usr/sbin/nologin www \
     && mkdir -p /www /config/rssd /uploads && chown -R www:www /www /var/lib/nginx
