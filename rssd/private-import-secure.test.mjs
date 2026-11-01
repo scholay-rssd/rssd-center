@@ -222,6 +222,28 @@ test('archive verifier is asynchronous, bounded and times out safely',{timeout:1
  let settled=false;const work=runArchiveVerifier(Buffer.from('x'),'fixture','site','space',PROFILE,{scriptPath:slow,timeoutMs:2000}).then(x=>{settled=true;return x;});await new Promise(r=>setTimeout(r,30));assert.equal(settled,false);assert.equal((await work).digest,'fixture');
  await assert.rejects(runArchiveVerifier(Buffer.from('x'),'fixture','site','space',PROFILE,{scriptPath:slow,timeoutMs:30}));await assert.rejects(runArchiveVerifier(Buffer.from('x'),'fixture','site','space',PROFILE,{scriptPath:large,maxOutput:100}),{code:'verifier_output_too_large'});
 });
+test('issuer outages degrade only private import for issue and revoke; business denials keep it ready',{timeout:120000},async t=>{
+ require('reflect-metadata');const bcryptPath=require.resolve('bcrypt');require.cache[bcryptPath]={id:bcryptPath,filename:bcryptPath,loaded:true,exports:{hashSync:()=>{throw Error('bcrypt unused');},compareSync:()=>{throw Error('bcrypt unused');}}};
+ const {RssdService}=require(join(work,'apps/backend/dist/apps/backend/src/rssd/rssd.service.js')),{RssdController}=require(join(work,'apps/backend/dist/apps/backend/src/rssd/rssd.controller.js')),{Test}=require('@nestjs/testing'),{ThrottlerModule}=require('@nestjs/throttler');
+ const f=await fixture(t),service=Object.create(RssdService.prototype);Object.assign(service,{importEnabled:true,importGeneration:0,importProbe:runPrivateImportProbe,importStartupTimeoutMs:8000,privateImport:null,importStatus:'initializing',labels:{close(){}},community:{async close(){}}});
+ const names=['RSSD_PRIVATE_IMPORT_DATABASE_URL','RSSD_PRIVATE_IMPORT_SOURCE_DATABASE_URL','RSSD_PRIVATE_IMPORT_ISSUER_DATABASE_URL','RSSD_PRIVATE_IMPORT_SOCKET','RSSD_GOAL_MAINTENANCE_ENABLED','RSSD_DISPATCH_ENABLED'],saved=Object.fromEntries(names.map(k=>[k,process.env[k]]));
+ t.after(async()=>{await service.onModuleDestroy();for(const k of names)if(saved[k]===undefined)delete process.env[k];else process.env[k]=saved[k];});
+ Object.assign(process.env,{RSSD_PRIVATE_IMPORT_DATABASE_URL:workerUrl,RSSD_PRIVATE_IMPORT_SOURCE_DATABASE_URL:sourceUrl,RSSD_PRIVATE_IMPORT_ISSUER_DATABASE_URL:issuerUrl,RSSD_GOAL_MAINTENANCE_ENABLED:'0',RSSD_DISPATCH_ENABLED:'0'});
+ const waitState=async expected=>{for(let n=0;n<500;n++){if(service.importStatus===expected)return;await new Promise(r=>setTimeout(r,20));}throw Error('state timeout');};let sequence=0;
+ const start=async()=>{process.env.RSSD_PRIVATE_IMPORT_SOCKET=join(f.paths.root,'..','issuer-socket-'+(++sequence));service.importStatus='initializing';service.onModuleInit();await waitState('ready');};
+ const mod=await Test.createTestingModule({imports:[ThrottlerModule.forRoot([{ttl:60000,limit:100}])],controllers:[RssdController],providers:[{provide:RssdService,useValue:service}]}).compile(),app=mod.createNestApplication();app.useLogger(false);app.use((req,res,next)=>{req.rssd=f.ctx;next();});await app.listen(0,'127.0.0.1');t.after(()=>app.close());
+ const origin=await app.getUrl(),url=origin+'/rssd/v1/private-import/grants',body={workspace:'space',site:'site',bundleDigest:f.paths.digest,sourceProfile:PROFILE},post=(path,data)=>fetch(origin+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(data)}),status=()=>fetch(origin+'/rssd/v1/private-import/status').then(r=>r.json());
+ await start();assert.equal((await post('/rssd/v1/private-import/grants',{...body,bundleDigest:'bad'})).status,403);assert.deepEqual(await status(),{state:'ready'});
+ await admin.query('UPDATE "UserOrganization" SET disabled=true WHERE "userId"=$1',[f.actor]);try{assert.equal((await post('/rssd/v1/private-import/grants',body)).status,403);assert.deepEqual(await status(),{state:'ready'});}finally{await admin.query('UPDATE "UserOrganization" SET disabled=false WHERE "userId"=$1',[f.actor]);}
+ assert.equal((await post('/rssd/v1/private-import/grants/'+randomUUID()+'/revoke',{})).status,404);assert.deepEqual(await status(),{state:'ready'});
+ const quiet=console.error;console.error=()=>{};t.after(()=>{console.error=quiet;});
+ for(const [privilege,path,data] of [['INSERT','/rssd/v1/private-import/grants',body],['SELECT','/rssd/v1/private-import/grants/'+f.grant.grantId+'/revoke',{}]]){
+  if(service.importStatus!=='ready')await start();await admin.query(`REVOKE ${privilege} ON public.rssd_import_grants FROM rssd_restricted_grant_issuer`);
+  try{assert.equal((await post(path,data)).status,500);await waitState('unavailable');assert.deepEqual(await status(),{state:'unavailable'});assert.equal((await post(path,data)).status,404);assert.equal((await fetch(origin+'/rssd/v1/identity')).status,200);}
+  finally{await admin.query(`GRANT ${privilege} ON public.rssd_import_grants TO rssd_restricted_grant_issuer`);}
+ }
+ await start();service.importIssuerPrisma.$transaction=async()=>{throw Object.assign(Error('synthetic disconnect'),{code:'P1001'});};assert.equal((await post('/rssd/v1/private-import/grants',body)).status,500);await waitState('unavailable');assert.deepEqual(await status(),{state:'unavailable'});assert.equal((await fetch(origin+'/rssd/v1/identity')).status,200);
+});
 test('compiled Nest grant routes require a Postiz owner session and never expose an upload endpoint',{timeout:120000},async t=>{
  require('reflect-metadata');const cookieParser=require('cookie-parser'),{Test}=require('@nestjs/testing'),{ThrottlerModule}=require('@nestjs/throttler');
  const bcryptPath=require.resolve('bcrypt');require.cache[bcryptPath]={id:bcryptPath,filename:bcryptPath,loaded:true,exports:{hashSync:()=>{throw Error('bcrypt unused');},compareSync:()=>{throw Error('bcrypt unused');}}};

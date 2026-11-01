@@ -2,12 +2,13 @@
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {validateSourceProfile} from './private-import-profile.mjs';
+import {isImportInfrastructureError} from './private-import-socket.mjs';
 const require=createRequire(import.meta.url),p=require('./protocol.cjs');
 const sha=value=>createHash('sha256').update(value).digest('hex');
 const fail=(message,status=403,code='forbidden')=>p.fail(message,status,code);
 export class PrivateImportOwner {
- constructor(prisma){this.prisma=prisma;}
- async transaction(fn){return this.prisma.$transaction(async tx=>fn({query:async(sql,args=[])=>{const returns=/^\s*SELECT\b/i.test(sql)||/\bRETURNING\b/i.test(sql);if(returns){const rows=await tx.$queryRawUnsafe(sql,...args);return {rows,rowCount:rows.length};}return {rows:[],rowCount:await tx.$executeRawUnsafe(sql,...args)};}}),{timeout:60000});}
+ constructor(prisma,{onFailure=()=>{}}={}){this.prisma=prisma;this.onFailure=onFailure;}
+ async transaction(fn){try{return await this.prisma.$transaction(async tx=>fn({query:async(sql,args=[])=>{const returns=/^\s*SELECT\b/i.test(sql)||/\bRETURNING\b/i.test(sql);if(returns){const rows=await tx.$queryRawUnsafe(sql,...args);return {rows,rowCount:rows.length};}return {rows:[],rowCount:await tx.$executeRawUnsafe(sql,...args)};}}),{timeout:60000});}catch(error){if(isImportInfrastructureError(error))this.onFailure();throw error;}}
  async authorize(db,g){const [row]=(await db.query('SELECT public.rssd_restricted_import_authorize($1,$2,$3,$4) AS ok',[g.org,g.actor,g.workspace,g.site])).rows;if(!row?.ok)fail('Owner, workspace or site authorization is no longer valid');}
  async issue(ctx,{workspace,site,bundleDigest,sourceProfile,ttlSeconds=300}){
   if(!ctx?.admin||!ctx.userId||ctx.workerId||!ctx.orgId||!(ctx.workspaceIds===null||Array.isArray(ctx.workspaceIds)&&ctx.workspaceIds.includes(workspace))||!Number.isSafeInteger(ttlSeconds)||ttlSeconds<1||ttlSeconds>300||!/^[a-f0-9]{64}$/.test(bundleDigest||''))fail('Owner session and bounded grant required');p.id(workspace);p.id(site);

@@ -115,7 +115,7 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
       const socket = await boundedSocket(()=>createPrivateImportSocket({socketPath,service:new SecurePrivateImport(this.importSourcePrisma,this.importPrisma),onFailure:()=>{if(generation===this.importGeneration)void this.disablePrivateImport();}}),{signal,timeoutMs:this.importStartupTimeoutMs});
       if (signal.aborted || generation !== this.importGeneration) { await socket.close(); return; }
       this.importSocket = socket;
-      this.privateImport = new PrivateImportOwner(this.importIssuerPrisma);
+      this.privateImport = new PrivateImportOwner(this.importIssuerPrisma,{onFailure:()=>{if(generation===this.importGeneration)void this.disablePrivateImport();}});
       this.importStatus = 'ready';
     } catch {
       if (generation === this.importGeneration) await this.disablePrivateImport();
