@@ -3,7 +3,6 @@ initializeSentry('backend', true);
 import compression from 'compression';
 
 import { loadSwagger } from '@gitroom/helpers/swagger/load.swagger';
-import { json, raw } from 'express';
 import { Runtime } from '@temporalio/worker';
 Runtime.install({ shutdownSignals: [] });
 
@@ -19,6 +18,7 @@ import { PostValidationExceptionFilter } from '@gitroom/backend/api/routes/posts
 import { HttpExceptionFilter } from '@gitroom/nestjs-libraries/services/exception.filter';
 import { ConfigurationChecker } from '@gitroom/helpers/configuration/configuration.checker';
 import { startMcp } from '@gitroom/nestjs-libraries/chat/start.mcp';
+const { registerBodyParsers } = require('../../../rssd/body-parsers.cjs');
 
 async function start() {
   const app = await NestFactory.create(AppModule, {
@@ -67,12 +67,7 @@ async function start() {
     })
   );
 
-  app.use('/rssd/v1/editorial', json({limit:'68mb'}));
-  app.use(['/copilot/{*splat}', '/posts', '/rssd/v1/submissions', '/rssd/v1/drafts', '/rssd/v1/media'], (req: any, res: any, next: any) => {
-    json({ limit: '50mb' })(req, res, next);
-  });
-
-  app.use('/rssd/public/v1/community/discourse', raw({type:'application/json',limit:'512kb'}));
+  registerBodyParsers(app);
   app.use(cookieParser());
   app.use(compression());
   app.useGlobalFilters(new SubscriptionExceptionFilter());

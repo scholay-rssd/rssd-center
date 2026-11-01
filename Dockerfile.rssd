@@ -19,7 +19,7 @@ FROM dependencies AS build
 COPY . /app
 RUN pnpm exec prisma migrate diff --from-empty --to-schema-datamodel libraries/nestjs-libraries/src/database/prisma/schema.prisma --script --output rssd/postiz-schema.sql
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm run build
-RUN node -e "for(const n of ['store','publisher','media','migration','editorial','editorial-actions'])require('./apps/backend/dist/rssd/'+n+'.cjs')"
+RUN node -e "for(const n of ['body-parsers','store','publisher','media','migration','editorial','editorial-actions'])require('./apps/backend/dist/rssd/'+n+'.cjs')"
 # Build caches are not runtime inputs; source stays available at the pinned
 # public repository revision identified by the OCI label.
 RUN rm -rf apps/frontend/.next/cache apps/frontend/.next/build
