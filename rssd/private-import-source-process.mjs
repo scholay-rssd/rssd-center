@@ -1,3 +1,4 @@
+import {safeLimitCode} from './private-import-limits.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 // The direct child owns all source DB access. Stop only that child; its Python
@@ -10,6 +11,6 @@ export function runSourceProcess({sourceUrl,token,archive},{timeoutMs=125000,sig
   child.stdin.on('error',()=>{});child.stdio[3].on('error',()=>{});child.stdio[3].end(JSON.stringify({sourceUrl,token,parentPid:process.pid}));child.stdin.end(archive);
   const exited=()=>{state='exited';clearTimeout(timer);clearTimeout(forceTimer);signal?.removeEventListener('abort',stop);};
   child.stdout.on('data',chunk=>{size+=chunk.length;if(size>8192){if(!reason)reason='source_outcome_unknown';stop();}else chunks.push(chunk);});child.once('error',()=>{exited();if(!reason)reason='source_unavailable';});child.once('exit',exited);
-  child.once('close',code=>{exited();try{if(reason||code!==0)throw Object.assign(Error('Private import unavailable'),{code:reason||'source_outcome_unknown'});const value=JSON.parse(Buffer.concat(chunks,size).toString('utf8'));if(!value?.ok)throw Object.assign(Error('Private import unavailable'),{code:['source_outcome_unknown','source_unavailable'].includes(value?.code)?value.code:'private_import_error'});resolve(value.result);}catch(error){reject(error?.code?error:Object.assign(Error('Private import unavailable'),{code:'source_outcome_unknown'}));}});
+  child.once('close',code=>{exited();try{if(reason||code!==0)throw Object.assign(Error('Private import unavailable'),{code:reason||'source_outcome_unknown'});const value=JSON.parse(Buffer.concat(chunks,size).toString('utf8'));if(!value?.ok)throw Object.assign(Error('Private import unavailable'),{code:['source_outcome_unknown','source_unavailable'].includes(value?.code)?value.code:safeLimitCode(value?.code)||'private_import_error'});resolve(value.result);}catch(error){reject(error?.code?error:Object.assign(Error('Private import unavailable'),{code:'source_outcome_unknown'}));}});
  });
 }
