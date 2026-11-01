@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, Res, UseFilters, UseGuards, Header, Catch, ExceptionFilter, ArgumentsHost } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Req, Res, UseFilters, UseGuards, Header, Catch, ExceptionFilter, ArgumentsHost, NotFoundException } from '@nestjs/common';
 import { ThrottlerRealIpGuard } from '@gitroom/nestjs-libraries/throttler/throttler.provider';
 import { Throttle } from '@nestjs/throttler';
 import { RssdService } from './rssd.service';
@@ -45,6 +45,17 @@ export class RssdController {
     res.status(200).json(result);
   }
   @Get('/identity') identity(@Req() req: any) { return {protocolVersion: 1, ...req.rssd}; }
+  @Get('/private-import/status')
+  @Header('Cache-Control','private, no-store')
+  privateImportStatus(@Req() req: any) { return this.rssd.privateImportStatus(req.rssd); }
+  @Post('/private-import/grants')
+  @Header('Cache-Control','private, no-store')
+  @Header('X-Content-Type-Options','nosniff')
+  @Header('Content-Security-Policy',"default-src 'none'")
+  privateImportGrant(@Req() req: any, @Body() body: any) { if (!this.rssd.privateImport) throw new NotFoundException(); return this.rssd.privateImport.issue(req.rssd,body); }
+  @Post('/private-import/grants/:id/revoke')
+  @Header('Cache-Control','private, no-store')
+  privateImportRevoke(@Req() req: any, @Param('id') id: string) { if (!this.rssd.privateImport) throw new NotFoundException(); return this.rssd.privateImport.revoke(req.rssd,id); }
   @Get('/private-review/:workspaceId')
   @Header('Cache-Control','private, no-store')
   @Header('X-Content-Type-Options','nosniff')

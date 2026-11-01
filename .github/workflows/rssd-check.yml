@@ -39,10 +39,15 @@ jobs:
       - run: node --test rssd/coordination.test.cjs rssd/store.test.cjs rssd/discourse.test.cjs rssd/postiz.test.cjs rssd/initialize-database.test.cjs rssd/owner-context.test.cjs rssd/health.test.cjs rssd/labels.test.cjs rssd/community.test.cjs rssd/private-review.test.cjs
       - run: pnpm --filter postiz-backend build
       - run: node --test rssd/http.test.cjs rssd/body-parsers.test.cjs rssd/private-review-http.test.cjs
+      - name: Create dedicated private-import test database
+        run: PGPASSWORD=fixture-only-password createdb -h localhost -U rssd_test rssd_import_test
+      - name: Test restricted private import and Postiz grant routes
+        run: RSSD_TEST_DATABASE_URL=postgresql://rssd_test:fixture-only-password@localhost:5432/rssd_import_test node --test rssd/private-import-secure.test.mjs
+      - run: python3 -m unittest discover -s rssd -p test_private_import_archive.py -v
       - run: pnpm exec tsc --noEmit -p apps/frontend/tsconfig.json
       - run: pnpm exec jest --config rssd/jest-ui.config.cjs --runInBand
       - run: sudo apt-get update && sudo apt-get install -y age rclone
       - run: python3 -m unittest discover -s rssd -p test_backup.py -v
       - run: python3 -m unittest discover -s rssd -p test_drive_authorization.py -v
       - name: Verify packaged domain runtime
-        run: node -e "for(const name of ['body-parsers','store','publisher','media','migration','editorial','editorial-actions','private-review'])require('./apps/backend/dist/rssd/'+name+'.cjs')"
+        run: node -e "for(const name of ['body-parsers','store','publisher','media','migration','editorial','editorial-actions','private-review'])require('./apps/backend/dist/rssd/'+name+'.cjs');for(const name of ['private-import-owner','private-import-secure-roles','private-import-secure-adapter','private-import-startup'])require('./apps/backend/dist/rssd/'+name+'.mjs')"
