@@ -1,0 +1,35 @@
+# Coordination contract v1
+
+All endpoints extend `/api/rssd/v1`; original v1 and Postiz APIs remain compatible. Device requests use existing workspace-scoped credentials. Goal and scheduling writes require the existing owner browser session. Credentials never enter URLs, frontend persistence or model prompts.
+
+| Endpoint | Contract |
+| --- | --- |
+| GET /coordination/overview | contractVersion, workspaces, demand counts, distinct work counts, goals, capabilities, original Postiz paths |
+| GET /coordination/channels | Scoped destinations and provider status; no secret configuration |
+| GET /coordination/calendar | from/to ISO instants (up to 367 days), limit 1–200, offset; items/hasNext/total/range |
+| PATCH /demands/:id/definition | requestId, baseGeneration, changes; queued only; increments generation |
+| GET /goals | Goal definitions, current local calendar period, completed/pending/published counts and maintenance status |
+| POST /goals | id, requestId, baseRevision, goal; owner only |
+| POST /publications/:id/schedule | requestId, expectedUpdatedAt, scheduledAt; owner only, unstarted queued RSSD intents only |
+
+`workspaceId` or comma-separated `workspaceIds` narrows the authenticated scope. Calendar items retain source, publicationId, workId, locale, revision, destination, state, scheduledAt, hasSchedule, updatedAt, receipt and error. A fallback creation timestamp is not an explicit schedule. Native Postiz posts remain in their original publisher; root posts are counted once and RSSD-linked posts are deduplicated. Devices only see channels mapped to their workspaces; unmapped native channels are owner-only in the all-workspaces view.
+
+Demand edits accept title, brief, priority, requiredLocales and dueAt. Workspace, section, kind and source remain fixed. Claimed rules are frozen. Original request replay returns the original result; changed payloads conflict. Goal definitions contain workspaceId, sectionId, title, brief, target (0–1000), period (day/week/month), IANA timezone, requiredLocales and enabled. Scope is immutable. New goals default to paused. Native Postiz schedules continue through `/launches`; changing an RSSD schedule never creates a replacement post.
+
+Errors retain HTTP status and code: forbidden, not_found, revision_conflict, request_conflict, demand_frozen, migration_staged, publication_started. Clients retain original request IDs after timeout. No synthetic-data fallback is allowed.
+
+## Persistent maintenance
+
+`RSSD_GOAL_MAINTENANCE_ENABLED=1` enables a once-per-minute loop for explicitly enabled goals in writable workspaces. Each goal is transactionally locked; concurrent instances cannot duplicate the deficit. A run adds at most 20 queued demands tied to the goal revision and local calendar period. Distinct completed work IDs and active demands cover the goal; languages and destinations do not inflate completion.
+
+This is deterministic goal maintenance, not an LLM choosing topics. Owners supply the editorial direction. Status and refill reasons are recorded. Maintenance does not claim, write or publish. Goal edits preserve existing claims; pausing prevents refills without silently cancelling work.
+
+## MCP
+
+`POST /api/rssd/v1/mcp` provides stateless JSON responses; GET returns 405. It supports the pinned SDK's 2025-03-26, 2025-06-18 and 2025-11-25 versions and follows the [official transport specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-11-25/basic/transports.mdx). Supplied origins are validated, and every call reuses HTTP authentication.
+
+Tools cover overview, goals, demands, works, calendar, channels, original receipts and demand edits. Devices also get their own claim/release/submit tools. Owners get goal and schedule management. Tools delegate to the existing business services. Audit records contain actor, tool and argument hash. Postiz native MCP, OAuth and agent routes remain unchanged.
+
+## Desktop division
+
+Windows owns local-agent conversation and execution display. Center provides business tools and permissions; local conversation integration is not claimed by this change. Mac includes the confirmed Windows layout, connects real responses, preserves its editor and offline outbox, and opens owner management in the system browser. The isolated QA preview remains synthetic and labeled.

@@ -1997,3 +1997,26 @@ model Announcement {
   color       AnnouncementColor @default(INFO)
   createdAt   DateTime          @default(now())
 }
+
+model RssdGoal {
+  orgId String
+  id String
+  workspaceId String
+  sectionId String
+  revision Int @default(1)
+  payload Json
+  status Json @default("{}")
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, id])
+  @@map("rssd_goals")
+}
+model RssdCoordinationRequest {
+  orgId String
+  id String
+  hash String
+  result Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, id])
+  @@map("rssd_coordination_requests")
+}

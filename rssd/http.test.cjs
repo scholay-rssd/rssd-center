@@ -13,6 +13,21 @@ const {RssdGuestbookController}=require('../apps/backend/dist/apps/backend/src/r
 const {RssdCommunityController}=require('../apps/backend/dist/apps/backend/src/rssd/rssd.community.controller.js');
 const {RssdAuthController}=require('../apps/backend/dist/apps/backend/src/rssd/rssd.auth.controller.js');
 
+test('RSSD MCP connects through the official client without replacing native Postiz MCP',async t=>{
+ const {RssdMcp}=require('../apps/backend/dist/rssd/mcp.cjs');
+ const {Client}=require('@modelcontextprotocol/sdk/client/index.js');
+ const {StreamableHTTPClientTransport}=require('@modelcontextprotocol/sdk/client/streamableHttp.js');
+ const mcp=new RssdMcp({db:{$executeRawUnsafe:async()=>1}},{overview:async()=>({contractVersion:1,workspaces:[{id:'fixture'}]})});
+ const module=await Test.createTestingModule({imports:[ThrottlerModule.forRoot([{ttl:60000,limit:100}])],controllers:[RssdController],providers:[{provide:RssdService,useValue:{mcp}}]}).compile();
+ const app=module.createNestApplication();app.useLogger(false);app.use((req,res,next)=>{req.rssd={orgId:'fixture',workerId:'device',admin:false,workspaceIds:['fixture']};next();});await app.listen(0,'127.0.0.1');t.after(()=>app.close());
+ const url=new URL('/rssd/v1/mcp',await app.getUrl()),client=new Client({name:'RSSD contract acceptance',version:'1'});
+ const transport=new StreamableHTTPClientTransport(url);await client.connect(transport);t.after(()=>client.close());
+ assert((await client.listTools()).tools.some(tool=>tool.name==='rssd_overview'));
+ const reply=await client.callTool({name:'rssd_overview',arguments:{}});assert.equal(JSON.parse(reply.content[0].text).workspaces[0].id,'fixture');
+ assert.equal((await fetch(url)).status,405);
+ assert.equal((await fetch(url,{method:'POST',headers:{'content-type':'application/json','mcp-protocol-version':'invalid'},body:JSON.stringify({jsonrpc:'2.0',id:8,method:'ping'})})).status,400);
+});
+
 test('device bootstrap routes are no-store, independently rate-limited and preserve protocol errors',async t=>{
  const {ThrottlerModule}=require('@nestjs/throttler'),{ProtocolError}=require('../apps/backend/dist/rssd/protocol.cjs');
  let started=0;

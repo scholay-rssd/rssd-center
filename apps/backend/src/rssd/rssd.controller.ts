@@ -27,6 +27,23 @@ export class RssdController {
   @UseGuards(ThrottlerRealIpGuard)
   @Throttle({ default: { limit: 12, ttl: 60000 } })
   authorize(@Req() req: any, @Param('id') id: string, @Body() body: any) { return this.rssd.authorization.decide(req.rssd,id,body); }
+  @Get('/coordination/overview') overview(@Req() req: any, @Query() query: any) { return this.rssd.coordination.overview(req.rssd, query); }
+  @Get('/coordination/channels') coordinatedChannels(@Req() req: any, @Query() query: any) { return this.rssd.coordination.channels(req.rssd, query); }
+  @Get('/coordination/calendar') calendar(@Req() req: any, @Query() query: any) { return this.rssd.coordination.calendar(req.rssd, query); }
+  @Get('/goals') goals(@Req() req: any, @Query() query: any) { return this.rssd.coordination.goals(req.rssd, query); }
+  @Post('/goals') saveGoal(@Req() req: any, @Body() body: any) { return this.rssd.coordination.saveGoal(req.rssd, body); }
+  @Patch('/demands/:id/definition') editDemand(@Req() req: any, @Param('id') id: string, @Body() body: any) { return this.rssd.coordination.editDemand(req.rssd, id, body); }
+  @Post('/publications/:id/schedule') schedule(@Req() req: any, @Param('id') id: string, @Body() body: any) { return this.rssd.coordination.schedule(req.rssd, id, body); }
+  @Get('/mcp') mcpStream(@Res() res: any) { res.status(405).set('Allow', 'POST').end(); }
+  @Post('/mcp')
+  @Header('Cache-Control', 'no-store')
+  async mcp(@Req() req: any, @Body() body: any, @Res() res: any) {
+    const version = req.headers['mcp-protocol-version'];
+    if (version && !['2025-03-26','2025-06-18','2025-11-25'].includes(version)) { res.status(400).json({message:'Unsupported MCP protocol version'}); return; }
+    const result = await this.rssd.mcp.handle(req.rssd, body);
+    if (result === null) { res.status(202).end(); return; }
+    res.status(200).json(result);
+  }
   @Get('/identity') identity(@Req() req: any) { return {protocolVersion: 1, ...req.rssd}; }
   @Get('/health') health(@Req() req: any) { return health(this.rssd.store, req.rssd); }
   @Get('/labels') labels(@Req() req: any) { return this.rssd.labels.feed(req.rssd); }
