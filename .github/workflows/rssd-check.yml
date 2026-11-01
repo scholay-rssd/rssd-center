@@ -44,6 +44,7 @@ jobs:
       - name: Test restricted private import and Postiz grant routes
         run: RSSD_TEST_DATABASE_URL=postgresql://rssd_test:fixture-only-password@localhost:5432/rssd_import_test node --test rssd/private-import-secure.test.mjs
       - run: node --test rssd/private-import-secrets.test.mjs
+      - run: node --test rssd/private-import-socket.test.mjs
       - run: python3 -m unittest discover -s rssd -p test_private_import_archive.py -v
       - run: pnpm exec tsc --noEmit -p apps/frontend/tsconfig.json
       - run: pnpm exec jest --config rssd/jest-ui.config.cjs --runInBand
