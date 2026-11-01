@@ -183,6 +183,19 @@ test('a completely unresponsive probe is killed and reaped at its hard deadline'
 test('late socket creation is closed after timeout and cannot become ready',async()=>{
  let closed=false;await assert.rejects(boundedSocket(()=>new Promise(resolve=>setTimeout(()=>resolve({async close(){closed=true;}}),80)),{timeoutMs:20}));await new Promise(r=>setTimeout(r,100));assert.equal(closed,true);
 });
+test('Nest starts with protected role files and fails closed on a bad explicit file',{timeout:120000},async t=>{
+ require('reflect-metadata');const bcryptPath=require.resolve('bcrypt');require.cache[bcryptPath]={id:bcryptPath,filename:bcryptPath,loaded:true,exports:{hashSync:()=>{throw Error('bcrypt unused');},compareSync:()=>{throw Error('bcrypt unused');}}};
+ const {RssdService}=require(join(work,'apps/backend/dist/apps/backend/src/rssd/rssd.service.js')),service=Object.create(RssdService.prototype),dir=await mkdtemp(join(await realpath(tmpdir()),'rssd-secret-startup-'));
+ t.after(()=>rm(dir,{recursive:true,force:true}));Object.assign(service,{importEnabled:true,importGeneration:0,importProbe:runPrivateImportProbe,importStartupTimeoutMs:8000,privateImport:null,importStatus:'initializing',labels:{close(){}},community:{async close(){}}});
+ const keys=['RSSD_PRIVATE_IMPORT_DATABASE_URL','RSSD_PRIVATE_IMPORT_SOURCE_DATABASE_URL','RSSD_PRIVATE_IMPORT_ISSUER_DATABASE_URL'],names=[...keys,...keys.map(k=>k+'_FILE'),'RSSD_PRIVATE_IMPORT_SOCKET','RSSD_GOAL_MAINTENANCE_ENABLED','RSSD_DISPATCH_ENABLED'],saved=Object.fromEntries(names.map(k=>[k,process.env[k]]));
+ t.after(async()=>{await service.onModuleDestroy();for(const k of names)if(saved[k]===undefined)delete process.env[k];else process.env[k]=saved[k];});
+ for(const [i,url] of [workerUrl,sourceUrl,issuerUrl].entries()){const path=join(dir,'role-'+i);await writeFile(path,url,{mode:0o600});process.env[keys[i]+'_FILE']=path;process.env[keys[i]]='postgresql://invalid:invalid@localhost/invalid';}
+ Object.assign(process.env,{RSSD_PRIVATE_IMPORT_SOCKET:join(dir,'socket'),RSSD_GOAL_MAINTENANCE_ENABLED:'0',RSSD_DISPATCH_ENABLED:'0'});
+ const waitState=async expected=>{for(let n=0;n<400;n++){if(service.importStatus===expected)return;await new Promise(r=>setTimeout(r,20));}throw Error('state timeout');};
+ service.onModuleInit();await waitState('ready');assert(service.privateImport);await service.onModuleDestroy();
+ process.env[keys[0]]=workerUrl;process.env[keys[0]+'_FILE']=join(dir,'missing');service.importStatus='initializing';const quiet=console.error;console.error=()=>{};try{service.onModuleInit();await waitState('unavailable');}finally{console.error=quiet;}
+ assert.equal(service.privateImport,null);assert.deepEqual(service.privateImportStatus({admin:true,userId:'synthetic'}),{state:'unavailable'});
+});
 test('SIGKILL leaves an old socket but private-import startup fails independently of the Nest backend',{timeout:120000},async t=>{
  require('reflect-metadata');const bcryptPath=require.resolve('bcrypt');require.cache[bcryptPath]={id:bcryptPath,filename:bcryptPath,loaded:true,exports:{hashSync:()=>{throw Error('bcrypt unused');},compareSync:()=>{throw Error('bcrypt unused');}}};
  const dir=await mkdtemp(join(await realpath(tmpdir()),'rssd-stale-socket-')),socketPath=join(dir,'socket');t.after(()=>rm(dir,{recursive:true,force:true}));

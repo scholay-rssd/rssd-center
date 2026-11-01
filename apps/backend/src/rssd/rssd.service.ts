@@ -22,6 +22,7 @@ const { RssdPrivateReview } = require('../../../../rssd/private-review.cjs');
 const { PrivateImportOwner } = require('../../../../rssd/private-import-owner.mjs');
 const { createPrivateImportSocket } = require('../../../../rssd/private-import-socket.mjs');
 const { runPrivateImportProbe, boundedSocket } = require('../../../../rssd/private-import-startup.mjs');
+const { readPrivateImportSecrets } = require('../../../../rssd/private-import-secrets.mjs');
 const { SecurePrivateImport } = require('../../../../rssd/private-import-secure-adapter.mjs');
 
 @Injectable()
@@ -104,7 +105,9 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   }
   private async initializePrivateImport(generation: number, signal: AbortSignal) {
     try {
-      const worker = process.env.RSSD_PRIVATE_IMPORT_DATABASE_URL, source = process.env.RSSD_PRIVATE_IMPORT_SOURCE_DATABASE_URL, issuer = process.env.RSSD_PRIVATE_IMPORT_ISSUER_DATABASE_URL, socketPath = process.env.RSSD_PRIVATE_IMPORT_SOCKET;
+      const {worker,source,issuer} = await readPrivateImportSecrets(process.env,{signal,timeoutMs:this.importStartupTimeoutMs});
+      if (signal.aborted || generation !== this.importGeneration) return;
+      const socketPath = process.env.RSSD_PRIVATE_IMPORT_SOCKET;
       if (!worker || !source || !issuer || !socketPath) throw new Error('Private import role configuration is required');
       await this.importProbe({worker,source,issuer},{signal,timeoutMs:this.importStartupTimeoutMs});
       if (signal.aborted || generation !== this.importGeneration) return;
