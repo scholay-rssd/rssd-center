@@ -36,7 +36,10 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec prisma migrate diff --from-empty --to-schema-datamodel libraries/nestjs-libraries/src/database/prisma/schema.prisma --script --output rssd/postiz-schema.sql
-      - run: node --test rssd/coordination.test.cjs rssd/store.test.cjs rssd/discourse.test.cjs rssd/postiz.test.cjs rssd/initialize-database.test.cjs rssd/owner-context.test.cjs rssd/health.test.cjs rssd/labels.test.cjs rssd/community.test.cjs rssd/private-review.test.cjs
+      # These files bootstrap the same disposable database. File-level
+      # serialization prevents concurrent CREATE IF NOT EXISTS races; each
+      # file's internal concurrency tests still run normally.
+      - run: node --test --test-concurrency=1 rssd/coordination.test.cjs rssd/store.test.cjs rssd/discourse.test.cjs rssd/postiz.test.cjs rssd/initialize-database.test.cjs rssd/owner-context.test.cjs rssd/health.test.cjs rssd/labels.test.cjs rssd/community.test.cjs rssd/private-review.test.cjs
       - run: pnpm --filter postiz-backend build
       - run: node --test rssd/http.test.cjs rssd/body-parsers.test.cjs rssd/private-review-http.test.cjs
       - name: Create dedicated private-import test database
