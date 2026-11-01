@@ -1,18 +1,22 @@
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile,mkdtemp,rm,realpath,writeFile,lstat,open as openFile} from 'node:fs/promises';
+import {readFile,mkdtemp,rm,realpath,writeFile,lstat,chmod,open as openFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {spawn,spawnSync} from 'node:child_process';
-import {connect} from 'node:net';
+import {connect,createServer} from 'node:net';
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {fileURLToPath} from 'node:url';
 import {join,resolve} from 'node:path';
 import {trustedLoad,runArchiveVerifier} from './private-import-trusted-source.mjs';
+import {runSourceProcess} from './private-import-source-process.mjs';
+import {formalLoad} from './private-import-stream-source.mjs';
+import {prismaPool} from './private-import-prisma-pool.mjs';
 const here=fileURLToPath(new URL('.',import.meta.url)),work=resolve(here,'..');
 const PROFILE={version:1,inventoryPath:'INVENTORY.json',metadataExceptions:[],unlistedMetadata:[]};
 const require=createRequire(join(work,'package.json')),{Pool}=require('pg'),{PrismaClient}=require('@prisma/client'),{RssdStore}=require(join(work,'rssd/store.cjs')),{RssdPrivateReview}=require(join(work,'rssd/private-review.cjs'));
 const {PrivateImportOwner}=await import('file://'+join(work,'rssd/private-import-owner.mjs'));
+const {PrivateImportOutcome}=require(join(work,'rssd/private-import-outcome.cjs'));
 const {assertSecureImportRole,assertGrantIssuerPermissions}=await import('file://'+join(work,'rssd/private-import-secure-roles.mjs'));
 const {SecurePrivateImport}=await import('file://'+join(work,'rssd/private-import-secure-adapter.mjs'));
 const {runPrivateImportProbe,boundedSocket}=await import('file://'+join(work,'rssd/private-import-startup.mjs'));
@@ -152,7 +156,7 @@ test('oversized archive fails with an actionable CLI message',{timeout:120000},a
  const socket=await createPrivateImportSocket({socketPath,service:{}});t.after(()=>socket.close());const child=spawn(process.execPath,[join(work,'rssd/private-import-cli.mjs')],{stdio:['ignore','pipe','pipe','pipe']}),err=[];child.stderr.on('data',x=>err.push(x));child.stdout.resume();child.stdio[3].end(JSON.stringify({socket:socketPath,token:'synthetic',archive,digest:'a'.repeat(64)}));const code=await new Promise((resolve,reject)=>{child.on('error',reject);child.on('exit',resolve);});assert.notEqual(code,0);assert.match(Buffer.concat(err).toString(),/exceeds 32 MiB.*split or offline/);
 });
 test('protected Unix socket and original CLI recover interrupted import with restricted DB roles',{timeout:120000},async t=>{
- const f=await fixture(t),socketPath=join(f.paths.root,'..','import.sock'),adapter=new SecurePrivateImport(source,worker);
+ const f=await fixture(t),socketPath=join(f.paths.root,'..','import.sock'),adapter=new SecurePrivateImport(source,worker,{sourceUrl});
  let stagedSignal,releaseStage,holdFirst=true;const staged=new Promise(resolve=>{stagedSignal=resolve;}),hold=new Promise(resolve=>{releaseStage=resolve;});
  const service={open:(...args)=>adapter.open(...args),finish:(...args)=>adapter.finish(...args),async stage(...args){const result=await adapter.stage(...args);if(holdFirst){holdFirst=false;stagedSignal();await hold;}return result;}};
  const socket=await createPrivateImportSocket({socketPath,service});t.after(async()=>{releaseStage();await socket.close();});
@@ -248,6 +252,36 @@ test('archive verifier is asynchronous, bounded and times out safely',{timeout:1
  let settled=false;const work=runArchiveVerifier(Buffer.from('x'),'fixture','site','space',PROFILE,{scriptPath:slow,timeoutMs:2000}).then(x=>{settled=true;return x;});await new Promise(r=>setTimeout(r,30));assert.equal(settled,false);assert.equal((await work).digest,'fixture');
  await assert.rejects(runArchiveVerifier(Buffer.from('x'),'fixture','site','space',PROFILE,{scriptPath:slow,timeoutMs:30}));await assert.rejects(runArchiveVerifier(Buffer.from('x'),'fixture','site','space',PROFILE,{scriptPath:large,maxOutput:100}),{code:'verifier_output_too_large'});
 });
+test('hung database cannot block Postiz event loop and child connection is closed',{timeout:10000},async t=>{
+ const sockets=new Set(),server=createServer(socket=>{sockets.add(socket);socket.on('close',()=>sockets.delete(socket));socket.resume();});await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>{for(const s of sockets)s.destroy();server.close();});const port=server.address().port,url=`postgresql://synthetic:synthetic@127.0.0.1:${port}/rssd_import_test?sslmode=disable`,start=Date.now();let ticked=false;setTimeout(()=>{ticked=true;},30);
+ await assert.rejects(runSourceProcess({sourceUrl:url,token:'a'.repeat(43),archive:Buffer.from('synthetic')},{timeoutMs:2000}),{code:'source_outcome_unknown'});assert(ticked);assert(Date.now()-start<5000);for(let n=0;n<100&&sockets.size;n++)await new Promise(r=>setTimeout(r,20));assert.equal(sockets.size,0);
+});
+test('stuck verifier and its source worker are killed and reaped on deadline',{timeout:10000},async t=>{
+ const f=await fixture(t),dir=await mkdtemp(join(await realpath(tmpdir()),'rssd-source-hang-')),pidfile=join(dir,'pid'),wrapper=join(dir,'python3'),old=process.env.PATH;t.after(async()=>{process.env.PATH=old;await rm(dir,{recursive:true,force:true});});await writeFile(wrapper,`#!/bin/sh\nprintf '%s' "$$" > '${pidfile}'\nexec sleep 30\n`,{mode:0o700});await chmod(wrapper,0o700);process.env.PATH=dir+':'+old;
+ const pending=runSourceProcess({sourceUrl,token:f.grant.token,archive:f.archive},{timeoutMs:2500});let pid;for(let n=0;n<100;n++){try{pid=Number(await readFile(pidfile,'utf8'));break;}catch{await new Promise(r=>setTimeout(r,20));}}assert(pid>1);await assert.rejects(pending,{code:'source_outcome_unknown'});assert.throws(()=>process.kill(pid,0));
+});
+test('source worker kills its verifier if the Nest parent is SIGKILLed',{timeout:10000},async t=>{
+ const f=await fixture(t),dir=await mkdtemp(join(await realpath(tmpdir()),'rssd-parent-death-')),pidfile=join(dir,'pids'),wrapper=join(dir,'python3'),archivePath=join(dir,'archive');t.after(()=>rm(dir,{recursive:true,force:true}));await writeFile(archivePath,f.archive);await writeFile(wrapper,`#!/bin/sh\nprintf '%s %s' "$$" "$PPID" > '${pidfile}'\nexec sleep 30\n`,{mode:0o700});
+ const moduleUrl=new URL('file://'+join(work,'rssd/private-import-source-process.mjs')).href,code=`import {readFileSync} from 'node:fs';import {runSourceProcess} from ${JSON.stringify(moduleUrl)};const c=JSON.parse(readFileSync(3,'utf8'));await runSourceProcess({sourceUrl:c.url,token:c.token,archive:readFileSync(c.archive)});`,child=spawn(process.execPath,['--input-type=module','-e',code],{stdio:['ignore','ignore','ignore','pipe'],env:{...process.env,PATH:dir+':'+process.env.PATH}});t.after(()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');});child.stdio[3].end(JSON.stringify({url:sourceUrl,token:f.grant.token,archive:archivePath}));
+ let pids;for(let n=0;n<150;n++){try{pids=(await readFile(pidfile,'utf8')).trim().split(' ').map(Number);break;}catch{await new Promise(r=>setTimeout(r,20));}}assert(pids?.length===2&&pids.every(x=>x>1));const closed=new Promise(r=>child.once('exit',r));child.kill('SIGKILL');await closed;
+ const alive=pid=>{const r=spawnSync('ps',['-o','stat=','-p',String(pid)],{encoding:'utf8'}),state=r.stdout.trim();return !!state&&!state.startsWith('Z');};for(let n=0;n<150&&pids.some(alive);n++)await new Promise(r=>setTimeout(r,20));assert.equal(pids.some(alive),false);
+});
+test('late abort after successful source process never signals a process group',{timeout:10000},async t=>{
+ const f=await fixture(t),controller=new AbortController(),old=process.kill;let groupSignals=0;process.kill=function(pid,...args){if(pid<0)groupSignals++;return old.call(process,pid,...args);};
+ try{const result=await runSourceProcess({sourceUrl,token:f.grant.token,archive:f.archive},{timeoutMs:3000,signal:controller.signal});assert.equal(result.items,2);controller.abort();await new Promise(r=>setTimeout(r,150));assert.equal(groupSignals,0);}finally{process.kill=old;}
+});
+test('lost Prisma COMMIT acknowledgment reconciles the same job without duplicate audit',{timeout:120000},async t=>{
+ const f=await fixture(t),base=prismaPool(source);let lose=true;const proxy={query:(...args)=>base.query(...args),async connect(){const c=await base.connect();return {get commitStarted(){return c.commitStarted;},async query(sql,args){const result=await c.query(sql,args);if(sql==='COMMIT'&&lose){lose=false;throw Error('synthetic lost acknowledgement');}return result;},release:()=>c.release()};}};
+ await assert.rejects(formalLoad(proxy,f.ctx,{token:f.grant.token,archive:f.archive,site:'site',workspace:'space'}),{code:'source_outcome_unknown'});const [job]=(await admin.query('SELECT id FROM rssd_import_jobs WHERE org=$1',[f.org])).rows;assert(job);const result=await runSourceProcess({sourceUrl,token:f.grant.token,archive:f.archive});assert.equal(result.jobId,job.id);assert.equal((await admin.query("SELECT count(*)::int n FROM rssd_import_audit WHERE org=$1 AND action='source_verified'",[f.org])).rows[0].n,1);
+});
+test('admin outcome is scoped, audited, and unknown until a source commit',{timeout:120000},async t=>{
+ const f=await fixture(t),outcome=new PrivateImportOutcome(new RssdStore(owner));assert.deepEqual(await outcome.read(f.ctx,f.grant.grantId),{state:'unknown',mayStillBeInFlight:true,revoked:false});
+ await assert.rejects(outcome.read({...f.ctx,orgId:randomUUID()},f.grant.grantId));await assert.rejects(outcome.read({...f.ctx,admin:false},f.grant.grantId));await assert.rejects(outcome.read({...f.ctx,workerId:'device'},f.grant.grantId));await assert.rejects(outcome.read({...f.ctx,workspaceIds:[]},f.grant.grantId));
+ let entered,release;const locked=new Promise(r=>entered=r),barrier=new Promise(r=>release=r),base=prismaPool(source),proxy={query:(...args)=>base.query(...args),async connect(){const c=await base.connect();return {get commitStarted(){return c.commitStarted;},async query(sql,args){const result=await c.query(sql,args);if(sql.includes('WHERE token_hash=$1 FOR UPDATE')){entered();await barrier;}return result;},release:()=>c.release()};}};t.after(()=>release());
+ const pending=formalLoad(proxy,f.ctx,{token:f.grant.token,archive:f.archive,site:'site',workspace:'space'});await locked;const observed=await Promise.race([outcome.read(f.ctx,f.grant.grantId),new Promise((_,reject)=>setTimeout(()=>reject(Error('outcome blocked by source transaction')),1000))]);assert.deepEqual(observed,{state:'unknown',mayStillBeInFlight:true,revoked:false});release();const job=await pending;
+ const committed=await outcome.read(f.ctx,f.grant.grantId);assert.deepEqual(committed,{state:'committed',mayStillBeInFlight:false,revoked:false,jobId:job.jobId,reviewState:'staging'});
+ const [audit]=(await admin.query("SELECT count(*)::int n FROM rssd_import_audit WHERE org=$1 AND action='source_outcome_checked'",[f.org])).rows;assert.equal(audit.n,3);await admin.query('UPDATE "UserOrganization" SET disabled=true WHERE "userId"=$1',[f.actor]);await assert.rejects(outcome.read(f.ctx,f.grant.grantId));
+});
 test('issuer outages degrade only private import for issue and revoke; business denials keep it ready',{timeout:120000},async t=>{
  require('reflect-metadata');const bcryptPath=require.resolve('bcrypt');require.cache[bcryptPath]={id:bcryptPath,filename:bcryptPath,loaded:true,exports:{hashSync:()=>{throw Error('bcrypt unused');},compareSync:()=>{throw Error('bcrypt unused');}}};
  const {RssdService}=require(join(work,'apps/backend/dist/apps/backend/src/rssd/rssd.service.js')),{RssdController}=require(join(work,'apps/backend/dist/apps/backend/src/rssd/rssd.controller.js')),{Test}=require('@nestjs/testing'),{ThrottlerModule}=require('@nestjs/throttler');
@@ -277,7 +311,7 @@ test('compiled Nest grant routes require a Postiz owner session and never expose
  const {RssdController}=require(join(work,'apps/backend/dist/apps/backend/src/rssd/rssd.controller.js')),{RssdMiddleware}=require(join(work,'apps/backend/dist/apps/backend/src/rssd/rssd.middleware.js')),{AuthMiddleware}=require(join(work,'apps/backend/dist/apps/backend/src/services/auth/auth.middleware.js')),{AuthService}=require(join(work,'apps/backend/dist/libraries/helpers/src/auth/auth.service.js'));
  process.env.JWT_SECRET='synthetic-only-jwt-secret-000000000000000000000000';process.env.FRONTEND_URL='https://fixture.invalid';const f=await fixture(t);let role='ADMIN';
  const orgService={getOrgsByUserId:async id=>id===f.actor?[{id:f.org,apiKey:'synthetic',users:[{userId:id,role,disabled:false}]}]:[],updateApiKey:async()=>{throw Error('unexpected');}},userService={getUserById:async id=>id===f.actor?{id,activated:true,isSuperAdmin:false,email:'fixture@invalid'}:null};
- const middleware=new RssdMiddleware(new AuthMiddleware(orgService,userService),{store:{authenticate:async()=>({orgId:f.org,workerId:'synthetic-device',admin:false,workspaceIds:['space']})}}),service={privateImport:new (require(join(work,'apps/backend/dist/rssd/private-import-owner.mjs')).PrivateImportOwner)(issuerDb),importStatus:'ready',privateImportStatus:RssdService.prototype.privateImportStatus};
+ const middleware=new RssdMiddleware(new AuthMiddleware(orgService,userService),{store:{authenticate:async()=>({orgId:f.org,workerId:'synthetic-device',admin:false,workspaceIds:['space']})}}),service={privateImport:new (require(join(work,'apps/backend/dist/rssd/private-import-owner.mjs')).PrivateImportOwner)(issuerDb),privateImportOutcome:new (require(join(work,'apps/backend/dist/rssd/private-import-outcome.cjs')).PrivateImportOutcome)(new RssdStore(owner)),importStatus:'ready',privateImportStatus:RssdService.prototype.privateImportStatus};
  const mod=await Test.createTestingModule({imports:[ThrottlerModule.forRoot([{ttl:60000,limit:100}])],controllers:[RssdController],providers:[{provide:RssdService,useValue:service}]}).compile();const app=mod.createNestApplication();app.useLogger(false);app.use(cookieParser());app.use((req,res,next)=>{if(!req.path.startsWith('/rssd/v1/'))return next();middleware.use(req,res,next).catch(e=>res.status(e.status||403).json({message:'Private import unavailable'}));});await app.listen(0,'127.0.0.1');t.after(()=>app.close());
  const origin=await app.getUrl(),url=origin+'/rssd/v1/private-import/grants',body=JSON.stringify({workspace:'space',site:'site',bundleDigest:f.paths.digest,sourceProfile:PROFILE}),cookie='auth='+AuthService.signJWT({id:f.actor})+'; showorg='+f.org;
  const post=headers=>fetch(url,{method:'POST',headers:{'content-type':'application/json',...headers},body});assert.equal((await post({})).status,403);assert.equal((await post({cookie})).status,403);assert.equal((await post({cookie,origin:'https://invalid.example'})).status,403);assert.equal((await post({authorization:'Bearer device'})).status,403);
@@ -287,5 +321,6 @@ test('compiled Nest grant routes require a Postiz owner session and never expose
  const saved=(await admin.query('SELECT token_hash,org,workspace,site,bundle,actor FROM rssd_import_grants WHERE id=$1',[grant.grantId])).rows[0];assert(!JSON.stringify(saved).includes(grant.token));assert.equal(saved.org,f.org);assert.equal(saved.bundle,f.paths.digest);
  const revoked=await fetch(url+'/'+grant.grantId+'/revoke',{method:'POST',headers:{'content-type':'application/json',cookie,origin:'https://fixture.invalid'},body:'{}'});assert.equal(revoked.status,201);assert.deepEqual(await revoked.json(),{revoked:true});
  role='USER';assert.equal((await post({cookie,origin:'https://fixture.invalid'})).status,403);role='ADMIN';service.privateImport=null;assert.equal((await post({cookie,origin:'https://fixture.invalid'})).status,404);
+ const outcomeUrl=url+'/'+grant.grantId+'/outcome',result=await fetch(outcomeUrl,{headers:{cookie}});assert.equal(result.status,200);assert.match(result.headers.get('cache-control'),/no-store/);const outcome=await result.json();assert.deepEqual(outcome,{state:'unknown',mayStillBeInFlight:true,revoked:true});assert(!JSON.stringify(outcome).includes(grant.token));assert.equal((await fetch(outcomeUrl,{headers:{authorization:'Bearer device'}})).status,403);assert.equal((await fetch(outcomeUrl)).status,403);const foreign=await fixture(t);assert.equal((await fetch(url+'/'+foreign.grant.grantId+'/outcome',{headers:{cookie}})).status,404);
  assert.equal((await fetch(origin+'/rssd/v1/private-import/upload',{method:'POST',headers:{'content-type':'application/json',cookie,origin:'https://fixture.invalid'},body:'{}'})).status,404);assert.equal((await fetch(origin+'/rssd/public/v1/private-import/grants',{method:'POST'})).status,404);
 });

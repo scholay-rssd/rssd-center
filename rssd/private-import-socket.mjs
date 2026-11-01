@@ -8,7 +8,7 @@ const maxLine=MAX_SOCKET_FRAME_BYTES;
 // disconnects. A new listener in this process must not overlap that handler.
 let activeOperation=null;
 export function isImportInfrastructureError(error){
- if(['P1000','P1001','P1002','P1003','P1008','P1010','P1011','P1017','P2024','ECONNREFUSED','ECONNRESET','ETIMEDOUT','RSSD_VERIFIER_UNAVAILABLE'].includes(error?.code))return true;
+ if(['P1000','P1001','P1002','P1003','P1008','P1010','P1011','P1017','P2024','ECONNREFUSED','ECONNRESET','ETIMEDOUT','RSSD_VERIFIER_UNAVAILABLE','source_unavailable','source_outcome_unknown'].includes(error?.code))return true;
  const state=typeof error?.meta?.code==='string'?error.meta.code:'';
  if(/^(08|28|53|57P|3D)/.test(state))return true;
  return state==='42501'&&/permission denied for (?:function|relation|table|schema)/i.test(String(error?.meta?.message||''));

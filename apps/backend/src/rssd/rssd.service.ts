@@ -19,6 +19,7 @@ const { RssdCommunity } = require('../../../../rssd/community.cjs');
 const { RssdEditorial } = require('../../../../rssd/editorial.cjs');
 const { RssdEditorialActions } = require('../../../../rssd/editorial-actions.cjs');
 const { RssdPrivateReview } = require('../../../../rssd/private-review.cjs');
+const { PrivateImportOutcome } = require('../../../../rssd/private-import-outcome.cjs');
 const { PrivateImportOwner } = require('../../../../rssd/private-import-owner.mjs');
 const { createPrivateImportSocket } = require('../../../../rssd/private-import-socket.mjs');
 const { runPrivateImportProbe, boundedSocket } = require('../../../../rssd/private-import-startup.mjs');
@@ -40,6 +41,7 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   readonly community: any;
   readonly editorial: any;
   readonly privateReview: any;
+  readonly privateImportOutcome: any;
   privateImport: any = null;
   private importEnabled = false;
   private importGeneration = 0;
@@ -55,6 +57,7 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   constructor(prisma: PrismaService, posts: PostsService, temporal: TemporalService) {
     this.store = new RssdStore(prisma);
     this.privateReview = new RssdPrivateReview(this.store);
+    this.privateImportOutcome = new PrivateImportOutcome(this.store);
     this.importEnabled = process.env.RSSD_PRIVATE_IMPORT_ENABLED === '1';
     this.importStatus = this.importEnabled ? 'initializing' : 'disabled';
     this.coordination = new RssdCoordination(this.store);
@@ -115,7 +118,7 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
       this.importPrisma = new PrismaClient({datasources:{db:{url:worker}}});
       this.importSourcePrisma = new PrismaClient({datasources:{db:{url:source}}});
       this.importIssuerPrisma = new PrismaClient({datasources:{db:{url:issuer}}});
-      const socket = await boundedSocket(()=>createPrivateImportSocket({socketPath,service:new SecurePrivateImport(this.importSourcePrisma,this.importPrisma),onFailure:()=>{if(generation===this.importGeneration)void this.disablePrivateImport();}}),{signal,timeoutMs:this.importStartupTimeoutMs});
+      const socket = await boundedSocket(()=>createPrivateImportSocket({socketPath,service:new SecurePrivateImport(this.importSourcePrisma,this.importPrisma,{sourceUrl:source}),onFailure:()=>{if(generation===this.importGeneration)void this.disablePrivateImport();}}),{signal,timeoutMs:this.importStartupTimeoutMs});
       if (signal.aborted || generation !== this.importGeneration) { await socket.close(); return; }
       this.importSocket = socket;
       this.privateImport = new PrivateImportOwner(this.importIssuerPrisma,{onFailure:()=>{if(generation===this.importGeneration)void this.disablePrivateImport();}});

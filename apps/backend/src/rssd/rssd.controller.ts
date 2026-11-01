@@ -48,6 +48,11 @@ export class RssdController {
   @Get('/private-import/status')
   @Header('Cache-Control','private, no-store')
   privateImportStatus(@Req() req: any) { return this.rssd.privateImportStatus(req.rssd); }
+  @Get('/private-import/grants/:id/outcome')
+  @Header('Cache-Control','private, no-store')
+  @Header('X-Content-Type-Options','nosniff')
+  @Throttle({ default: { limit: 12, ttl: 60000 } })
+  privateImportOutcome(@Req() req: any, @Param('id') id: string) { return this.rssd.privateImportOutcome.read(req.rssd,id); }
   @Post('/private-import/grants')
   @Header('Cache-Control','private, no-store')
   @Header('X-Content-Type-Options','nosniff')

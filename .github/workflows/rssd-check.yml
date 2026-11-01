@@ -55,4 +55,4 @@ jobs:
       - run: python3 -m unittest discover -s rssd -p test_backup.py -v
       - run: python3 -m unittest discover -s rssd -p test_drive_authorization.py -v
       - name: Verify packaged domain runtime
-        run: node -e "for(const name of ['body-parsers','store','publisher','media','migration','editorial','editorial-actions','private-review'])require('./apps/backend/dist/rssd/'+name+'.cjs');for(const name of ['private-import-owner','private-import-secure-roles','private-import-secure-adapter','private-import-startup','private-import-secrets'])require('./apps/backend/dist/rssd/'+name+'.mjs')"
+        run: node -e "for(const name of ['body-parsers','store','publisher','media','migration','editorial','editorial-actions','private-review','private-import-outcome'])require('./apps/backend/dist/rssd/'+name+'.cjs');for(const name of ['private-import-owner','private-import-secure-roles','private-import-secure-adapter','private-import-startup','private-import-secrets','private-import-prisma-pool','private-import-source-process','private-import-stream-source'])require('./apps/backend/dist/rssd/'+name+'.mjs')"
