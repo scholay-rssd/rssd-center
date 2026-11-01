@@ -6,6 +6,8 @@ import { TypedSearchAttributes } from '@temporalio/common';
 import { organizationId, postId } from '@gitroom/nestjs-libraries/temporal/temporal.search.attribute';
 import { UploadFactory } from '@gitroom/nestjs-libraries/upload/upload.factory';
 // The versioned domain runtime is packaged into dist/rssd by the backend build.
+const { RssdCoordination } = require('../../../../rssd/coordination.cjs');
+const { RssdMcp } = require('../../../../rssd/mcp.cjs');
 const { RssdStore } = require('../../../../rssd/store.cjs');
 const { DeviceAuthorization } = require('../../../../rssd/device-auth.cjs');
 const { RssdPublisher } = require('../../../../rssd/publisher.cjs');
@@ -20,6 +22,9 @@ const { RssdEditorialActions } = require('../../../../rssd/editorial-actions.cjs
 @Injectable()
 export class RssdService implements OnModuleInit, OnModuleDestroy {
   readonly store: any;
+  readonly coordination: any;
+  readonly mcp: any;
+  private coordinationTimer?: ReturnType<typeof setInterval>;
   readonly authorization: any;
   readonly publisher: any;
   readonly media: any;
@@ -31,6 +36,8 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   private timer?: ReturnType<typeof setInterval>;
   constructor(prisma: PrismaService, posts: PostsService, temporal: TemporalService) {
     this.store = new RssdStore(prisma);
+    this.coordination = new RssdCoordination(this.store);
+    this.mcp = new RssdMcp(this.store, this.coordination);
     this.authorization = new DeviceAuthorization(this.store, {verifyOwner: async (orgId: string, userId: string) =>
       (await prisma.$queryRawUnsafe('SELECT id FROM "UserOrganization" WHERE "organizationId"=$1 AND "userId"=$2 AND disabled=false AND role IN (\'ADMIN\',\'SUPERADMIN\')',orgId,userId) as any[]).length>0});
     this.community = new RssdCommunity(this.store);
@@ -61,10 +68,13 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
     this.editorial.actions = new RssdEditorialActions(this.store, this.media, this.publisher, this.editorial);
   }
   onModuleInit() {
+    if (process.env.RSSD_GOAL_MAINTENANCE_ENABLED === '1') this.coordinationTimer = setInterval(() => {
+      this.coordination.tick().catch(() => console.error('RSSD goal maintenance unavailable'));
+    }, 60000);
     if (process.env.RSSD_DISPATCH_ENABLED === '1') this.timer = setInterval(() => {
       this.publisher.tick().catch(() => console.error('RSSD publisher could not access its queue'));
       this.editorial.actions.tick().catch(() => console.error('RSSD website actions could not access their queue'));
     }, 3000);
   }
-  async onModuleDestroy() { if (this.timer) clearInterval(this.timer); this.labels.close(); await this.community.close(); }
+  async onModuleDestroy() { if (this.coordinationTimer) clearInterval(this.coordinationTimer); if (this.timer) clearInterval(this.timer); this.labels.close(); await this.community.close(); }
 }

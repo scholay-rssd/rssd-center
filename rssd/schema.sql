@@ -122,3 +122,15 @@ CREATE TABLE IF NOT EXISTS rssd_editorial_actions (
  "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,"updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY ("orgId",id),UNIQUE ("orgId","workspaceId","requestKey")
 );
+
+-- Coordination is additive; original Postiz publishing tables remain authoritative.
+CREATE TABLE IF NOT EXISTS rssd_goals (
+ "orgId" TEXT NOT NULL,id TEXT NOT NULL,"workspaceId" TEXT NOT NULL,"sectionId" TEXT NOT NULL,
+ revision INTEGER NOT NULL DEFAULT 1,payload JSONB NOT NULL,status JSONB NOT NULL DEFAULT '{}',
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,"updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY ("orgId",id)
+);
+CREATE TABLE IF NOT EXISTS rssd_coordination_requests (
+ "orgId" TEXT NOT NULL,id TEXT NOT NULL,hash TEXT NOT NULL,result JSONB NOT NULL,
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY ("orgId",id)
+);

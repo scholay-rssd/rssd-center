@@ -9,6 +9,10 @@ export class RssdMiddleware implements NestMiddleware {
   constructor(private auth: AuthMiddleware, private rssd: RssdService) {}
   async use(req: Request, res: Response, next: NextFunction) {
     try {
+      if (req.path.endsWith('/mcp') && req.headers.origin) {
+        const allowed = [process.env.FRONTEND_URL, process.env.MAIN_URL].filter(Boolean).map(url => new URL(url!).origin);
+        if (!allowed.includes(req.headers.origin)) throw new HttpException('Invalid MCP request origin', 403);
+      }
       const bearer = req.headers.authorization;
       if (bearer) {
         if (!bearer.startsWith('Bearer ')) throw new HttpException('Invalid device credential', 401);
