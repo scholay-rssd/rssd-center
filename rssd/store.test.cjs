@@ -81,7 +81,7 @@ async function actionHttpFixture(t){
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>server.close(resolve)));
  const f=await editorialFixture({origin:'http://127.0.0.1:'+server.address().port});
- return {...f,state,heads,requests,publicPackets,tick:async()=>{await db.$executeRawUnsafe('UPDATE rssd_editorial_actions SET "nextAttemptAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1',f.ctx.orgId);return f.service.actions.tick({orgId:f.ctx.orgId});}};
+ return {...f,state,heads,requests,publicPackets,tick:async()=>{await db.$executeRawUnsafe('UPDATE rssd_editorial_actions SET "nextAttemptAt"=CURRENT_TIMESTAMP-interval \'1 second\' WHERE "orgId"=$1',f.ctx.orgId);return f.service.actions.tick({orgId:f.ctx.orgId});}};
 }
 
 test('editorial HTTP actions withdraw, edit, restore and soft-delete with original-request recovery and public readback',async t=>{
