@@ -13,6 +13,8 @@ const { RssdPostiz } = require('../../../../rssd/postiz.cjs');
 const { RssdGuestbook } = require('../../../../rssd/guestbook.cjs');
 const { RssdLabels } = require('../../../../rssd/labels.cjs');
 const { RssdCommunity } = require('../../../../rssd/community.cjs');
+const { RssdEditorial } = require('../../../../rssd/editorial.cjs');
+const { RssdEditorialActions } = require('../../../../rssd/editorial-actions.cjs');
 
 @Injectable()
 export class RssdService implements OnModuleInit, OnModuleDestroy {
@@ -23,12 +25,14 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   readonly guestbook: any;
   readonly labels = new RssdLabels();
   readonly community: any;
+  readonly editorial: any;
   private timer?: ReturnType<typeof setInterval>;
   constructor(prisma: PrismaService, posts: PostsService, temporal: TemporalService) {
     this.store = new RssdStore(prisma);
     this.community = new RssdCommunity(this.store);
     this.guestbook = new RssdGuestbook(this.store, {secret: process.env.RSSD_ENCRYPTION_KEY || process.env.JWT_SECRET});
     this.media = new RssdMedia(this.store, {directory: process.env.RSSD_MEDIA_DIRECTORY, origin: process.env.FRONTEND_URL});
+    this.editorial = new RssdEditorial(this.store, this.media);
     this.postiz = new RssdPostiz(this.store, {
       validate: (org: string, values: any[]) => posts.validatePosts(org, values),
       uploadMedia: async ({bytes, asset}: any) => UploadFactory.createStorage().uploadFile({buffer: bytes, mimetype: asset.manifest.mime, originalname: asset.name} as Express.Multer.File),
@@ -50,10 +54,12 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
       },
     });
     this.publisher = new RssdPublisher(this.store, {secret: process.env.RSSD_ENCRYPTION_KEY || process.env.JWT_SECRET, media: this.media, postiz: this.postiz});
+    this.editorial.actions = new RssdEditorialActions(this.store, this.media, this.publisher, this.editorial);
   }
   onModuleInit() {
     if (process.env.RSSD_DISPATCH_ENABLED === '1') this.timer = setInterval(() => {
       this.publisher.tick().catch(() => console.error('RSSD publisher could not access its queue'));
+      this.editorial.actions.tick().catch(() => console.error('RSSD website actions could not access their queue'));
     }, 3000);
   }
   async onModuleDestroy() { if (this.timer) clearInterval(this.timer); this.labels.close(); await this.community.close(); }

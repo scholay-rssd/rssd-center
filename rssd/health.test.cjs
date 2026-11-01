@@ -3,7 +3,7 @@ const {health,backupStatus}=require('./health.cjs');
 test('health is owner-only and all operational queries are organization-scoped',async()=>{
  let queries=0;const store={db:{$queryRawUnsafe:async(sql,org)=>{queries++;assert.equal(org,'owner-org');assert.match(sql,/WHERE "orgId"=\$1/);return [];}}};
  await assert.rejects(health(store,{admin:false,orgId:'worker-org'}),{status:403});assert.equal(queries,0);
- const value=await health(store,{admin:true,orgId:'owner-org'},{dispatchEnabled:false});assert.equal(queries,4);assert.equal(value.backup.state,'not_configured');assert.equal(value.dispatchEnabled,false);
+ const value=await health(store,{admin:true,orgId:'owner-org'},{dispatchEnabled:false});assert.equal(queries,5);assert.equal(value.backup.state,'not_configured');assert.equal(value.dispatchEnabled,false);assert.deepEqual(value.actions,[]);
 });
 test('backup health distinguishes fresh, stale and failed while excluding private paths',async t=>{
  const directory=await fs.mkdtemp(path.join(os.tmpdir(),'rssd-health-'));t.after(()=>fs.rm(directory,{recursive:true,force:true}));

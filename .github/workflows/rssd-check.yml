@@ -45,4 +45,4 @@ jobs:
       - run: python3 -m unittest discover -s rssd -p test_backup.py -v
       - run: python3 -m unittest discover -s rssd -p test_drive_authorization.py -v
       - name: Verify packaged domain runtime
-        run: node -e "for(const name of ['store','publisher','media','migration'])require('./apps/backend/dist/rssd/'+name+'.cjs')"
+        run: node -e "for(const name of ['store','publisher','media','migration','editorial','editorial-actions'])require('./apps/backend/dist/rssd/'+name+'.cjs')"

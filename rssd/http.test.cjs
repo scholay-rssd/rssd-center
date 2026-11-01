@@ -50,3 +50,19 @@ test('idle and active claims are valid JSON over the production HTTP controller'
   }
  }
 });
+
+test('editorial HTTP bridge preserves nested paths, query options, request keys and domain errors',async t=>{
+ const calls=[];const {ProtocolError}=require('../apps/backend/dist/rssd/protocol.cjs');
+ const service={editorial:{api:async(ctx,workspace,method,path,query,body)=>{
+   calls.push({ctx,workspace,method,path,query,body});
+   if(path.join('/')==='actions')throw new ProtocolError('Action awaits receiver handover',409,'center_action_pending');
+   return {centerManaged:true,path,requestKey:body?.requestKey};
+ }}};
+ const module=await Test.createTestingModule({controllers:[RssdController],providers:[{provide:RssdService,useValue:service}]}).compile();
+ const app=module.createNestApplication();app.useLogger(false);app.use((req,res,next)=>{req.rssd={orgId:'synthetic',workspaceIds:['research']};next();});
+ await app.listen(0,'127.0.0.1');t.after(()=>app.close());const base=await app.getUrl()+'/rssd/v1/editorial/research';
+ let response=await fetch(base+'/drafts/requests/original-request');assert.equal(response.status,200);assert.deepEqual((await response.json()).path,['drafts','requests','original-request']);
+ response=await fetch(base+'/catalog?scope=all&after=80&locale=en');assert.equal(response.status,200);assert.deepEqual({...calls.at(-1).query},{scope:'all',after:'80',locale:'en'});assert.equal(calls.at(-1).workspace,'research');
+ response=await fetch(base+'/publish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({requestKey:'original-request'})});assert.equal(response.status,201);assert.equal((await response.json()).requestKey,'original-request');assert.equal(calls.at(-1).ctx.orgId,'synthetic');
+ response=await fetch(base+'/actions',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});assert.equal(response.status,409);assert.equal((await response.json()).code,'center_action_pending');
+});

@@ -51,4 +51,6 @@ export class RssdController {
   @Get('/destinations') destinations(@Req() req: any) { return this.rssd.publisher.destinations(req.rssd); }
   @Get('/channels') channels(@Req() req: any) { return this.rssd.postiz.channels(req.rssd); }
   @Post('/destinations') saveDestination(@Req() req: any, @Body() body: any) { return this.rssd.publisher.saveDestination(req.rssd, body); }
+  @Get('/editorial/:workspaceId/{*path}') editorialRead(@Req() req: any, @Param('workspaceId') workspaceId: string, @Param('path') path: string[], @Query() query: any) { return this.rssd.editorial.api(req.rssd, workspaceId, 'GET', path, query); }
+  @Post('/editorial/:workspaceId/{*path}') editorialWrite(@Req() req: any, @Param('workspaceId') workspaceId: string, @Param('path') path: string[], @Query() query: any, @Body() body: any) { return this.rssd.editorial.api(req.rssd, workspaceId, 'POST', path, query, body); }
 }

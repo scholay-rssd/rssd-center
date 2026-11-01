@@ -67,6 +67,7 @@ async function start() {
     })
   );
 
+  app.use('/rssd/v1/editorial', json({limit:'68mb'}));
   app.use(['/copilot/{*splat}', '/posts', '/rssd/v1/submissions', '/rssd/v1/drafts', '/rssd/v1/media'], (req: any, res: any, next: any) => {
     json({ limit: '50mb' })(req, res, next);
   });

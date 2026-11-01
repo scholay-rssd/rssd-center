@@ -86,3 +86,33 @@ CREATE TABLE IF NOT EXISTS rssd_audit (
   "orgId" TEXT NOT NULL, id TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, payload JSONB NOT NULL,
   "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY ("orgId", id)
 );
+CREATE TABLE IF NOT EXISTS rssd_editorial_requests (
+ "orgId" TEXT NOT NULL,"workspaceId" TEXT NOT NULL,"requestKey" TEXT NOT NULL,
+ intent TEXT NOT NULL,"payloadHash" TEXT NOT NULL,"workId" TEXT NOT NULL,locale TEXT NOT NULL,
+ "destinationId" TEXT NOT NULL,"publicationId" TEXT,receipt JSONB NOT NULL,
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY ("orgId","workspaceId","requestKey")
+);
+CREATE TABLE IF NOT EXISTS rssd_editorial_archives (
+ "orgId" TEXT NOT NULL,"workspaceId" TEXT NOT NULL,id TEXT NOT NULL,"workId" TEXT NOT NULL,
+ locale TEXT NOT NULL,revision INTEGER NOT NULL,payload BYTEA NOT NULL,sha256 TEXT NOT NULL,
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY ("orgId","workspaceId",id)
+);
+CREATE TABLE IF NOT EXISTS rssd_editorial_states (
+ "orgId" TEXT NOT NULL,"workId" TEXT NOT NULL,locale TEXT NOT NULL,visibility TEXT NOT NULL,
+ "previousVisibility" TEXT,"previousPublishedVersion" INTEGER,generation INTEGER NOT NULL DEFAULT 0,"operationSequence" INTEGER NOT NULL DEFAULT 0,
+ "updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY ("orgId","workId",locale)
+);
+ALTER TABLE rssd_editorial_states ADD COLUMN IF NOT EXISTS "previousPublishedVersion" INTEGER;
+ALTER TABLE rssd_editorial_states ADD COLUMN IF NOT EXISTS generation INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS rssd_editorial_actions (
+ "orgId" TEXT NOT NULL,id TEXT NOT NULL,"workspaceId" TEXT NOT NULL,"requestKey" TEXT NOT NULL,
+ "payloadHash" TEXT NOT NULL,"workId" TEXT NOT NULL,locale TEXT NOT NULL,"destinationId" TEXT NOT NULL,
+ action TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'queued',payload JSONB NOT NULL,receipt JSONB NOT NULL DEFAULT '{}',
+ packet JSONB,error TEXT,attempts INTEGER NOT NULL DEFAULT 0,"leaseToken" TEXT,"leaseUntil" TIMESTAMPTZ(3),
+ "nextAttemptAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,"updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY ("orgId",id),UNIQUE ("orgId","workspaceId","requestKey")
+);

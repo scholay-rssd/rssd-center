@@ -207,8 +207,13 @@ class RssdStore {
       if(work&&(work.workspaceId!==value.workspaceId||work.sectionId!==value.sectionId))p.fail('Work belongs to a different workspace or section',409,'identity_conflict');
       const result={requestId:value.requestId,workId:value.workId,workspaceId:value.workspaceId,status:publish?'accepted':'draft_saved',editions:[],publicationIds:[]};
       for(const edition of value.editions){
+        const action=await one(db,`SELECT id FROM rssd_editorial_actions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND state IN ('queued','dispatching') LIMIT 1`,ctx.orgId,value.workId,edition.locale);
+        if(action)p.fail('A website visibility action is in progress; retain the local result until its receipt settles',409,'publication_pending');
+        const visibility=await one(db,'SELECT visibility FROM rssd_editorial_states WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3',ctx.orgId,value.workId,edition.locale);
+        if(visibility?.visibility==='deleted')p.fail('This edition was deleted; restore it explicitly before editing',409,'edition_deleted');
+        if(publish&&visibility?.visibility==='withdrawn')p.fail('This website edition is withdrawn; explicitly publish or restore it through a visibility action',409,'edition_withdrawn');
         const deleted=await one(db,'SELECT "documentId" FROM rssd_legacy_documents WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "deletedAt" IS NOT NULL',ctx.orgId,value.workId,edition.locale);
-        if(deleted)p.fail('This historical edition was deleted; restore it explicitly before editing',409,'edition_deleted');
+        if(deleted&&!visibility)p.fail('This historical edition was deleted; restore it explicitly before editing',409,'edition_deleted');
         if(demand?.kind==='translate' && (!edition.translationOf || p.hash(edition.translationOf)!==p.hash(demand.payload.source)))p.fail('Translation must identify the requested source revision',409,'source_conflict');
         const head=await one(db,'SELECT revision FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 ORDER BY revision DESC LIMIT 1',ctx.orgId,value.workId,edition.locale);
         if((head?.revision||0)!==value.baseRevisions[edition.locale])p.fail('Edition changed; keep local changes and reload',409,'revision_conflict');

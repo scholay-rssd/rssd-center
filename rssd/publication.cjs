@@ -17,13 +17,19 @@ function publicContent(edition) {
 }
 function publication(input) {
   p.object(input,'publication');if(input.version!==1)p.fail('Unsupported publication version');
-  const content=publicContent(input.content);
+  const operation=input.operation||'publish';if(!['publish','withdraw','delete','restore'].includes(operation))p.fail('Unsupported publication operation');
+  const visible=operation==='publish'||operation==='restore',content=visible?publicContent(input.content):null;
   const value={version:1,requestId:p.id(input.requestId),siteId:p.id(input.siteId),workspaceId:p.id(input.workspaceId),sectionId:p.id(input.sectionId),
-    workId:p.id(input.workId),locale:p.locale(input.locale),revision:p.integer(input.revision,'revision',1),
-    contentHash:p.text(input.contentHash,'contentHash',64),content,route:route(input.route)};
-  if(value.locale!==content.locale||!/^[a-f0-9]{64}$/.test(value.contentHash))p.fail('Publication content identity mismatch');
-  if(input.assets!==undefined){value.assets=p.array(input.assets,'public media',500).map(mediaManifest);if(new Set(value.assets.map(a=>a.sha256)).size!==value.assets.length)p.fail('Duplicate public media');}
+    workId:p.id(input.workId),locale:p.locale(input.locale),revision:p.integer(input.revision,'revision',visible?1:0),
+    contentHash:p.text(input.contentHash,'contentHash',64),...(visible?{content}:{}),route:route(input.route)};
+  if(visible&&value.locale!==content.locale||!/^[a-f0-9]{64}$/.test(value.contentHash))p.fail('Publication content identity mismatch');
+  // Omitted fields preserve the existing v1 publish packet and its hash.
+  if(operation!=='publish')Object.assign(value,{operation,operationSequence:p.integer(input.operationSequence,'operationSequence',1),expectedOperationSequence:p.integer(input.expectedOperationSequence,'expectedOperationSequence',0),expectedRevision:p.integer(input.expectedRevision,'expectedRevision',0)});
+  else if(input.operationSequence!==undefined)value.operationSequence=p.integer(input.operationSequence,'operationSequence',1);
+  if(visible&&input.assets!==undefined){value.assets=p.array(input.assets,'public media',500).map(mediaManifest);if(new Set(value.assets.map(a=>a.sha256)).size!==value.assets.length)p.fail('Duplicate public media');}
   return value;
 }
+const operation=value=>value.operation||'publish';
+const visible=value=>['publish','restore'].includes(operation(value));
 const contentKey=value=>p.hash([value.workId,value.locale]);
-module.exports={publication,publicContent,contentKey,route};
+module.exports={publication,publicContent,contentKey,route,operation,visible};

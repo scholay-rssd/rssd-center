@@ -43,8 +43,17 @@ class RssdPublisher {
     });
   }
   async retry(ctx,id){admin(ctx);p.id(id);return this.store.transaction(async db=>{
-    const row=await one(db,'SELECT * FROM rssd_publications WHERE "orgId"=$1 AND id=$2 FOR UPDATE',ctx.orgId,id);if(!row)p.fail('Publication not found',404);
+    const seed=await one(db,'SELECT * FROM rssd_publications WHERE "orgId"=$1 AND id=$2',ctx.orgId,id);if(!seed)p.fail('Publication not found',404);
+    await execute(db,'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',ctx.orgId+':work:'+seed.workId);
+    const row=await one(db,'SELECT * FROM rssd_publications WHERE "orgId"=$1 AND id=$2 FOR UPDATE',ctx.orgId,id);
     if(row.state!=='blocked')p.fail('Only blocked publications can be resumed',409);
+    const destination=await one(db,'SELECT kind FROM rssd_destinations WHERE "orgId"=$1 AND id=$2',ctx.orgId,row.destinationId);
+    if(destination?.kind==='site'){
+      const action=await one(db,`SELECT id FROM rssd_editorial_actions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND state IN ('queued','dispatching') LIMIT 1`,ctx.orgId,row.workId,row.locale);
+      if(action)p.fail('A website visibility action is pending; preserve the original publication receipt',409,'publication_pending');
+      const visibility=await one(db,'SELECT visibility FROM rssd_editorial_states WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3',ctx.orgId,row.workId,row.locale);
+      if(visibility&&visibility.visibility!=='active')p.fail('Restore or explicitly publish the hidden website edition through a visibility action',409,'edition_hidden');
+    }
     const newer=await one(db,'SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND revision>$5 AND attempts>0',ctx.orgId,row.workId,row.locale,row.destinationId,row.revision);
     if(newer)p.fail('A newer revision has entered this destination; resume the newer publication',409,'stale_revision');
     await execute(db,`UPDATE rssd_publications SET state='queued',error=NULL,receipt=receipt || '{"manualRetry":true}'::jsonb,"nextAttemptAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2`,ctx.orgId,id);return {queued:true};
