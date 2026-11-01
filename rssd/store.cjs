@@ -257,7 +257,7 @@ class RssdStore {
   }
   async publications(ctx,{workspaceId,limit=100,offset=0}={}) {
     if(workspaceId)scope(ctx,p.id(workspaceId));limit=pageNumber(limit,'limit',1,200);offset=pageNumber(offset,'offset',0,1000000);
-    return rows(this.db,`SELECT id,"workId","workspaceId",locale,revision,"destinationId",state,receipt,error,attempts,"createdAt","updatedAt"
+    return rows(this.db,`SELECT id,"workId","workspaceId",locale,revision,"destinationId",state,receipt,error,attempts,"createdAt","updatedAt",payload->'edition'->>'title' AS title
       FROM rssd_publications WHERE "orgId"=$1 AND ($2::text IS NULL OR "workspaceId"=$2)
       AND ($3::jsonb IS NULL OR "workspaceId" IN (SELECT jsonb_array_elements_text($3::jsonb))) ORDER BY "createdAt" DESC,id LIMIT $4 OFFSET $5`,ctx.orgId,workspaceId||null,ctx.workspaceIds===null?null:encoded(ctx.workspaceIds),limit,offset);
   }

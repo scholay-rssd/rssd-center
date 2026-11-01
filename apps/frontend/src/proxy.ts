@@ -17,6 +17,20 @@ export async function proxy(request: NextRequest) {
     request.cookies.get('auth') ||
     request.headers.get('auth') ||
     nextUrl.searchParams.get('loggedAuth');
+  // Preserve only our exact consent route across every existing login provider.
+  const deviceReturn=request.cookies.get('rssd_device_return')?.value;
+  if(authCookie&&deviceReturn&&/^\/rssd\/authorize\?(request=[a-f0-9-]{36}|code=[A-F0-9]{10})$/.test(deviceReturn)){
+    const response=NextResponse.redirect(new URL(deviceReturn,nextUrl.origin));
+    response.cookies.set('rssd_device_return','',{path:'/',maxAge:0});
+    return response;
+  }
+  if(!authCookie&&nextUrl.pathname==='/rssd/authorize'){
+    const id=nextUrl.searchParams.get('request'),code=nextUrl.searchParams.get('code');
+    const query=id&&/^[a-f0-9-]{36}$/.test(id)?'request='+id:code&&/^[A-F0-9]{10}$/.test(code)?'code='+code:'';
+    const response=NextResponse.redirect(new URL('/auth/login',nextUrl.origin));
+    if(query)response.cookies.set('rssd_device_return','/rssd/authorize?'+query,{httpOnly:true,secure:!process.env.NOT_SECURED,sameSite:'lax',path:'/',maxAge:600});
+    return response;
+  }
   const lng = request.cookies.has(cookieName)
     ? acceptLanguage.get(request.cookies.get(cookieName).value)
     : acceptLanguage.get(

@@ -57,6 +57,7 @@ import { WalletProvider } from '@gitroom/backend/services/auth/providers/wallet.
 import { OauthProvider } from '@gitroom/backend/services/auth/providers/oauth.provider';
 import { StripeController } from '@gitroom/backend/api/routes/stripe.controller';
 import { RssdController } from '../rssd/rssd.controller';
+import { RssdAuthController } from '../rssd/rssd.auth.controller';
 import { RssdGuestbookController } from '../rssd/rssd.guestbook.controller';
 import { RssdCommunityController } from '../rssd/rssd.community.controller';
 import { RssdService } from '../rssd/rssd.service';
@@ -97,6 +98,7 @@ const authenticatedController = [
         RootController,
         PaymentController,
         RssdController,
+        RssdAuthController,
         RssdGuestbookController,
         RssdCommunityController,
         StripeController,

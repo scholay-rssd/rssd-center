@@ -1,4 +1,10 @@
 -- Additive RSSD v1 schema. Existing Postiz tables and publications are untouched.
+CREATE TABLE IF NOT EXISTS rssd_device_authorizations (
+ id TEXT PRIMARY KEY,"deviceHash" TEXT NOT NULL UNIQUE,"userCode" TEXT NOT NULL UNIQUE,
+ details JSONB NOT NULL,state TEXT NOT NULL DEFAULT 'pending',"expiresAt" TIMESTAMPTZ(3) NOT NULL,
+ "orgId" TEXT,"userId" TEXT,"workspaceIds" JSONB,"codeHash" TEXT UNIQUE,"nextPollAt" TIMESTAMPTZ(3)
+);
+CREATE INDEX IF NOT EXISTS rssd_device_authorizations_expiry ON rssd_device_authorizations ("expiresAt");
 CREATE TABLE IF NOT EXISTS rssd_guestbooks (
  "siteId" TEXT PRIMARY KEY,"orgId" TEXT NOT NULL,"workspaceId" TEXT NOT NULL,
  config JSONB NOT NULL,"sealedSecret" TEXT NOT NULL,"proxyTokenHash" TEXT NOT NULL,
