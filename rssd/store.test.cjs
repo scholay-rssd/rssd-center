@@ -518,7 +518,7 @@ test('legacy import preserves revisions and receipts, is replayable, and fences 
   await save('manifest.json',manifest);
   const first=await migration.import(f.owner,directory),second=await migration.import(f.owner,directory);assert.equal(first.editionIndexSha256,second.editionIndexSha256);
   assert.equal((await store.work(f.owner,value.workId)).editions[0].hash,value.editions[0].hash);
-  const pubs=await store.publications(f.owner);assert.equal(pubs.length,1);assert.equal(pubs[0].state,'legacy_published');assert.equal(pubs[0].receipt.requests[0].key,'original-request');
+  const pubs=await store.publications(f.owner);assert.equal(pubs.length,1);assert.equal(pubs[0].state,'legacy_published');assert.equal(pubs[0].receipt.requests[0].key,'original-request');assert.equal(pubs[0].title,payload.title);assert.equal('payload' in pubs[0],false);assert.equal('bodyMarkdown' in pubs[0],false);
   await assert.rejects(store.submit(f.owner,{...f.packet,baseRevisions:{en:1}}),{code:'migration_staged'});
   assert.equal((await store.registry(f.owner)).workspaces[0].writable,false);
   await assert.rejects(store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Cannot start before cutover'}),{code:'migration_staged'});
