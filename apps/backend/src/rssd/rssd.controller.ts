@@ -45,6 +45,22 @@ export class RssdController {
     res.status(200).json(result);
   }
   @Get('/identity') identity(@Req() req: any) { return {protocolVersion: 1, ...req.rssd}; }
+  @Get('/private-review/:workspaceId')
+  @Header('Cache-Control','private, no-store')
+  @Header('X-Content-Type-Options','nosniff')
+  @Header('Content-Security-Policy',"default-src 'none'")
+  privateReviewList(@Req() req: any, @Param('workspaceId') workspaceId: string) { return this.rssd.privateReview.list(req.rssd, workspaceId); }
+  @Get('/private-review/:workspaceId/:siteId/:id')
+  @Header('Cache-Control','private, no-store')
+  @Header('X-Content-Type-Options','nosniff')
+  @Header('Content-Security-Policy',"default-src 'none'")
+  privateReviewDetail(@Req() req: any, @Param('workspaceId') workspaceId: string, @Param('siteId') siteId: string, @Param('id') id: string) { return this.rssd.privateReview.detail(req.rssd, workspaceId, siteId, id); }
+  @Get('/private-review/:workspaceId/:siteId/:id/files/:index')
+  async privateReviewFile(@Req() req: any, @Param('workspaceId') workspaceId: string, @Param('siteId') siteId: string, @Param('id') id: string, @Param('index') index: string, @Res() res: any) {
+    if (!/^(0|[1-9][0-9]*)$/.test(index)) { res.status(404).set('Cache-Control','private, no-store').json({message:'Private record unavailable'}); return; }
+    const bytes = await this.rssd.privateReview.file(req.rssd, workspaceId, siteId, id, Number(index));
+    res.set({'Content-Type':'application/octet-stream','Content-Disposition':'attachment; filename="private-evidence.bin"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'"}).send(bytes);
+  }
   @Get('/health') health(@Req() req: any) { return health(this.rssd.store, req.rssd); }
   @Get('/labels') labels(@Req() req: any) { return this.rssd.labels.feed(req.rssd); }
   @Get('/community') community(@Req() req: any) { return this.rssd.community.status(req.rssd); }

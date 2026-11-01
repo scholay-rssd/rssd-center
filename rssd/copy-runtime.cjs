@@ -20,4 +20,5 @@ copyDirectory(join(__dirname,'legacy-labels'),join(target,'legacy-labels'));
 for(const file of ['community.cjs','community-engine.mjs'])copyFileSync(join(__dirname,file),join(target,file));
 copyFileSync(join(__dirname,'editorial.cjs'),join(target,'editorial.cjs'));
 copyFileSync(join(__dirname,'editorial-actions.cjs'),join(target,'editorial-actions.cjs'));
+copyFileSync(join(__dirname,'private-review.cjs'),join(target,'private-review.cjs'));
 copyDirectory(join(__dirname,'community-public'),join(target,'community-public'));

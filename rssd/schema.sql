@@ -123,6 +123,25 @@ CREATE TABLE IF NOT EXISTS rssd_editorial_actions (
  PRIMARY KEY ("orgId",id),UNIQUE ("orgId","workspaceId","requestKey")
 );
 
+-- Private handoff evidence is an isolated review queue, never a publication or
+-- demand. Legacy keys remain evidence and review IDs are generated independently.
+CREATE TABLE IF NOT EXISTS rssd_private_review_items (
+ "orgId" TEXT NOT NULL,"workspaceId" TEXT NOT NULL,"siteId" TEXT NOT NULL,"legacyKey" TEXT NOT NULL,"articleId" TEXT NOT NULL,
+ id TEXT NOT NULL,fingerprint TEXT NOT NULL,"bundleDigest" TEXT NOT NULL,metadata JSONB NOT NULL,
+ state TEXT NOT NULL DEFAULT 'needs_reconciliation' CHECK(state='needs_reconciliation'),
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY("orgId","workspaceId","legacyKey"),UNIQUE("orgId","workspaceId",id)
+);
+CREATE TABLE IF NOT EXISTS rssd_private_review_files (
+ "orgId" TEXT NOT NULL,"workspaceId" TEXT NOT NULL,"legacyKey" TEXT NOT NULL,path TEXT NOT NULL,sha256 TEXT NOT NULL,bytes INTEGER NOT NULL,data BYTEA NOT NULL,
+ PRIMARY KEY("orgId","workspaceId","legacyKey",path),
+ FOREIGN KEY("orgId","workspaceId","legacyKey") REFERENCES rssd_private_review_items("orgId","workspaceId","legacyKey")
+);
+CREATE TABLE IF NOT EXISTS rssd_private_review_access (
+ "orgId" TEXT NOT NULL,"workspaceId" TEXT NOT NULL,actor TEXT NOT NULL,action TEXT NOT NULL,"reviewId" TEXT,
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Coordination is additive. Original Postiz publishing tables remain authoritative.
 CREATE TABLE IF NOT EXISTS rssd_goals (
  "orgId" TEXT NOT NULL,id TEXT NOT NULL,"workspaceId" TEXT NOT NULL,"sectionId" TEXT NOT NULL,

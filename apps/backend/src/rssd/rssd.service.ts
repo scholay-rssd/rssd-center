@@ -18,6 +18,7 @@ const { RssdLabels } = require('../../../../rssd/labels.cjs');
 const { RssdCommunity } = require('../../../../rssd/community.cjs');
 const { RssdEditorial } = require('../../../../rssd/editorial.cjs');
 const { RssdEditorialActions } = require('../../../../rssd/editorial-actions.cjs');
+const { RssdPrivateReview } = require('../../../../rssd/private-review.cjs');
 
 @Injectable()
 export class RssdService implements OnModuleInit, OnModuleDestroy {
@@ -33,9 +34,11 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   readonly labels = new RssdLabels();
   readonly community: any;
   readonly editorial: any;
+  readonly privateReview: any;
   private timer?: ReturnType<typeof setInterval>;
   constructor(prisma: PrismaService, posts: PostsService, temporal: TemporalService) {
     this.store = new RssdStore(prisma);
+    this.privateReview = new RssdPrivateReview(this.store);
     this.coordination = new RssdCoordination(this.store);
     this.mcp = new RssdMcp(this.store, this.coordination);
     this.authorization = new DeviceAuthorization(this.store, {verifyOwner: async (orgId: string, userId: string) =>
