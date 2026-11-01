@@ -1,11 +1,12 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, Res, UseFilters, Catch, ExceptionFilter, ArgumentsHost } from '@nestjs/common';
+import { Body, Controller, Get, Param, Patch, Post, Query, Req, Res, UseFilters, UseGuards, Header, Catch, ExceptionFilter, ArgumentsHost } from '@nestjs/common';
+import { ThrottlerRealIpGuard } from '@gitroom/nestjs-libraries/throttler/throttler.provider';
 import { Throttle } from '@nestjs/throttler';
 import { RssdService } from './rssd.service';
 const { ProtocolError } = require('../../../../rssd/protocol.cjs');
 const { health } = require('../../../../rssd/health.cjs');
 
 @Catch(ProtocolError)
-class RssdProtocolFilter implements ExceptionFilter {
+export class RssdProtocolFilter implements ExceptionFilter {
   catch(error: any, host: ArgumentsHost) {
     host.switchToHttp().getResponse().status(error.status).json({message: error.message, code: error.code});
   }
@@ -16,6 +17,16 @@ class RssdProtocolFilter implements ExceptionFilter {
 @Throttle({ default: { limit: 600, ttl: 60000 } })
 export class RssdController {
   constructor(private rssd: RssdService) {}
+  @Get('/auth/request')
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(ThrottlerRealIpGuard)
+  @Throttle({ default: { limit: 12, ttl: 60000 } })
+  authorization(@Req() req: any, @Query() query: any) { return this.rssd.authorization.describe(req.rssd, query); }
+  @Post('/auth/requests/:id/decision')
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(ThrottlerRealIpGuard)
+  @Throttle({ default: { limit: 12, ttl: 60000 } })
+  authorize(@Req() req: any, @Param('id') id: string, @Body() body: any) { return this.rssd.authorization.decide(req.rssd,id,body); }
   @Get('/identity') identity(@Req() req: any) { return {protocolVersion: 1, ...req.rssd}; }
   @Get('/health') health(@Req() req: any) { return health(this.rssd.store, req.rssd); }
   @Get('/labels') labels(@Req() req: any) { return this.rssd.labels.feed(req.rssd); }

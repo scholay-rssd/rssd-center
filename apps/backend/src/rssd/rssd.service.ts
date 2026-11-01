@@ -7,6 +7,7 @@ import { organizationId, postId } from '@gitroom/nestjs-libraries/temporal/tempo
 import { UploadFactory } from '@gitroom/nestjs-libraries/upload/upload.factory';
 // The versioned domain runtime is packaged into dist/rssd by the backend build.
 const { RssdStore } = require('../../../../rssd/store.cjs');
+const { DeviceAuthorization } = require('../../../../rssd/device-auth.cjs');
 const { RssdPublisher } = require('../../../../rssd/publisher.cjs');
 const { RssdMedia } = require('../../../../rssd/media.cjs');
 const { RssdPostiz } = require('../../../../rssd/postiz.cjs');
@@ -19,6 +20,7 @@ const { RssdEditorialActions } = require('../../../../rssd/editorial-actions.cjs
 @Injectable()
 export class RssdService implements OnModuleInit, OnModuleDestroy {
   readonly store: any;
+  readonly authorization: any;
   readonly publisher: any;
   readonly media: any;
   readonly postiz: any;
@@ -29,6 +31,8 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   private timer?: ReturnType<typeof setInterval>;
   constructor(prisma: PrismaService, posts: PostsService, temporal: TemporalService) {
     this.store = new RssdStore(prisma);
+    this.authorization = new DeviceAuthorization(this.store, {verifyOwner: async (orgId: string, userId: string) =>
+      (await prisma.$queryRawUnsafe('SELECT id FROM "UserOrganization" WHERE "organizationId"=$1 AND "userId"=$2 AND disabled=false AND role IN (\'ADMIN\',\'SUPERADMIN\')',orgId,userId) as any[]).length>0});
     this.community = new RssdCommunity(this.store);
     this.guestbook = new RssdGuestbook(this.store, {secret: process.env.RSSD_ENCRYPTION_KEY || process.env.JWT_SECRET});
     this.media = new RssdMedia(this.store, {directory: process.env.RSSD_MEDIA_DIRECTORY, origin: process.env.FRONTEND_URL});

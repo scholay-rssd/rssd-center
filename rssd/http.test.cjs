@@ -2,6 +2,7 @@
 require('reflect-metadata');
 const {test}=require('node:test'),assert=require('node:assert/strict');
 const {Test}=require('@nestjs/testing');
+const {ThrottlerModule}=require('@nestjs/throttler');
 // Only replace the service dependency; exercise the shipped controller and
 // Nest/Express serialization through real HTTP, including explicit JSON null.
 const path=require.resolve('../apps/backend/dist/apps/backend/src/rssd/rssd.service.js');
@@ -10,6 +11,18 @@ require.cache[path]={id:path,filename:path,loaded:true,exports:{RssdService}};
 const {RssdController}=require('../apps/backend/dist/apps/backend/src/rssd/rssd.controller.js');
 const {RssdGuestbookController}=require('../apps/backend/dist/apps/backend/src/rssd/rssd.guestbook.controller.js');
 const {RssdCommunityController}=require('../apps/backend/dist/apps/backend/src/rssd/rssd.community.controller.js');
+const {RssdAuthController}=require('../apps/backend/dist/apps/backend/src/rssd/rssd.auth.controller.js');
+
+test('device bootstrap routes are no-store, independently rate-limited and preserve protocol errors',async t=>{
+ const {ThrottlerModule}=require('@nestjs/throttler'),{ProtocolError}=require('../apps/backend/dist/rssd/protocol.cjs');
+ let started=0;
+ const module=await Test.createTestingModule({imports:[ThrottlerModule.forRoot([{ttl:60000,limit:100}])],controllers:[RssdAuthController],providers:[{provide:RssdService,useValue:{authorization:{start:async()=>{started++;return {requestId:'synthetic-request'};},exchange:async()=>{throw new ProtocolError('Waiting for approval',400,'authorization_pending');}}}}]}).compile();
+ const app=module.createNestApplication();app.useLogger(false);await app.listen(0,'127.0.0.1');t.after(()=>app.close());
+ const origin=await app.getUrl();const post=path=>fetch(origin+'/rssd/v1/auth/'+path,{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+ const token=await post('token');assert.equal(token.status,400);assert.equal((await token.json()).code,'authorization_pending');
+ for(let i=0;i<6;i++){const response=await post('start');assert.equal(response.status,201);assert.equal(response.headers.get('cache-control'),'no-store');}
+ assert.equal((await post('start')).status,429);assert.equal(started,6);
+});
 
 test('forum webhook receives original signed bytes and enforces the small raw body limit',async t=>{
  const original=Buffer.from('{ "post": { "cooked": "虚构正文" } }\n');let calls=0;
@@ -36,7 +49,7 @@ test('guestbook HTTP session keeps secure same-site cookies and owner fields out
 });
 test('idle and active claims are valid JSON over the production HTTP controller',async t=>{
  let current=null;
- const module=await Test.createTestingModule({controllers:[RssdController],providers:[{provide:RssdService,useValue:{store:{claim:async()=>current,activeClaim:async()=>current}}}]}).compile();
+ const module=await Test.createTestingModule({imports:[ThrottlerModule.forRoot([{ttl:60000,limit:100}])],controllers:[RssdController],providers:[{provide:RssdService,useValue:{store:{claim:async()=>current,activeClaim:async()=>current}}}]}).compile();
  const app=module.createNestApplication();app.useLogger(false);
  await app.listen(0,'127.0.0.1');t.after(()=>app.close());
  const origin=await app.getUrl();
@@ -58,7 +71,7 @@ test('editorial HTTP bridge preserves nested paths, query options, request keys 
    if(path.join('/')==='actions')throw new ProtocolError('Action awaits receiver handover',409,'center_action_pending');
    return {centerManaged:true,path,requestKey:body?.requestKey};
  }}};
- const module=await Test.createTestingModule({controllers:[RssdController],providers:[{provide:RssdService,useValue:service}]}).compile();
+ const module=await Test.createTestingModule({imports:[ThrottlerModule.forRoot([{ttl:60000,limit:100}])],controllers:[RssdController],providers:[{provide:RssdService,useValue:service}]}).compile();
  const app=module.createNestApplication();app.useLogger(false);app.use((req,res,next)=>{req.rssd={orgId:'synthetic',workspaceIds:['research']};next();});
  await app.listen(0,'127.0.0.1');t.after(()=>app.close());const base=await app.getUrl()+'/rssd/v1/editorial/research';
  let response=await fetch(base+'/drafts/requests/original-request');assert.equal(response.status,200);assert.deepEqual((await response.json()).path,['drafts','requests','original-request']);

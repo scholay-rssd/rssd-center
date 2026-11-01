@@ -38,6 +38,37 @@ async function fixture() {
   return {owner,worker,ctx,packet};
 }
 
+test('device authorization validates PKCE, owner scope and single-use exchange without exposing credentials',async()=>{
+ const {DeviceAuthorization,CALLBACK}=require('./device-auth.cjs'),{createHash}=require('node:crypto');
+ const f=await fixture(),auth=new DeviceAuthorization(store,{publicOrigin:'https://center.example',verifyOwner:async()=>true}),verifier='a'.repeat(64);
+ const input={mode:'desktop',name:'Synthetic Mac',redirectUri:CALLBACK,state:'b'.repeat(64),codeChallengeMethod:'S256',codeChallenge:createHash('sha256').update(verifier).digest('base64url')};
+ await assert.rejects(auth.start({...input,redirectUri:'https://evil.example'}),{code:'invalid_request'});
+ const started=await auth.start(input);assert.equal(started.deviceCode,undefined);assert.equal(started.expiresIn,300);
+ await assert.rejects(auth.describe(f.ctx,{requestId:started.requestId}),{code:'forbidden'});
+ const description=await auth.describe(f.owner,{requestId:started.requestId});assert.equal(description.name,'Synthetic Mac');assert.equal(description.challenge,undefined);
+ await assert.rejects(auth.decide(f.owner,started.requestId,{approved:true,workspaceIds:['another-tenant']}),{status:404});
+ const decision=await auth.decide(f.owner,started.requestId,{approved:true,workspaceIds:['research']});
+ const callback=new URL(decision.callback),exchange={grantType:'authorization_code',code:callback.searchParams.get('code'),codeVerifier:verifier,redirectUri:CALLBACK};
+ assert.equal(callback.searchParams.get('state'),input.state);
+ await assert.rejects(auth.exchange({...exchange,codeVerifier:'x'.repeat(64)}),{code:'invalid_grant'});
+ const results=await Promise.allSettled([auth.exchange(exchange),auth.exchange(exchange)]);assert.equal(results.filter(x=>x.status==='fulfilled').length,1);
+ const token=results.find(x=>x.status==='fulfilled').value.token;assert.equal((await store.authenticate(token)).orgId,f.owner.orgId);
+ const data=(await db.$queryRawUnsafe('SELECT * FROM rssd_device_authorizations WHERE id=$1',started.requestId))[0];assert(!JSON.stringify(data).includes(token));assert(!JSON.stringify(data).includes(exchange.code));
+});
+test('headless authorization handles pending, slowdown, denial, expiry and scoped revocation',async()=>{
+ const {DeviceAuthorization}=require('./device-auth.cjs'),f=await fixture();let ownerEnabled=true;const auth=new DeviceAuthorization(store,{publicOrigin:'https://center.example',verifyOwner:async()=>ownerEnabled});
+ const start=await auth.start({mode:'device',name:'Synthetic Linux'}),exchange={grantType:'device_code',deviceCode:start.deviceCode};
+ assert.equal((await auth.describe(f.owner,{userCode:start.userCode})).requestId,start.requestId);
+ await assert.rejects(auth.exchange(exchange),{code:'authorization_pending'});await assert.rejects(auth.exchange(exchange),{code:'slow_down'});
+ await auth.decide(f.owner,start.requestId,{approved:true,workspaceIds:['research']});
+ await db.$executeRawUnsafe('UPDATE rssd_device_authorizations SET "nextPollAt"=CURRENT_TIMESTAMP-interval \'1 second\' WHERE id=$1',start.requestId);
+ const connected=await auth.exchange(exchange);assert.deepEqual(connected.identity.workspaceIds,['research']);
+ await store.revokeWorker(f.owner,connected.identity.workerId);await assert.rejects(store.authenticate(connected.token),{status:401});
+ const denied=await auth.start({mode:'device',name:'Denied'});await auth.decide(f.owner,denied.requestId,{approved:false});await assert.rejects(auth.exchange({grantType:'device_code',deviceCode:denied.deviceCode}),{code:'access_denied'});
+ const expired=await auth.start({mode:'device',name:'Expired'});await db.$executeRawUnsafe('UPDATE rssd_device_authorizations SET "expiresAt"=CURRENT_TIMESTAMP-interval \'1 second\' WHERE id=$1',expired.requestId);await assert.rejects(auth.describe(f.owner,{requestId:expired.requestId}),{code:'expired_token'});
+ const removed=await auth.start({mode:'device',name:'Former owner'});await auth.decide(f.owner,removed.requestId,{approved:true,workspaceIds:['research']});ownerEnabled=false;await assert.rejects(auth.exchange({grantType:'device_code',deviceCode:removed.deviceCode}),{code:'access_denied'});
+});
+
 async function editorialFixture({origin='https://example.org'}={}){
  const f=await fixture();
  const publisher=new RssdPublisher(store,{secret:'synthetic editorial fixture secret key'});
