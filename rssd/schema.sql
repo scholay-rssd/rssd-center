@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS rssd_editorial_actions (
  PRIMARY KEY ("orgId",id),UNIQUE ("orgId","workspaceId","requestKey")
 );
 
--- Coordination is additive; original Postiz publishing tables remain authoritative.
+-- Coordination is additive. Original Postiz publishing tables remain authoritative.
 CREATE TABLE IF NOT EXISTS rssd_goals (
  "orgId" TEXT NOT NULL,id TEXT NOT NULL,"workspaceId" TEXT NOT NULL,"sectionId" TEXT NOT NULL,
  revision INTEGER NOT NULL DEFAULT 1,payload JSONB NOT NULL,status JSONB NOT NULL DEFAULT '{}',

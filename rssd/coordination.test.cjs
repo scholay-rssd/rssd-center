@@ -8,7 +8,7 @@ before(async()=>{
  const config=process.env.RSSD_TEST_DATABASE_URL_FILE?JSON.parse(fs.readFileSync(process.env.RSSD_TEST_DATABASE_URL_FILE,'utf8')):{connectionString:process.env.RSSD_TEST_DATABASE_URL};
  if(!/^rssd_.*test/.test(config.database||new URL(config.connectionString).pathname.slice(1)))throw Error('Dedicated test database required');
  control=new Client(config);await control.connect();await control.query('CREATE SCHEMA '+schema);await control.query('SET search_path TO '+schema);
- await control.query(fs.readFileSync(path.join(__dirname,'postiz-schema.sql'),'utf8'));await control.query(fs.readFileSync(path.join(__dirname,'schema.sql'),'utf8'));
+ await control.query(fs.readFileSync(path.join(__dirname,'postiz-schema.sql'),'utf8'));for(const sql of fs.readFileSync(path.join(__dirname,'schema.sql'),'utf8').split(';').filter(s=>s.trim()))await control.query(sql);
  pool=new Pool({...config,max:16,options:'-c search_path='+schema});db=adapter(pool);store=new RssdStore(db);coord=new RssdCoordination(store);
 });
 after(async()=>{if(pool)await pool.end();if(control){await control.query('SET search_path TO public');await control.query('DROP SCHEMA IF EXISTS '+schema+' CASCADE');await control.end();}});
