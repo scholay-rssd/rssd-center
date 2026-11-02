@@ -40,7 +40,7 @@ def unchanged_dependency_mtime(path, old, new):
  if parts[2] in {'next','@next','.cache','.pnpm'}:return False
  if any(p.lower() in {'cache','.cache','caches'} for p in parts):return False
  if old is None or new is None:return False
- if old['type'] not in ('0','\x00','5','2'):return False
+ if old['type'] not in ('0','\x00','2'):return False
  return {k:v for k,v in old.items() if k!='mtime'}=={k:v for k,v in new.items() if k!='mtime'}
 
 def write(path,value):
@@ -82,13 +82,20 @@ def main():
    print('CONFIG_CHANGED_KEYS',sorted(k for k in oldconfig.keys()|newconfig.keys() if oldconfig.get(k)!=newconfig.get(k)));raise RuntimeError('Image startup configuration differs')
   print('FULL_ROOT_COUNTS',len(a),len(b),'CHANGED_PATHS',len(changed));print('DIFF_GROUPS',dict(Counter(x.split('/')[0] for x in changed)))
   with open('/tmp/center-overlay/changed.json','w') as out:json.dump([{'path':p,'old':a.get(p),'new':b.get(p)} for p in changed],out,indent=2)
-  if not changed or len(changed)>50000:raise RuntimeError('Unexpectedly large complete difference set')
+  if not changed or len(changed)>100000:raise RuntimeError('Unexpectedly large complete difference set')
   safe=re.compile(r'^[a-zA-Z0-9_./@+~,()\[\]-]+$')
   if any(not safe.fullmatch(p) or p.startswith('/') or '..' in p.split('/') for p in changed):raise RuntimeError('Unexpected path')
   removes=[p for p in changed if p not in b or p in a and p in b and a[p]['type']!=b[p]['type']]
   for p in removes:
    if a[p]['type']=='5' and any(q.startswith(p+'/') for q in b):raise RuntimeError('Removing a nonempty target directory')
   needed={p for p in changed if p in b}
+  # Extracting or deleting a child changes its parent directory mtime even
+  # when that directory's old and target metadata originally matched.
+  for path in changed:
+   parts=path.split('/')
+   for n in range(1,len(parts)):
+    parent='/'.join(parts[:n])
+    if parent in b and b[parent]['type']=='5':needed.add(parent)
   if any(b[p]['type'] not in ('0','\x00','5','2','1') for p in needed):raise RuntimeError('Delta has unsupported file types')
   for p in needed:
    if b[p]['type']=='1':
