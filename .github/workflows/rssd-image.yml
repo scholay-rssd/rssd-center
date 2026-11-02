@@ -1,52 +1,24 @@
-name: Synthetic Center AMD64 smoke
+name: Center AMD64 image space measurement
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  smoke:
+  measurement:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - name: Boot pinned image with disconnected synthetic services
+      - name: Measure independently pulled official images
         shell: bash
         run: |
           set -euo pipefail
-          center='ghcr.io/scholay-rssd/rssd-center@sha256:2c9b5124221c22ddad8e79afdc60c6fc053ba582ca99eacaa7ef8ba2e9be85e1'
-          postgres='postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24'
-          redis='redis:7.2@sha256:46f15cf64fdef63e483dcda99e74e3d51c017b1175547b6bb874152ee2391aad'
-          temporal='temporalio/auto-setup:1.28.1@sha256:607d68caa111338d754771efb876c92dfcdae06d056e4530bb31cd0f37406e6a'
-          es='elasticsearch:7.17.27@sha256:9a6443f55243f6acbfeb4a112d15eb3b9aac74bf25e0e39fa19b3ddd3a6879d0'
-          cleanup() { docker rm -f -v center-synthetic temporal-synthetic temporal-pg-synthetic es-synthetic redis-synthetic pg-synthetic >/dev/null 2>&1 || true; docker network rm synthetic-isolated >/dev/null 2>&1 || true; }
-          trap cleanup EXIT
-          for image in "$center" "$postgres" "$redis" "$temporal" "$es"; do docker pull --platform linux/amd64 "$image" >/dev/null; done
-          test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$center")" = e80818aa55a6caa1d777eed958cc9c0aee944368
-          docker network create --internal synthetic-isolated >/dev/null
-          docker run -d --name pg-synthetic --network synthetic-isolated --cpus 0.5 --memory 512m -e POSTGRES_PASSWORD=synthetic -e POSTGRES_DB=fixture "$postgres" >/dev/null
-          docker run -d --name temporal-pg-synthetic --network synthetic-isolated --cpus 0.5 --memory 512m -e POSTGRES_USER=temporal -e POSTGRES_PASSWORD=synthetic "$postgres" >/dev/null
-          docker run -d --name redis-synthetic --network synthetic-isolated --memory 128m "$redis" >/dev/null
-          docker run -d --name es-synthetic --network synthetic-isolated --cpus 1 --memory 768m -e discovery.type=single-node -e xpack.security.enabled=false -e 'ES_JAVA_OPTS=-Xms256m -Xmx256m' "$es" >/dev/null
-          docker run -d --name temporal-synthetic --network synthetic-isolated --cpus 1 --memory 1024m -e DB=postgres12 -e DB_PORT=5432 -e POSTGRES_USER=temporal -e POSTGRES_PWD=synthetic -e POSTGRES_SEEDS=temporal-pg-synthetic -e ENABLE_ES=true -e ES_SEEDS=es-synthetic -e ES_VERSION=v7 -e TEMPORAL_NAMESPACE=default "$temporal" >/dev/null
-          ready=0
-          for i in $(seq 1 120); do
-            if docker logs temporal-synthetic 2>&1 | grep -q 'Search attributes have been added'; then ready=1; break; fi
-            sleep 2
-          done
-          if [ "$ready" != 1 ]; then docker logs --tail 50 temporal-synthetic; exit 1; fi
-          docker run -d --name center-synthetic --network synthetic-isolated --cpus 1 --memory 1500m \
-            -e DATABASE_URL='postgresql://postgres:synthetic@pg-synthetic:5432/fixture' -e REDIS_URL=redis://redis-synthetic:6379 -e TEMPORAL_ADDRESS=temporal-synthetic:7233 \
-            -e MAIN_URL=http://localhost:5000 -e FRONTEND_URL=http://localhost:5000 -e NEXT_PUBLIC_BACKEND_URL=http://localhost:5000/api -e BACKEND_INTERNAL_URL=http://localhost:3000 \
-            -e JWT_SECRET=synthetic-fixture-secret-not-production -e IS_GENERAL=true -e DISABLE_REGISTRATION=true -e STORAGE_PROVIDER=local -e UPLOAD_DIRECTORY=/uploads -e NEXT_PUBLIC_UPLOAD_DIRECTORY=/uploads \
-            -e RSSD_INITIALIZE_EMPTY_DATABASE=1 -e RSSD_DISPATCH_ENABLED=0 -e RSSD_POSTIZ_ORCHESTRATOR_ENABLED=0 "$center" >/dev/null
-          ready=0
-          for i in $(seq 1 120); do
-            if docker exec center-synthetic node -e 'require("http").get("http://127.0.0.1:5000/api/",r=>{r.resume();process.exit(r.statusCode===200?0:1)}).on("error",()=>process.exit(1))'; then ready=1; break; fi
-            sleep 2
-          done
-          if [ "$ready" != 1 ]; then docker logs --tail 80 center-synthetic; exit 1; fi
-          test "$(docker exec center-synthetic node --version)" = v22.20.0
-          docker exec center-synthetic node rssd/apply-schema.cjs
-          docker exec -i center-synthetic node < .github/scripts/synthetic-center-smoke.cjs
+          old='ghcr.io/scholay-rssd/rssd-center@sha256:d550dd8e433c39a25da7d38b1097c75522f9f29e88fec478b7766c2a24da12a3'
+          new='ghcr.io/scholay-rssd/rssd-center@sha256:2c9b5124221c22ddad8e79afdc60c6fc053ba582ca99eacaa7ef8ba2e9be85e1'
+          docker pull --platform linux/amd64 "$old" >/dev/null
+          old_free=$(df -B1 --output=avail /var/lib/docker | tail -1 | tr -d ' ')
+          docker pull --platform linux/amd64 "$new" >/dev/null
+          new_free=$(df -B1 --output=avail /var/lib/docker | tail -1 | tr -d ' ')
+          echo "OLD_IMAGE_BYTES=$(docker image inspect --format '{{.Size}}' "$old")"
+          echo "NEW_IMAGE_BYTES=$(docker image inspect --format '{{.Size}}' "$new")"
+          echo "INCREMENTAL_DISK_BYTES=$((old_free-new_free))"
+          docker system df
