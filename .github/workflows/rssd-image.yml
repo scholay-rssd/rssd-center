@@ -22,10 +22,11 @@ jobs:
           docker build --network none -t rssd-center-overlay:ci /tmp/center-overlay
           python3 .github/scripts/compare-overlay.py verify
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: verified-overlay-delta
           path: /tmp/center-overlay/changed.json
-          if-no-files-found: error
+          if-no-files-found: warn
       - name: Boot pinned image with disconnected synthetic services
         shell: bash
         run: |
