@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Compare immutable, public image filesystems; create a verified overlay recipe."""
-import hashlib,json,os,re,subprocess,sys,tarfile
+import hashlib,json,os,re,shlex,subprocess,sys,tarfile
 from collections import Counter
 OLD='ghcr.io/scholay-rssd/rssd-center@sha256:d550dd8e433c39a25da7d38b1097c75522f9f29e88fec478b7766c2a24da12a3'
 NEW='ghcr.io/scholay-rssd/rssd-center@sha256:2c9b5124221c22ddad8e79afdc60c6fc053ba582ca99eacaa7ef8ba2e9be85e1'
@@ -49,7 +49,29 @@ def main():
  os.makedirs('/tmp/center-overlay',exist_ok=True)
  if sys.argv[1]=='prepare':
   a,b=inventory(OLD),inventory(NEW)
-  allowed=[p for p in diff(a,b) if unchanged_dependency_mtime(p,a.get(p),b.get(p))]
+  allowed={p for p in diff(a,b) if unchanged_dependency_mtime(p,a.get(p),b.get(p))}
+  # Preserve a hardlink only together with its identical regular-file target;
+  # inventory confirms both images have the same target and other metadata.
+  for p in diff(a,b):
+   old,new=a.get(p),b.get(p)
+   if not old or not new or old['type']!='1' or new['type']!='1':continue
+   target=new['link'].removeprefix('./')
+   if target not in allowed or not p.startswith('app/node_modules/'):continue
+   parts=p.split('/')
+   if parts[2] in {'next','@next','.cache','.pnpm'} or any(v.lower() in {'cache','.cache','caches'} for v in parts):continue
+   if {k:v for k,v in old.items() if k!='mtime'}!={k:v for k,v in new.items() if k!='mtime'}:continue
+   if a[target]['type'] not in ('0','\x00') or b[target]['type'] not in ('0','\x00'):continue
+   allowed.add(p)
+  # A hardlink shares mtime with its target. Never retain only part of a
+  # group: if one alias is out of scope, reproduce the whole group.
+  blocked_targets=set()
+  for p,new in b.items():
+   if new['type']=='1':
+    target=new['link'].removeprefix('./')
+    if p not in allowed and target in allowed:blocked_targets.add(target)
+  allowed.difference_update(blocked_targets)
+  allowed={p for p in allowed if b[p]['type']!='1' or b[p]['link'].removeprefix('./') not in blocked_targets}
+  allowed=sorted(allowed)
   for p in allowed:b[p]['mtime']=a[p]['mtime']
   changed=diff(a,b)
   write('/tmp/center-overlay/new.json',b)
@@ -61,13 +83,18 @@ def main():
   print('FULL_ROOT_COUNTS',len(a),len(b),'CHANGED_PATHS',len(changed));print('DIFF_GROUPS',dict(Counter(x.split('/')[0] for x in changed)))
   with open('/tmp/center-overlay/changed.json','w') as out:json.dump([{'path':p,'old':a.get(p),'new':b.get(p)} for p in changed],out,indent=2)
   if not changed or len(changed)>50000:raise RuntimeError('Unexpectedly large complete difference set')
-  safe=re.compile(r'^[a-zA-Z0-9_./@+~,-]+$')
+  safe=re.compile(r'^[a-zA-Z0-9_./@+~,()\[\]-]+$')
   if any(not safe.fullmatch(p) or p.startswith('/') or '..' in p.split('/') for p in changed):raise RuntimeError('Unexpected path')
   removes=[p for p in changed if p not in b or p in a and p in b and a[p]['type']!=b[p]['type']]
   for p in removes:
    if a[p]['type']=='5' and any(q.startswith(p+'/') for q in b):raise RuntimeError('Removing a nonempty target directory')
   needed={p for p in changed if p in b}
-  if any(b[p]['type'] not in ('0','\x00','5','2') for p in needed):raise RuntimeError('Delta has unsupported file types')
+  if any(b[p]['type'] not in ('0','\x00','5','2','1') for p in needed):raise RuntimeError('Delta has unsupported file types')
+  for p in needed:
+   if b[p]['type']=='1':
+    target=b[p]['link'].removeprefix('./')
+    if target not in needed or b.get(target,{}).get('type') not in ('0','\x00'):
+     raise RuntimeError('Hardlink target is not safely included in patch')
   container=command('docker','create',NEW).strip()
   try:
    process=subprocess.Popen(['docker','export',container],stdout=subprocess.PIPE)
@@ -83,7 +110,7 @@ def main():
   finally:subprocess.run(['docker','rm','-v',container],stdout=subprocess.DEVNULL,check=False)
   lines=['# Derived in isolated CI; immutable public source images.',f'FROM {OLD}']
   ordered=sorted(removes,key=lambda x:(-x.count('/'),x))
-  for i in range(0,len(ordered),100):lines.append('RUN rm -rf -- '+' '.join('/'+p for p in ordered[i:i+100]))
+  for i in range(0,len(ordered),100):lines.append('RUN rm -rf -- '+' '.join(shlex.quote('/'+p) for p in ordered[i:i+100]))
   lines.append('ADD patch.tar /')
   lines.append('LABEL org.opencontainers.image.revision="e80818aa55a6caa1d777eed958cc9c0aee944368" io.rssd.image.kind="experimental-derived-overlay" io.rssd.image.base-digest="sha256:d550dd8e433c39a25da7d38b1097c75522f9f29e88fec478b7766c2a24da12a3" io.rssd.image.target-digest="sha256:2c9b5124221c22ddad8e79afdc60c6fc053ba582ca99eacaa7ef8ba2e9be85e1"')
   open('/tmp/center-overlay/Dockerfile','w').write('\n'.join(lines)+'\n')
