@@ -11,6 +11,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Test hardlinks and escaped paths with synthetic files
+        run: python3 .github/scripts/overlay-synthetic-fixture.py
       - name: Prove complete delta and build isolated overlay
         shell: bash
         run: |
@@ -32,6 +34,13 @@ jobs:
             /tmp/center-overlay/changed.json
             /tmp/center-overlay/allowed-mtime.json
           if-no-files-found: warn
+      - name: Compare synthetic community reload behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          for image in 'ghcr.io/scholay-rssd/rssd-center@sha256:2c9b5124221c22ddad8e79afdc60c6fc053ba582ca99eacaa7ef8ba2e9be85e1' rssd-center-overlay:ci; do
+            docker run --rm --network none -i --entrypoint node "$image" < .github/scripts/synthetic-community-reload.cjs
+          done
       - name: Boot pinned image with disconnected synthetic services
         shell: bash
         run: |

@@ -83,7 +83,7 @@ def main():
   print('FULL_ROOT_COUNTS',len(a),len(b),'CHANGED_PATHS',len(changed));print('DIFF_GROUPS',dict(Counter(x.split('/')[0] for x in changed)))
   with open('/tmp/center-overlay/changed.json','w') as out:json.dump([{'path':p,'old':a.get(p),'new':b.get(p)} for p in changed],out,indent=2)
   if not changed or len(changed)>100000:raise RuntimeError('Unexpectedly large complete difference set')
-  safe=re.compile(r'^[a-zA-Z0-9_./@+~,()\[\]-]+$')
+  safe=re.compile(r'^[a-zA-Z0-9_./@+~,()\[\] -]+$')
   if any(not safe.fullmatch(p) or p.startswith('/') or '..' in p.split('/') for p in changed):raise RuntimeError('Unexpected path')
   removes=[p for p in changed if p not in b or p in a and p in b and a[p]['type']!=b[p]['type']]
   for p in removes:
