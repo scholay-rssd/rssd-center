@@ -33,12 +33,28 @@ def inventory(image):
   return items
  finally:subprocess.run(['docker','rm','-v',container],stdout=subprocess.DEVNULL,check=False)
 def diff(a,b):return sorted(k for k in a.keys()|b.keys() if a.get(k)!=b.get(k))
+def unchanged_dependency_mtime(path, old, new):
+ # Only byte/metadata-identical installed dependencies, never caches or Next.
+ parts=path.split('/')
+ if not path.startswith('app/node_modules/') or len(parts)<3:return False
+ if parts[2] in {'next','@next','.cache','.pnpm'}:return False
+ if any(p.lower() in {'cache','.cache','caches'} for p in parts):return False
+ if old is None or new is None:return False
+ if old['type'] not in ('0','\x00','5','2'):return False
+ return {k:v for k,v in old.items() if k!='mtime'}=={k:v for k,v in new.items() if k!='mtime'}
+
 def write(path,value):
  with open(path,'w') as out:json.dump(value,out,sort_keys=True,separators=(',',':'))
 def main():
  os.makedirs('/tmp/center-overlay',exist_ok=True)
  if sys.argv[1]=='prepare':
-  a,b=inventory(OLD),inventory(NEW);changed=diff(a,b);write('/tmp/center-overlay/new.json',b)
+  a,b=inventory(OLD),inventory(NEW)
+  allowed=[p for p in diff(a,b) if unchanged_dependency_mtime(p,a.get(p),b.get(p))]
+  for p in allowed:b[p]['mtime']=a[p]['mtime']
+  changed=diff(a,b)
+  write('/tmp/center-overlay/new.json',b)
+  write('/tmp/center-overlay/allowed-mtime.json',allowed)
+  print('ALLOWED_IDENTICAL_DEPENDENCY_MTIME_COUNT',len(allowed))
   oldconfig,newconfig=config(OLD),config(NEW)
   if oldconfig!=newconfig:
    print('CONFIG_CHANGED_KEYS',sorted(k for k in oldconfig.keys()|newconfig.keys() if oldconfig.get(k)!=newconfig.get(k)));raise RuntimeError('Image startup configuration differs')
@@ -69,7 +85,7 @@ def main():
   ordered=sorted(removes,key=lambda x:(-x.count('/'),x))
   for i in range(0,len(ordered),100):lines.append('RUN rm -rf -- '+' '.join('/'+p for p in ordered[i:i+100]))
   lines.append('ADD patch.tar /')
-  lines.append('LABEL org.opencontainers.image.revision="e80818aa55a6caa1d777eed958cc9c0aee944368" io.rssd.image.kind="verified-overlay" io.rssd.image.base-digest="sha256:d550dd8e433c39a25da7d38b1097c75522f9f29e88fec478b7766c2a24da12a3" io.rssd.image.target-digest="sha256:2c9b5124221c22ddad8e79afdc60c6fc053ba582ca99eacaa7ef8ba2e9be85e1"')
+  lines.append('LABEL org.opencontainers.image.revision="e80818aa55a6caa1d777eed958cc9c0aee944368" io.rssd.image.kind="experimental-derived-overlay" io.rssd.image.base-digest="sha256:d550dd8e433c39a25da7d38b1097c75522f9f29e88fec478b7766c2a24da12a3" io.rssd.image.target-digest="sha256:2c9b5124221c22ddad8e79afdc60c6fc053ba582ca99eacaa7ef8ba2e9be85e1"')
   open('/tmp/center-overlay/Dockerfile','w').write('\n'.join(lines)+'\n')
   print('PATCH_ENTRIES',len(needed),'REMOVE_PATHS',len(removes),'PATCH_TAR_BYTES',os.path.getsize('/tmp/center-overlay/patch.tar'))
  elif sys.argv[1]=='verify':
@@ -79,6 +95,6 @@ def main():
   if config(CANDIDATE)!=config(NEW):raise RuntimeError('Overlay startup configuration differs')
   old,new,overlay=map(inspect,[OLD,NEW,CANDIDATE]);layers=old['RootFS']['Layers'];olayers=overlay['RootFS']['Layers']
   if olayers[:len(layers)]!=layers:raise RuntimeError('Overlay does not inherit exact old layers')
-  print('OVERLAY_FILES_EQUAL',len(actual));print('OLD_IMAGE_BYTES',old['Size']);print('TARGET_IMAGE_BYTES',new['Size']);print('OVERLAY_IMAGE_BYTES',overlay['Size']);print('OVERLAY_NEW_LAYER_UNCOMPRESSED_BYTES',overlay['Size']-old['Size']);print('OVERLAY_ID',overlay['Id']);print('OLD_SHARED_LAYERS',len(layers),'OVERLAY_NEW_LAYERS',len(olayers)-len(layers))
+  print('OVERLAY_TREE_MATCHES_DECLARED_MTIME_POLICY',len(actual));print('OLD_IMAGE_BYTES',old['Size']);print('TARGET_IMAGE_BYTES',new['Size']);print('OVERLAY_IMAGE_BYTES',overlay['Size']);print('OVERLAY_NEW_LAYER_UNCOMPRESSED_BYTES',overlay['Size']-old['Size']);print('OVERLAY_ID',overlay['Id']);print('OLD_SHARED_LAYERS',len(layers),'OVERLAY_NEW_LAYERS',len(olayers)-len(layers))
  else:raise ValueError('unknown operation')
 if __name__=='__main__':main()

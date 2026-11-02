@@ -3,7 +3,6 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
-  packages: write
 jobs:
   smoke:
     runs-on: ubuntu-latest
@@ -18,14 +17,20 @@ jobs:
           set -euo pipefail
           docker pull --platform linux/amd64 'ghcr.io/scholay-rssd/rssd-center@sha256:d550dd8e433c39a25da7d38b1097c75522f9f29e88fec478b7766c2a24da12a3' >/dev/null
           docker pull --platform linux/amd64 'ghcr.io/scholay-rssd/rssd-center@sha256:2c9b5124221c22ddad8e79afdc60c6fc053ba582ca99eacaa7ef8ba2e9be85e1' >/dev/null
+          df -B1 /
+          docker system df -v
           python3 .github/scripts/compare-overlay.py prepare
           docker build --network none -t rssd-center-overlay:ci /tmp/center-overlay
           python3 .github/scripts/compare-overlay.py verify
+          df -B1 /
+          docker system df -v
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: verified-overlay-delta
-          path: /tmp/center-overlay/changed.json
+          path: |
+            /tmp/center-overlay/changed.json
+            /tmp/center-overlay/allowed-mtime.json
           if-no-files-found: warn
       - name: Boot pinned image with disconnected synthetic services
         shell: bash
@@ -66,20 +71,3 @@ jobs:
           test "$(docker exec center-synthetic node --version)" = v22.20.0
           docker exec center-synthetic node rssd/apply-schema.cjs
           docker exec -i center-synthetic node < .github/scripts/synthetic-center-smoke.cjs
-      - name: Publish verified candidate under an isolated tag
-        shell: bash
-        env:
-          TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
-          tag="ghcr.io/scholay-rssd/rssd-center:codex-overlay-e808-${GITHUB_RUN_ID}"
-          docker tag rssd-center-overlay:ci "$tag"
-          docker push "$tag"
-          docker buildx imagetools inspect "$tag"
-          docker buildx imagetools inspect --raw "$tag" > /tmp/center-overlay/registry-manifest.json
-          python3 - <<'PY'
-          import json
-          x=json.load(open('/tmp/center-overlay/registry-manifest.json'))
-          print('CANDIDATE_COMPRESSED_LAYER_BYTES',sum(i['size'] for i in x.get('layers',[])))
-          PY
