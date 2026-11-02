@@ -7,6 +7,19 @@ const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args),x=(db,sql,...args)=>db
 class RssdMigration {
  constructor(store,media){this.store=store;this.media=media;}
  async inspect(ctx,siteId){admin(ctx);return (await q(this.store.db,'SELECT * FROM rssd_migrations WHERE "orgId"=$1 AND "siteId"=$2',ctx.orgId,p.id(siteId)))[0]||null;}
+ async deviceProof(ctx,siteId,workspaceId){
+  p.id(siteId,'siteId');p.id(workspaceId,'workspaceId');
+  if(!ctx || ctx.admin!==false || !ctx.workerId || !ctx.orgId || !Array.isArray(ctx.workspaceIds) || !ctx.workspaceIds.includes(workspaceId))p.fail('Device workspace scope required',403,'forbidden');
+  const row=(await q(this.store.db,'SELECT "siteId","workspaceId",state,report FROM rssd_migrations WHERE "orgId"=$1 AND "siteId"=$2 AND "workspaceId"=$3',ctx.orgId,siteId,workspaceId))[0];
+  if(!row)p.fail('Migration proof not found',404,'not_found');
+  const cut=row.report?.cutover, suffix=':'+siteId, receipt=cut?.receiptId;
+  const runId=typeof receipt==='string'&&receipt.endsWith(suffix)?receipt.slice(0,-suffix.length):'';
+  const hex=value=>typeof value==='string'&&/^[a-f0-9]{64}$/.test(value);
+  if(row.state!=='active'||row.siteId!==siteId||row.workspaceId!==workspaceId||row.report?.state!=='active'||row.report?.siteId!==siteId||row.report?.workspaceId!==workspaceId||!cut||typeof cut!=='object'||!runId||!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(runId)||!hex(cut.baselineSha256)||!hex(cut.evidenceHash)||typeof cut.receiverRelease!=='string'||!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,199}$/.test(cut.receiverRelease))p.fail('Migration proof is incomplete',409,'proof_unavailable');
+  const {evidenceHash,activatedAt,actor,...evidence}=cut;
+  if(p.hash(evidence)!==evidenceHash)p.fail('Migration proof is inconsistent',409,'proof_unavailable');
+  return {siteId,workspaceId,state:'active',receiptId:receipt,runId,baselineSha256:cut.baselineSha256,evidenceHash,receiverRelease:cut.receiverRelease,observedAt:new Date().toISOString()};
+ }
  async activate(ctx,siteId,evidence){
   admin(ctx);p.id(siteId);p.object(evidence,'cutover evidence');
   if(evidence.oldWriterDisabled!==true||evidence.inFlightCount!==0||evidence.pendingWorkReconciled!==true)p.fail('Disable the old writer, drain publication and reconcile pending work before activation',409,'handoff_incomplete');

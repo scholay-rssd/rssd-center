@@ -94,3 +94,15 @@ test('editorial HTTP bridge preserves nested paths, query options, request keys 
  response=await fetch(base+'/publish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({requestKey:'original-request'})});assert.equal(response.status,201);assert.equal((await response.json()).requestKey,'original-request');assert.equal(calls.at(-1).ctx.orgId,'synthetic');
  response=await fetch(base+'/actions',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});assert.equal(response.status,409);assert.equal((await response.json()).code,'center_action_pending');
 });
+
+test('migration proof HTTP route enforces device scope and never caches evidence',async t=>{
+ const {RssdMigration}=require('../apps/backend/dist/rssd/migration.cjs');
+ const p=require('../apps/backend/dist/rssd/protocol.cjs');
+ const evidence={receiptId:'run:enter',baselineSha256:'a'.repeat(64),receiverRelease:'rev-1',rollbackReference:'/private/path'};
+ const report={siteId:'enter',workspaceId:'enter',state:'active',cutover:{...evidence,evidenceHash:p.hash(evidence)}};
+ const migration=new RssdMigration({db:{$queryRawUnsafe:async(sql,...args)=>args[0]==='org'&&args[1]==='enter'&&args[2]==='enter'?[{siteId:'enter',workspaceId:'enter',state:'active',report}]:[]}});
+ const module=await Test.createTestingModule({imports:[ThrottlerModule.forRoot([{ttl:60000,limit:100}])],controllers:[RssdController],providers:[{provide:RssdService,useValue:{migration}}]}).compile();
+ const app=module.createNestApplication();app.useLogger(false);app.use((req,res,next)=>{req.rssd={orgId:'org',workerId:'device',admin:false,workspaceIds:['enter']};next();});await app.listen(0,'127.0.0.1');t.after(()=>app.close());
+ const base=await app.getUrl(),ok=await fetch(base+'/rssd/v1/migration-proof/enter/enter');assert.equal(ok.status,200);assert.match(ok.headers.get('cache-control'),/no-store/);const proof=await ok.json();assert.equal(proof.runId,'run');assert.doesNotMatch(JSON.stringify(proof),/private/);
+ const denied=await fetch(base+'/rssd/v1/migration-proof/enter/other');assert.equal(denied.status,403);const missing=await fetch(base+'/rssd/v1/migration-proof/other/enter');assert.equal(missing.status,404);
+});

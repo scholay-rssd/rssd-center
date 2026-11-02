@@ -58,6 +58,9 @@ export class RssdController {
     res.set({'Content-Type':row.manifest.mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}).send(bytes);
   }
   @Get('/registry') registry(@Req() req: any) { return this.rssd.store.registry(req.rssd); }
+  @Get('/migration-proof/:siteId/:workspaceId')
+  @Header('Cache-Control', 'private, no-store')
+  migrationProof(@Req() req: any, @Param('siteId') siteId: string, @Param('workspaceId') workspaceId: string) { return this.rssd.migration.deviceProof(req.rssd, siteId, workspaceId); }
   @Post('/workspaces') workspace(@Req() req: any, @Body() body: any) { return this.rssd.store.saveWorkspace(req.rssd, body.workspace, body.baseRevision); }
   @Get('/workers') workers(@Req() req: any) { return this.rssd.store.workers(req.rssd); }
   @Post('/workers') createWorker(@Req() req: any, @Body() body: any) { return this.rssd.store.createWorker(req.rssd, body); }
