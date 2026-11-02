@@ -1,28 +1,43 @@
-name: Synthetic Center AMD64 smoke
+name: Verify and smoke a derived Center AMD64 image
 on:
   workflow_dispatch:
 permissions:
   contents: read
+  packages: write
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Prove complete delta and build isolated overlay
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull --platform linux/amd64 'ghcr.io/scholay-rssd/rssd-center@sha256:d550dd8e433c39a25da7d38b1097c75522f9f29e88fec478b7766c2a24da12a3' >/dev/null
+          docker pull --platform linux/amd64 'ghcr.io/scholay-rssd/rssd-center@sha256:2c9b5124221c22ddad8e79afdc60c6fc053ba582ca99eacaa7ef8ba2e9be85e1' >/dev/null
+          python3 .github/scripts/compare-overlay.py prepare
+          docker build --network none -t rssd-center-overlay:ci /tmp/center-overlay
+          python3 .github/scripts/compare-overlay.py verify
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-overlay-delta
+          path: /tmp/center-overlay/changed.json
+          if-no-files-found: error
       - name: Boot pinned image with disconnected synthetic services
         shell: bash
         run: |
           set -euo pipefail
-          center='ghcr.io/scholay-rssd/rssd-center@sha256:2c9b5124221c22ddad8e79afdc60c6fc053ba582ca99eacaa7ef8ba2e9be85e1'
+          center='rssd-center-overlay:ci'
           postgres='postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24'
           redis='redis:7.2@sha256:46f15cf64fdef63e483dcda99e74e3d51c017b1175547b6bb874152ee2391aad'
           temporal='temporalio/auto-setup:1.28.1@sha256:607d68caa111338d754771efb876c92dfcdae06d056e4530bb31cd0f37406e6a'
           es='elasticsearch:7.17.27@sha256:9a6443f55243f6acbfeb4a112d15eb3b9aac74bf25e0e39fa19b3ddd3a6879d0'
           cleanup() { docker rm -f -v center-synthetic temporal-synthetic temporal-pg-synthetic es-synthetic redis-synthetic pg-synthetic >/dev/null 2>&1 || true; docker network rm synthetic-isolated >/dev/null 2>&1 || true; }
           trap cleanup EXIT
-          for image in "$center" "$postgres" "$redis" "$temporal" "$es"; do docker pull --platform linux/amd64 "$image" >/dev/null; done
+          for image in "$postgres" "$redis" "$temporal" "$es"; do docker pull --platform linux/amd64 "$image" >/dev/null; done
           test "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$center")" = e80818aa55a6caa1d777eed958cc9c0aee944368
           docker network create --internal synthetic-isolated >/dev/null
           docker run -d --name pg-synthetic --network synthetic-isolated --cpus 0.5 --memory 512m -e POSTGRES_PASSWORD=synthetic -e POSTGRES_DB=fixture "$postgres" >/dev/null
@@ -50,3 +65,20 @@ jobs:
           test "$(docker exec center-synthetic node --version)" = v22.20.0
           docker exec center-synthetic node rssd/apply-schema.cjs
           docker exec -i center-synthetic node < .github/scripts/synthetic-center-smoke.cjs
+      - name: Publish verified candidate under an isolated tag
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin >/dev/null
+          tag="ghcr.io/scholay-rssd/rssd-center:codex-overlay-e808-${GITHUB_RUN_ID}"
+          docker tag rssd-center-overlay:ci "$tag"
+          docker push "$tag"
+          docker buildx imagetools inspect "$tag"
+          docker buildx imagetools inspect --raw "$tag" > /tmp/center-overlay/registry-manifest.json
+          python3 - <<'PY'
+          import json
+          x=json.load(open('/tmp/center-overlay/registry-manifest.json'))
+          print('CANDIDATE_COMPRESSED_LAYER_BYTES',sum(i['size'] for i in x.get('layers',[])))
+          PY
