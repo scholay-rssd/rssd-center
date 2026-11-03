@@ -107,8 +107,9 @@ class RssdEditorial {
         documentId:recordId,kind,origin:workspace.origin,articleId:articleId({...row,articleId:id}),url:row.legacyRoute||row.metadata?.publication?.path||((row.locale==='en'?'/en':'')+'/news/'+p.hash(row.workId).slice(0,32)+'/')};
     });
   }
-  async find(ctx,workspaceId,id,{allowDeleted=false}={}){
-    p.id(id);const rows=(await this.entries(ctx,workspaceId)).filter(row=>row.articleId===id);
+  async find(ctx,workspaceId,id,{allowDeleted=false,locale}={}){
+    p.id(id);if(locale!==undefined)p.locale(locale);
+    const rows=(await this.entries(ctx,workspaceId)).filter(row=>row.articleId===id&&(locale===undefined||row.locale===locale));
     if(rows.length>1)p.fail('Several editions claim this manuscript identity',409,'identity_conflict');
     const row=rows[0]||null;
     if(row?.deletedAt&&!allowDeleted)p.fail('This historical manuscript was deleted',410,'edition_deleted');
@@ -168,9 +169,9 @@ class RssdEditorial {
     }
     return value;
   }
-  async detail(ctx,workspaceId,id,{scope='cloud'}={}){
+  async detail(ctx,workspaceId,id,{scope='cloud',locale}={}){
     if(!['cloud','published','status'].includes(scope))p.fail('Invalid edition scope');
-    const row=await this.find(ctx,workspaceId,id);
+    const row=await this.find(ctx,workspaceId,id,{locale});
     if(!row){if(scope==='status')return {version:0,publishedVersion:null,data:null};p.fail('Manuscript not found',404,'not_found');}
     if(scope==='published'&&!row.publishedVersion)p.fail('Manuscript has no published website edition',404,'not_published');
     const revision=scope==='published'?row.publishedVersion:row.revision;
@@ -232,13 +233,16 @@ class RssdEditorial {
       const media=new RssdMedia(nested,{directory:this.media.directory,origin:this.media.origin}),editorial=new RssdEditorial(nested,media);
       const workspace=await editorial.workspace(ctx,workspaceId);await nested.writable(db,ctx,workspaceId);
       if(await editorial.legacyRequest(ctx,workspaceId,input.requestKey,intent)||await editorial.legacyRequest(ctx,workspaceId,input.requestKey,intent==='draft'?'publish':'draft'))p.fail('This original request was migrated; query its preserved receipt instead of submitting it again',409,'legacy_request_exists');
-      const source=data.translationOf?await editorial.find(ctx,workspaceId,p.id(data.translationOf.articleId)):null;
+      const locale=data.locale||'zh-CN';
+      const source=data.translationOf?await editorial.find(ctx,workspaceId,p.id(data.translationOf.articleId),{locale:locale==='en'?'zh-CN':'en'}):null;
       if(data.translationOf&&!source)p.fail('Translation source not found',409,'source_conflict');
-      const existing=await editorial.find(ctx,workspaceId,data.id);
-      const workId=existing?.workId||source?.workId||'editorial-'+p.hash([workspaceId,data.id]).slice(0,48),locale=data.locale||'zh-CN';
+      const existing=await editorial.find(ctx,workspaceId,data.id,{locale});
+      const workId=existing?.workId||source?.workId||'editorial-'+p.hash([workspaceId,data.id]).slice(0,48);
       await lock(db,ctx.orgId+':work:'+workId);
       await q(db,'SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 FOR UPDATE',ctx.orgId,workId,locale);
-      const current=await editorial.find(ctx,workspaceId,data.id);
+      const current=await editorial.find(ctx,workspaceId,data.id,{locale});
+      // Check under the work lock so concurrent creations in different languages cannot merge by accident.
+      if(!current&&!source&&await editorial.find(ctx,workspaceId,data.id,{locale:locale==='en'?'zh-CN':'en'}))p.fail('Manuscript identity belongs to another language',409,'identity_conflict');
       if((current?.revision||0)!==input.expectedVersion||(current?.publishedVersion??null)!==input.expectedPublishedVersion)p.fail('Center content or published state changed; preserve local edits and reload',409,'revision_conflict');
       if(current&&(current.sectionId!==data.sectionId||current.locale!==locale||current.kind!==(data.record?.kind||'news')))p.fail('Manuscript identity or section changed',409,'identity_conflict');
       const pending=(await q(db,`SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND state IN ('queued','dispatching') LIMIT 1`,ctx.orgId,workId,locale,'site-'+workspace.siteId))[0];
@@ -344,7 +348,7 @@ class RssdEditorial {
       result={protocol:'scholay-content',version:1,siteId:workspace.siteId,spaceId:workspace.id,origin:workspace.origin,capabilities:['language-editions-v1','rssd-center-v1']};
     }else if(method==='GET'&&parts.length===1&&first==='catalog')result=await this.catalog(ctx,workspaceId,query);
     else if(method==='GET'&&parts.length===1&&first==='index')result=await this.index(ctx,workspaceId,query);
-    else if(method==='GET'&&parts.length===2&&['cloud','published'].includes(first))result=await this.detail(ctx,workspaceId,id,{scope:first});
+    else if(method==='GET'&&parts.length===2&&['cloud','published'].includes(first))result=await this.detail(ctx,workspaceId,id,{scope:first,locale:query.locale});
     else if(method==='GET'&&parts.length===2&&first==='requests')result=await this.receipt(ctx,workspaceId,id);
     else if(method==='GET'&&parts.length===3&&first==='drafts'&&id==='requests')result=await this.receipt(ctx,workspaceId,third,{intent:'draft'});
     else if(method==='GET'&&parts.length===3&&first==='source-archives'&&id==='private-notes')result=await this.privateNotes(ctx,workspaceId,third,query.revision);
@@ -359,7 +363,7 @@ class RssdEditorial {
       else if(method==='POST'&&parts.length===3&&third==='retry')result=await this.actions.retry(ctx,workspaceId,id,input);
       else p.fail('Unknown editorial action operation',404,'not_found');
     }else if(first==='actions'){await this.workspace(ctx,workspaceId);p.fail('Website actions are unavailable; the original content is retained',409,'center_action_pending');}
-    else if(method==='GET'&&parts.length===1)result=await this.detail(ctx,workspaceId,first,{scope:'status'});
+    else if(method==='GET'&&parts.length===1)result=await this.detail(ctx,workspaceId,first,{scope:'status',locale:query.locale});
     else p.fail('Unknown editorial operation',404,'not_found');
     return {...result,centerManaged:true};
   }

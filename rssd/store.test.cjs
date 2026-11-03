@@ -309,6 +309,60 @@ test('editorial legacy drafts preserve existing attachment metadata, hidden asse
  assert.deepEqual(next.media,[{id:inline.id,alt:'Important inline alt'},{id:hidden.id,alt:'Hidden attachment alt'},{id:newId,alt:''}]);
 });
 
+test('editorial detail and private save distinguish locales sharing an article identity',async()=>{
+ const f=await editorialFixture(),workId=randomUUID(),id='shared-language-article';
+ const metadata={author:'Author',date:'2026-01-01',category:'Methods',editorial:{articleId:id}};
+ await store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[
+  {locale:'zh-CN',title:'中文版本',summary:'中文摘要',bodyMarkdown:'中文正文',metadata},
+  {locale:'en',title:'English edition',summary:'English summary',bodyMarkdown:'English body',metadata}
+ ]},{publish:false});
+ await assert.rejects(f.service.detail(f.ctx,'research',id),{code:'identity_conflict'});
+ const zh=await f.service.api(f.ctx,'research','GET',['cloud',id],{locale:'zh-CN'});
+ const en=await f.service.api(f.ctx,'research','GET',['cloud',id],{locale:'en'});
+ assert.equal(zh.locale,'zh-CN');assert.equal(zh.data.locale,undefined);assert.equal(zh.data.title,'中文版本');
+ assert.equal(en.locale,'en');assert.equal(en.data.locale,'en');assert.equal(en.data.title,'English edition');
+ await assert.rejects(f.service.detail(f.ctx,'research',id,{locale:'fr'}),{status:400});
+ const req={requestKey:randomUUID(),expectedVersion:1,expectedPublishedVersion:null,data:{...en.data,title:'Updated English'}};
+ assert.equal((await f.service.submit(f.ctx,'research',req,{intent:'draft'})).revision,2);
+ assert.equal((await f.service.detail(f.ctx,'research',id,{locale:'en'})).data.title,'Updated English');
+ assert.equal((await f.service.detail(f.ctx,'research',id,{locale:'zh-CN'})).data.title,'中文版本');
+ const zhReq={requestKey:randomUUID(),expectedVersion:1,expectedPublishedVersion:null,data:{...zh.data,title:'更新中文',locale:'zh-CN'}};
+ assert.equal((await f.service.submit(f.ctx,'research',zhReq,{intent:'draft'})).revision,2);
+ assert.equal((await f.service.detail(f.ctx,'research',id,{locale:'en'})).version,2);
+ assert.equal((await f.service.detail(f.ctx,'research',id,{locale:'zh-CN'})).data.title,'更新中文');
+ const unique={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id:'unique-en-only',locale:'en'}};
+ await f.service.submit(f.ctx,'research',unique,{intent:'draft'});
+ assert.equal((await f.service.detail(f.ctx,'research',unique.data.id)).locale,'en');
+ await assert.rejects(f.service.detail(f.ctx,'research',unique.data.id,{locale:'zh-CN'}),{status:404});
+ await assert.rejects(f.service.submit(f.ctx,'research',{...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id:'unique-en-only'}},{intent:'draft'}),{code:'identity_conflict'});
+ const duplicateId='same-locale-conflict';
+ for(let i=0;i<2;i++)await store.submit(f.ctx,{requestId:randomUUID(),workId:randomUUID(),workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'Duplicate',bodyMarkdown:'Body',metadata:{...metadata,editorial:{articleId:duplicateId}}}]},{publish:false});
+ await assert.rejects(f.service.detail(f.ctx,'research',duplicateId,{locale:'zh-CN'}),{code:'identity_conflict'});
+});
+
+test('same-ID translation resolves its source in the opposite locale',async()=>{
+ const f=await editorialFixture(),id='same-id-translation',zh={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id}};
+ await f.service.submit(f.ctx,'research',zh,{intent:'draft'});
+ const source=await f.service.detail(f.ctx,'research',id,{locale:'zh-CN'});
+ const en={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id,locale:'en',translationOf:{articleId:id,revision:source.revision,sha256:legacyFingerprint(source.data)}}};
+ await f.service.submit(f.ctx,'research',en,{intent:'draft'});
+ const english=await f.service.detail(f.ctx,'research',id,{locale:'en'});assert.equal(english.workId,source.workId);assert.equal(english.data.translationOf.articleId,id);
+ const next={requestKey:randomUUID(),expectedVersion:1,expectedPublishedVersion:null,data:{...english.data,title:'Updated translation'}};
+ await f.service.submit(f.ctx,'research',next,{intent:'draft'});
+ assert.equal((await f.service.detail(f.ctx,'research',id,{locale:'en'})).version,2);
+ assert.equal((await f.service.detail(f.ctx,'research',id,{locale:'zh-CN'})).version,1);
+});
+
+test('concurrent independent language creations with the same ID cannot accidentally share a work',async()=>{
+ const f=await editorialFixture(),id='same-id-concurrent';
+ const zh={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id}};
+ const en={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id,locale:'en'}};
+ const results=await Promise.allSettled([f.service.submit(f.ctx,'research',zh,{intent:'draft'}),f.service.submit(f.ctx,'research',en,{intent:'draft'})]);
+ assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+ assert.equal(results.find(r=>r.status==='rejected').reason.code,'identity_conflict');
+ const only=await f.service.detail(f.ctx,'research',id);assert(['en','zh-CN'].includes(only.locale));
+});
+
 test('editorial translations retain their work identity and exact source version while English originals stay independent',async()=>{
  const f=await editorialFixture();await f.service.submit(f.ctx,'research',f.packet,{intent:'draft'});
  const source=await f.service.detail(f.ctx,'research',f.packet.data.id),translation={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id:'english-translation',locale:'en',translationOf:{articleId:f.packet.data.id,revision:1,sha256:legacyFingerprint(source.data)}}};
