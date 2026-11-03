@@ -286,6 +286,29 @@ test('editorial publishing only reports the website receipt and retries the same
  const after=await f.service.detail(f.ctx,'research',f.packet.data.id,{scope:'published'});assert.equal(after.revision,1);assert.equal(after.data.locale,'en');
 });
 
+test('editorial legacy drafts preserve existing attachment metadata, hidden assets and nested editorial metadata',async()=>{
+ const f=await editorialFixture(),workId=randomUUID();
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYZkAAAAASUVORK5CYII=','base64');
+ const image=async (bytes,name)=>{const manifest=mediaProtocol.imageManifest(bytes);const uploaded=await f.media.upload(f.ctx,{workspaceId:'research',name,...manifest,data:bytes.toString('base64')});return {...uploaded,bytes};};
+ const inline=await image(png,'inline.png'),hidden=await image(Buffer.concat([png,Buffer.from([1])]),'retained.png');
+ const sources=[{title:'A source',url:'https://example.org/source'}];
+ const metadata={author:'Author',date:'2026-01-01',category:'Methods',publication:{path:'/news/synthetic-manuscript/',channel:'retained-channel'},editorial:{articleId:'synthetic-manuscript',extra:'retained-extra'},privateField:{keep:true}};
+ await store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'Synthetic title',summary:'Synthetic summary',bodyMarkdown:'Inline ![visible]('+inline.url+')',media:[{id:inline.id,alt:'Important inline alt'},{id:hidden.id,alt:'Hidden attachment alt'}],sources,metadata}]},{publish:false});
+ const detail=await f.service.detail(f.ctx,'research','synthetic-manuscript');assert.equal(detail.preservesEditorialFieldsOnSave,true);assert.equal(detail.data.assets.length,2);
+ const request={requestKey:randomUUID(),expectedVersion:1,expectedPublishedVersion:null,data:{...detail.data,markdown:detail.data.markdown+' updated',assets:detail.data.assets.filter(a=>a.path===inline.manifest.path)}};
+ const saved=await f.service.submit(f.ctx,'research',request,{intent:'draft'});assert.equal(saved.revision,2);
+ const edition=(await store.edition(f.ctx,workId,'zh-CN',2)).payload;
+ assert.deepEqual(edition.media,[{id:inline.id,alt:'Important inline alt'},{id:hidden.id,alt:'Hidden attachment alt'}]);
+ assert.equal(edition.metadata.publication.channel,'retained-channel');assert.equal(edition.metadata.editorial.extra,'retained-extra');assert.deepEqual(edition.metadata.privateField,{keep:true});assert.deepEqual(edition.sources,sources);
+ const again=await f.service.detail(f.ctx,'research','synthetic-manuscript');assert.equal(again.data.assets.length,2);
+ await assert.rejects(f.service.submit(f.ctx,'research',{...request,requestKey:randomUUID()},{intent:'draft'}),{code:'revision_conflict'});
+ const newBytes=Buffer.concat([png,Buffer.from([2])]),newManifest=mediaProtocol.imageManifest(newBytes),newAsset={path:newManifest.path,data:newBytes.toString('base64')};
+ const third={requestKey:randomUUID(),expectedVersion:2,expectedPublishedVersion:null,data:{...again.data,markdown:again.data.markdown+' ![new]('+newAsset.path+')',assets:[again.data.assets.find(a=>a.path===inline.manifest.path),newAsset,newAsset]}};
+ await f.service.submit(f.ctx,'research',third,{intent:'draft'});
+ const next=(await store.edition(f.ctx,workId,'zh-CN',3)).payload,newId=mediaProtocol.mediaId('research',newManifest.sha256);
+ assert.deepEqual(next.media,[{id:inline.id,alt:'Important inline alt'},{id:hidden.id,alt:'Hidden attachment alt'},{id:newId,alt:''}]);
+});
+
 test('editorial translations retain their work identity and exact source version while English originals stay independent',async()=>{
  const f=await editorialFixture();await f.service.submit(f.ctx,'research',f.packet,{intent:'draft'});
  const source=await f.service.detail(f.ctx,'research',f.packet.data.id),translation={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id:'english-translation',locale:'en',translationOf:{articleId:f.packet.data.id,revision:1,sha256:legacyFingerprint(source.data)}}};

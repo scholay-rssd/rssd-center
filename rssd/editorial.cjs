@@ -176,7 +176,7 @@ class RssdEditorial {
     const revision=scope==='published'?row.publishedVersion:row.revision;
     const data=await this.data(ctx,workspaceId,row,revision);
     return {id:row.documentId||row.workId,articleId:row.articleId,workId:row.workId,locale:row.locale,
-      version:row.revision,revision,publishedVersion:row.publishedVersion,url:row.url,data,
+      preservesEditorialFieldsOnSave:true,version:row.revision,revision,publishedVersion:row.publishedVersion,url:row.url,data,
       ...(scope==='status'?{published:row.publishedVersion?await this.data(ctx,workspaceId,row,row.publishedVersion):null}:{})};
   }
   async archive(ctx,workspaceId,id){
@@ -262,11 +262,13 @@ class RssdEditorial {
       const {section}=await nested.workspace(db,ctx,workspaceId,data.sectionId),destinationId='site-'+workspace.siteId;
       if(intent==='publish'&&!section.policy.targets.some(t=>t.destinationId===destinationId&&t.locale===locale))p.fail('This section has no website destination for the requested language',409,'missing_destination');
       const previousEdition=current?(await nested.edition(ctx,workId,locale,current.revision)).payload:null;
-      const attachments=[];let bodyMarkdown=data.markdown;
-      for(const asset of data.assets||[]){const bytes=Buffer.from(asset.data,'base64'),manifest=imageManifest(bytes);const upload=await media.upload(ctx,{workspaceId,name:asset.path,...manifest,data:asset.data});attachments.push({id:upload.id,alt:''});bodyMarkdown=bodyMarkdown.replaceAll(asset.path,'/api/rssd/v1/media/'+upload.id+'/raw');}
+      // Legacy editor envelopes contain only some attachments and do not carry alt metadata.
+      // Preserve the exact previous edition's attachments; omission is not a deletion instruction.
+      const attachments=(previousEdition?.media||[]).map(item=>({...item}));let bodyMarkdown=data.markdown;
+      for(const asset of data.assets||[]){const bytes=Buffer.from(asset.data,'base64'),manifest=imageManifest(bytes);const upload=await media.upload(ctx,{workspaceId,name:asset.path,...manifest,data:asset.data});if(!attachments.some(item=>item.id===upload.id))attachments.push({id:upload.id,alt:''});bodyMarkdown=bodyMarkdown.replaceAll(asset.path,'/api/rssd/v1/media/'+upload.id+'/raw');}
       const route=current?.url||(locale==='en'?(source?'/en/news/'+source.articleId+'/':'/en/news/'+data.id+'/'):'/news/'+data.id+'/');
       const metadata={...(previousEdition?.metadata||{}),author:data.author,date:data.date,category:data.category,
-        publication:{path:route},editorial:{articleId:data.id,...(data.record?{documentId:data.record.documentId}:{})}};
+        publication:{...(previousEdition?.metadata?.publication||{}),path:route},editorial:{...(previousEdition?.metadata?.editorial||{}),articleId:data.id,...(data.record?{documentId:data.record.documentId}:{})}};
       if(data.record)metadata.record=record(data.record);
       const packet={requestId:'editorial-'+p.hash([workspaceId,input.requestKey]).slice(0,48),workId,workspaceId,sectionId:data.sectionId,baseRevisions:{[locale]:input.expectedVersion},editions:[{locale,title:data.title,summary:data.summary,bodyMarkdown,sources:previousEdition?.sources||[],media:attachments,translationOf,metadata}]};
       const saved=await nested.submit(ctx,packet,{publish:intent==='publish'}),revision=saved.editions[0].revision;
