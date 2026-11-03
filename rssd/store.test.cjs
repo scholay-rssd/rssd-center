@@ -674,3 +674,40 @@ test('forum dispatch persists uncertain creation before sending and recovers one
  assert.equal((await tick()).state,'queued');assert.equal((await store.publications(f.ctx))[0].receipt.createIntent,true);
  assert.equal((await tick()).state,'published');assert.equal(creates,1);assert.equal((await store.publications(f.ctx))[0].receipt.topicId,17);
 });
+
+test('batch cloud reads preserve authorization, identities, locale and individual outcomes',async()=>{
+ const f=await editorialFixture();
+ await f.service.submit(f.ctx,'research',f.packet,{intent:'draft'});
+ const second={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id:'second-manuscript',title:'Other title'}};
+ await f.service.submit(f.ctx,'research',second,{intent:'draft'});
+ const response=await f.service.api(f.ctx,'research','GET',['cloud','batch','read'],{locale:'zh-CN',ids:'synthetic-manuscript,missing-manuscript,second-manuscript'});
+ assert.equal(response.centerManaged,true);assert.equal(response.locale,'zh-CN');
+ assert.deepEqual(response.items.map(item=>[item.articleId,item.ok]),[['synthetic-manuscript',true],['missing-manuscript',false],['second-manuscript',true]]);
+ assert.equal(response.items[1].error.code,'not_found');
+ assert.deepEqual(response.items[0].detail,await f.service.detail(f.ctx,'research','synthetic-manuscript',{scope:'cloud',locale:'zh-CN'}));
+ assert.equal((await f.service.api(f.ctx,'research','GET',['cloud','batch','read'],{locale:'en',ids:'synthetic-manuscript'})).items[0].error.code,'not_found');
+ await assert.rejects(f.service.api({...f.ctx,workspaceIds:[]},'research','GET',['cloud','batch','read'],{locale:'zh-CN',ids:'synthetic-manuscript'}),{status:403});
+ for(const ids of ['', 'a,a', 'a/escape',Array.from({length:9},(_,i)=>'item'+i).join(',')])await assert.rejects(f.service.cloudBatch(f.ctx,'research',{locale:'zh-CN',ids}),{status:400});
+ await assert.rejects(f.service.cloudBatch(f.ctx,'research',{locale:'fr',ids:'a'}),{status:400});
+});
+
+test('batch cloud reads bound total response size and keep internal errors private',async()=>{
+ const service=new RssdEditorial({},{});let calls=0;
+ const row=id=>({articleId:id,workId:'work-'+id,locale:'zh-CN',revision:1,publishedVersion:null});
+ service.entries=async()=>{calls++;return [row('large'),row('small'),row('failed'),row('dup'),row('dup')];};
+ service.data=async(_ctx,_space,r)=>{if(r.articleId==='failed')throw Error('private filesystem path');return {id:r.articleId,markdown:r.articleId==='large'?'x'.repeat(4*1024*1024):'small'};};
+ const result=await service.cloudBatch({},'research',{locale:'zh-CN',ids:'large,small,failed,dup,missing'});
+ assert.equal(calls,1);assert.equal(result.items[0].error.code,'batch_response_limit');assert.equal(result.items[1].ok,true);
+ assert.equal(result.items[2].error.code,'batch_item_error');assert.doesNotMatch(JSON.stringify(result),/private filesystem path/);
+ assert.equal(result.items[3].error.code,'identity_conflict');assert.equal(result.items[4].error.code,'not_found');
+ assert.ok(Buffer.byteLength(JSON.stringify({...result,centerManaged:true}))<=4*1024*1024);
+});
+
+test('batch cloud error messages are bounded and redact accidental credentials',async()=>{
+ const service=new RssdEditorial({},{});const ids=Array.from({length:8},(_,i)=>'id'+i);
+ service.entries=async()=>ids.map(articleId=>({articleId,workId:'work-'+articleId,locale:'zh-CN',revision:1}));
+ service.data=async()=>{throw new p.ProtocolError('rssd_device_'+'a'.repeat(48)+' '+('x'.repeat(10000)),400,'bad_asset');};
+ const result=await service.cloudBatch({},'research',{locale:'zh-CN',ids:ids.join(',')});
+ assert.equal(result.items.length,8);assert.ok(result.items.every(item=>item.error.message.length<=160));
+ assert.doesNotMatch(JSON.stringify(result),/rssd_device_/);assert.ok(Buffer.byteLength(JSON.stringify(result))<4096);
+});

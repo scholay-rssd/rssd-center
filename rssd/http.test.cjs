@@ -91,6 +91,7 @@ test('editorial HTTP bridge preserves nested paths, query options, request keys 
  await app.listen(0,'127.0.0.1');t.after(()=>app.close());const base=await app.getUrl()+'/rssd/v1/editorial/research';
  let response=await fetch(base+'/drafts/requests/original-request');assert.equal(response.status,200);assert.deepEqual((await response.json()).path,['drafts','requests','original-request']);
  response=await fetch(base+'/catalog?scope=all&after=80&locale=en');assert.equal(response.status,200);assert.deepEqual({...calls.at(-1).query},{scope:'all',after:'80',locale:'en'});assert.equal(calls.at(-1).workspace,'research');
+ response=await fetch(base+'/cloud/batch/read?locale=en&ids=one%2Ctwo');assert.equal(response.status,200);assert.deepEqual((await response.json()).path,['cloud','batch','read']);assert.deepEqual({...calls.at(-1).query},{locale:'en',ids:'one,two'});
  response=await fetch(base+'/publish',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({requestKey:'original-request'})});assert.equal(response.status,201);assert.equal((await response.json()).requestKey,'original-request');assert.equal(calls.at(-1).ctx.orgId,'synthetic');
  response=await fetch(base+'/actions',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});assert.equal(response.status,409);assert.equal((await response.json()).code,'center_action_pending');
 });

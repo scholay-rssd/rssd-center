@@ -143,7 +143,7 @@ class RssdEditorial {
     const after=page(options.after,0,1000000),limit=page(options.limit,100,200);if(limit<1)p.fail('Invalid index limit');
     return {generation,checkedAt:new Date().toISOString(),items:rows.slice(after,after+limit).map(r=>({id:r.articleId,version:r.revision,publishedVersion:r.publishedVersion,url:r.url})),next:after+limit<rows.length?after+limit:null};
   }
-  async data(ctx,workspaceId,row,revision){
+  async data(ctx,workspaceId,row,revision,entries){
     const edition=await this.store.edition(ctx,row.workId,row.locale,revision),e=edition.payload;
     const material=await this.media.publication(ctx.orgId,workspaceId,e),assets=[];
     // Preserve unreferenced attachments too; they can be used by a channel or
@@ -155,7 +155,7 @@ class RssdEditorial {
     if(e.metadata?.record){const id=row.documentId||row.workId;value.record={documentId:id,kind:e.metadata.record.kind,fields:editorRecordFields(e.metadata.record.kind,recordFields(e.metadata.record,material.edition),id,row.sectionId,edition.createdAt)};}
     if(e.locale!=='zh-CN')value.locale=e.locale;
     if(e.translationOf){
-      const source=(await this.entries(ctx,workspaceId)).find(r=>r.workId===e.translationOf.workId&&r.locale===e.translationOf.locale);
+      const source=(entries||await this.entries(ctx,workspaceId)).find(r=>r.workId===e.translationOf.workId&&r.locale===e.translationOf.locale);
       if(!source)p.fail('Translation source is missing',409,'source_conflict');
       // Existing editor sources use a different fingerprint; retain its exact
       // original reference for migrated editions until the transport converts it.
@@ -163,7 +163,7 @@ class RssdEditorial {
       const original=legacy?.revisions?.find(r=>r.version===revision);
       if(original)value.translationOf=JSON.parse(original.payload).translationOf;
       if(e.locale==='en'&&e.translationOf.locale==='zh-CN'){
-        const sourceData=await this.data(ctx,workspaceId,source,e.translationOf.revision);
+        const sourceData=await this.data(ctx,workspaceId,source,e.translationOf.revision,entries);
         value.translationOf={articleId:source.articleId,revision:e.translationOf.revision,sha256:legacyFingerprint(sourceData)};
       }
     }
@@ -179,6 +179,43 @@ class RssdEditorial {
     return {id:row.documentId||row.workId,articleId:row.articleId,workId:row.workId,locale:row.locale,
       preservesEditorialFieldsOnSave:true,version:row.revision,revision,publishedVersion:row.publishedVersion,url:row.url,data,
       ...(scope==='status'?{published:row.publishedVersion?await this.data(ctx,workspaceId,row,row.publishedVersion):null}:{})};
+  }
+  // Read small batches without exposing private archives. Resolve the complete identity map
+  // once per batch so a missing, duplicate, deleted or oversized item cannot hide others.
+  async cloudBatch(ctx,workspaceId,{locale,ids}={}){
+    p.locale(locale);
+    if(typeof ids!=='string'||!ids||ids.length>1100)p.fail('Invalid batch IDs');
+    const requested=ids.split(',');
+    if(requested.length>8||requested.some(id=>!id)||new Set(requested).size!==requested.length)p.fail('Invalid batch IDs');
+    for(const id of requested)p.id(id);
+    // entries() enforces the same workspace/tenant authorization as single cloud reads.
+    const entries=await this.entries(ctx,workspaceId),items=[];
+    let budget=4*1024*1024-4096;
+    for(const articleId of requested){
+      let item;
+      try{
+        const matches=entries.filter(row=>row.articleId===articleId&&row.locale===locale);
+        if(matches.length>1)p.fail('Several editions claim this manuscript identity',409,'identity_conflict');
+        const row=matches[0];
+        if(!row)p.fail('Manuscript not found',404,'not_found');
+        if(row.deletedAt)p.fail('This historical manuscript was deleted',410,'edition_deleted');
+        const data=await this.data(ctx,workspaceId,row,row.revision,entries);
+        const detail={id:row.documentId||row.workId,articleId:row.articleId,workId:row.workId,locale:row.locale,
+          preservesEditorialFieldsOnSave:true,version:row.revision,revision:row.revision,publishedVersion:row.publishedVersion,url:row.url,data};
+        item={articleId,ok:true,detail};
+        const bytes=Buffer.byteLength(JSON.stringify(item));
+        if(bytes>budget)item={articleId,ok:false,error:{code:'batch_response_limit',status:413,message:'Read this work individually'}};
+        else budget-=bytes+1;
+      }catch(error){
+        // Internal errors can contain private paths or SQL; never include their raw message.
+        const safe=error instanceof p.ProtocolError;
+        const code=safe&&/^[a-zA-Z0-9_-]{1,64}$/.test(error.code||'')?error.code:'batch_item_error';
+        const message=safe?String(error.message||'Unable to read this work').replace(/rssd_device_[A-Za-z0-9_-]+/g,'[redacted]').slice(0,160):'Unable to read this work';
+        item={articleId,ok:false,error:{code,status:safe?error.status:500,message}};
+      }
+      items.push(item);
+    }
+    return {locale,items};
   }
   async archive(ctx,workspaceId,id){
     await this.workspace(ctx,workspaceId);if(!/^[a-f0-9]{64}$/.test(id))p.fail('Invalid archive identity');
@@ -346,7 +383,8 @@ class RssdEditorial {
     if(method==='GET'&&parts.length===1&&first==='site'){
       const workspace=await this.workspace(ctx,workspaceId);
       result={protocol:'scholay-content',version:1,siteId:workspace.siteId,spaceId:workspace.id,origin:workspace.origin,capabilities:['language-editions-v1','rssd-center-v1']};
-    }else if(method==='GET'&&parts.length===1&&first==='catalog')result=await this.catalog(ctx,workspaceId,query);
+    }else if(method==='GET'&&parts.length===3&&first==='cloud'&&id==='batch'&&third==='read')result=await this.cloudBatch(ctx,workspaceId,query);
+    else if(method==='GET'&&parts.length===1&&first==='catalog')result=await this.catalog(ctx,workspaceId,query);
     else if(method==='GET'&&parts.length===1&&first==='index')result=await this.index(ctx,workspaceId,query);
     else if(method==='GET'&&parts.length===2&&['cloud','published'].includes(first))result=await this.detail(ctx,workspaceId,id,{scope:first,locale:query.locale});
     else if(method==='GET'&&parts.length===2&&first==='requests')result=await this.receipt(ctx,workspaceId,id);
