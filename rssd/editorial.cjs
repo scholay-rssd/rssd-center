@@ -8,6 +8,8 @@ const {RssdStore}=require('./store.cjs');
 const {RssdMedia}=require('./media.cjs');
 const {imageManifest}=require('./rssd-media.cjs');
 const {record,recordFields}=require('./rssd-record.cjs');
+const {StagedDrafts}=require('./staged-drafts.cjs');
+const {prepareStructuredDraft}=require('./structured-draft.cjs');
 const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args);
 const x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
 const digest=value=>createHash('sha256').update(value).digest('hex');
@@ -44,10 +46,14 @@ function legacyFingerprint(data){
   const content=Object.fromEntries(['id','title','summary','markdown','date','category','author','sectionId'].filter(k=>data[k]!==undefined).map(k=>[k,data[k]]));
   content.assets=(data.assets||[]).map(x=>x.path).sort();return digest(JSON.stringify(content));
 }
-function inputData(input){
+function inputData(input,{allowOptionalBlanks=false}={}){
   p.object(input,'editorial request');const data=p.object(input.data,'manuscript');
   if(!/^[a-z0-9][a-z0-9-]{2,99}$/.test(data.id||''))p.fail('Invalid manuscript identity');
-  for(const [field,max] of [['title',500],['summary',4000],['markdown',160000],['author',100],['category',80]])p.text(data[field],field,max);
+  for(const [field,max] of [['title',500],['summary',4000],['markdown',160000],['author',100],['category',80]]){
+    const optional=allowOptionalBlanks&&['summary','author','category'].includes(field);
+    if(optional&&typeof data[field]!=='string')p.fail('Invalid '+field);
+    p.text(data[field],field,max,optional);
+  }
   if(!/^\d{4}-\d{2}-\d{2}$/.test(data.date||'')||!Number.isFinite(Date.parse(data.date+'T00:00:00Z'))||new Date(data.date+'T00:00:00Z').toISOString().slice(0,10)!==data.date)p.fail('Invalid manuscript date');
   p.locale(data.locale||'zh-CN');p.id(data.sectionId,'sectionId');
   const assets=p.array(data.assets||[],'assets',12);let total=0;
@@ -143,12 +149,42 @@ class RssdEditorial {
     const after=page(options.after,0,1000000),limit=page(options.limit,100,200);if(limit<1)p.fail('Invalid index limit');
     return {generation,checkedAt:new Date().toISOString(),items:rows.slice(after,after+limit).map(r=>({id:r.articleId,version:r.revision,publishedVersion:r.publishedVersion,url:r.url})),next:after+limit<rows.length?after+limit:null};
   }
-  async data(ctx,workspaceId,row,revision,entries){
+  async data(ctx,workspaceId,row,revision,entries,options={}){
     const edition=await this.store.edition(ctx,row.workId,row.locale,revision),e=edition.payload;
-    const material=await this.media.publication(ctx.orgId,workspaceId,e),assets=[];
+    if(options.referencedOnly&&!options.fingerprintOnly){
+      let bytes=0;
+      for(const item of e.media||[]){
+        if(!e.bodyMarkdown.includes('/api/rssd/v1/media/'+item.id+'/raw'))continue;
+        const media=await this.media.row(ctx,item.id);
+        if(media.workspaceId!==workspaceId)p.fail('Media belongs to a different workspace',403,'forbidden');
+        bytes+=media.manifest.bytes;
+        if(bytes>(options.maxAssetBytes||2*1024*1024))p.fail('Referenced images exceed the staged draft limit',413,'media_limit');
+      }
+    }
+    let material;
+    if(options.fingerprintOnly){
+      let bodyMarkdown=e.bodyMarkdown;
+      for(const item of e.media||[]){
+        const media=await this.media.row(ctx,item.id);
+        if(media.workspaceId!==workspaceId)p.fail('Media belongs to a different workspace',403,'forbidden');
+        const escaped=item.id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+        bodyMarkdown=bodyMarkdown.replace(new RegExp('(?:https?:\\/\\/[^/\\s)]+)?/api/rssd/v1/media/'+escaped+'/raw','g'),media.manifest.path);
+      }
+      if(/\/api\/rssd\/v1\/media\//.test(bodyMarkdown))p.fail('Article references media missing from its edition manifest',400,'missing_media');
+      material={edition:{...e,bodyMarkdown}};
+    }else material=await this.media.publication(ctx.orgId,workspaceId,e);
+    const assets=[];
     // Preserve unreferenced attachments too; they can be used by a channel or
     // retained in an original manuscript even when absent from the current body.
-    for(const item of e.media||[]){const {bytes,row:media}=await this.media.bytes(ctx,item.id);assets.push({path:media.manifest.path,data:bytes.toString('base64')});}
+    for(const item of e.media||[]){
+      if(options.referencedOnly){
+        const media=await this.media.row(ctx,item.id);
+        if(media.workspaceId!==workspaceId)p.fail('Media belongs to a different workspace',403,'forbidden');
+        if(options.fingerprintOnly){assets.push({path:media.manifest.path});continue;}
+        if(!material.edition.bodyMarkdown.includes(media.manifest.path))continue;
+      }
+      const {bytes,row:media}=await this.media.bytes(ctx,item.id);assets.push({path:media.manifest.path,data:bytes.toString('base64')});
+    }
     const value={id:row.articleId,title:e.title,summary:e.summary,markdown:material.edition.bodyMarkdown,
       author:e.metadata?.author||'',date:e.metadata?.date||new Date(edition.createdAt).toISOString().slice(0,10),
       category:e.metadata?.category||'',sectionId:row.sectionId,assets};
@@ -163,27 +199,30 @@ class RssdEditorial {
       const original=legacy?.revisions?.find(r=>r.version===revision);
       if(original)value.translationOf=JSON.parse(original.payload).translationOf;
       if(e.locale==='en'&&e.translationOf.locale==='zh-CN'){
-        const sourceData=await this.data(ctx,workspaceId,source,e.translationOf.revision,entries);
+        const sourceData=await this.data(ctx,workspaceId,source,e.translationOf.revision,entries,options.referencedOnly?{...options,fingerprintOnly:true}:options);
         value.translationOf={articleId:source.articleId,revision:e.translationOf.revision,sha256:legacyFingerprint(sourceData)};
       }
     }
     return value;
   }
-  async detail(ctx,workspaceId,id,{scope='cloud',locale}={}){
+  async detail(ctx,workspaceId,id,{scope='cloud',locale,media}={}){
     if(!['cloud','published','status'].includes(scope))p.fail('Invalid edition scope');
+    if(media!==undefined&&media!=='referenced')p.fail('Invalid media mode');
     const row=await this.find(ctx,workspaceId,id,{locale});
     if(!row){if(scope==='status')return {version:0,publishedVersion:null,data:null};p.fail('Manuscript not found',404,'not_found');}
     if(scope==='published'&&!row.publishedVersion)p.fail('Manuscript has no published website edition',404,'not_published');
     const revision=scope==='published'?row.publishedVersion:row.revision;
-    const data=await this.data(ctx,workspaceId,row,revision);
+    const options=media==='referenced'?{referencedOnly:true}:{};
+    const data=await this.data(ctx,workspaceId,row,revision,undefined,options);
     return {id:row.documentId||row.workId,articleId:row.articleId,workId:row.workId,locale:row.locale,
-      preservesEditorialFieldsOnSave:true,version:row.revision,revision,publishedVersion:row.publishedVersion,url:row.url,data,
-      ...(scope==='status'?{published:row.publishedVersion?await this.data(ctx,workspaceId,row,row.publishedVersion):null}:{})};
+      preservesEditorialFieldsOnSave:true,preservesLegacyOptionalBlanksOnSave:true,preservesStructuredDraftsOnSave:true,...(media==='referenced'?{boundedMediaReads:true}:{}),version:row.revision,revision,publishedVersion:row.publishedVersion,url:row.url,data,
+      ...(scope==='status'?{published:row.publishedVersion?await this.data(ctx,workspaceId,row,row.publishedVersion,undefined,options):null}:{})};
   }
   // Read small batches without exposing private archives. Resolve the complete identity map
   // once per batch so a missing, duplicate, deleted or oversized item cannot hide others.
-  async cloudBatch(ctx,workspaceId,{locale,ids}={}){
+  async cloudBatch(ctx,workspaceId,{locale,ids,media}={}){
     p.locale(locale);
+    if(media!==undefined&&media!=='referenced')p.fail('Invalid media mode');
     if(typeof ids!=='string'||!ids||ids.length>1100)p.fail('Invalid batch IDs');
     const requested=ids.split(',');
     if(requested.length>8||requested.some(id=>!id)||new Set(requested).size!==requested.length)p.fail('Invalid batch IDs');
@@ -199,9 +238,9 @@ class RssdEditorial {
         const row=matches[0];
         if(!row)p.fail('Manuscript not found',404,'not_found');
         if(row.deletedAt)p.fail('This historical manuscript was deleted',410,'edition_deleted');
-        const data=await this.data(ctx,workspaceId,row,row.revision,entries);
+        const data=await this.data(ctx,workspaceId,row,row.revision,entries,media==='referenced'?{referencedOnly:true}:{});
         const detail={id:row.documentId||row.workId,articleId:row.articleId,workId:row.workId,locale:row.locale,
-          preservesEditorialFieldsOnSave:true,version:row.revision,revision:row.revision,publishedVersion:row.publishedVersion,url:row.url,data};
+          preservesEditorialFieldsOnSave:true,preservesLegacyOptionalBlanksOnSave:true,preservesStructuredDraftsOnSave:true,...(media==='referenced'?{boundedMediaReads:true}:{}),version:row.revision,revision:row.revision,publishedVersion:row.publishedVersion,url:row.url,data};
         item={articleId,ok:true,detail};
         const bytes=Buffer.byteLength(JSON.stringify(item));
         if(bytes>budget)item={articleId,ok:false,error:{code:'batch_response_limit',status:413,message:'Read this work individually'}};
@@ -258,7 +297,7 @@ class RssdEditorial {
   }
   async submit(ctx,workspaceId,input,{intent='publish'}={}){
     if(!['publish','draft'].includes(intent))p.fail('Invalid editorial submission intent');
-    const data=inputData(input);if(!/^[a-zA-Z0-9_-]{12,128}$/.test(input.requestKey||''))p.fail('Provide the original stable editorial request key');
+    const data=inputData(input,{allowOptionalBlanks:intent==='draft'});if(!/^[a-zA-Z0-9_-]{12,128}$/.test(input.requestKey||''))p.fail('Provide the original stable editorial request key');
     p.integer(input.expectedVersion,'expectedVersion',0);
     if(input.expectedPublishedVersion!==null)p.integer(input.expectedPublishedVersion,'expectedPublishedVersion',1);
     const fingerprint=p.hash({intent,data,expectedVersion:input.expectedVersion,expectedPublishedVersion:input.expectedPublishedVersion});
@@ -281,7 +320,8 @@ class RssdEditorial {
       // Check under the work lock so concurrent creations in different languages cannot merge by accident.
       if(!current&&!source&&await editorial.find(ctx,workspaceId,data.id,{locale:locale==='en'?'zh-CN':'en'}))p.fail('Manuscript identity belongs to another language',409,'identity_conflict');
       if((current?.revision||0)!==input.expectedVersion||(current?.publishedVersion??null)!==input.expectedPublishedVersion)p.fail('Center content or published state changed; preserve local edits and reload',409,'revision_conflict');
-      if(current&&(current.sectionId!==data.sectionId||current.locale!==locale||current.kind!==(data.record?.kind||'news')))p.fail('Manuscript identity or section changed',409,'identity_conflict');
+      const structuredDraft=Boolean(current&&current.kind!=='news'&&intent==='draft');
+      if(current&&(current.sectionId!==data.sectionId||current.locale!==locale||(!structuredDraft&&current.kind!==(data.record?.kind||'news'))))p.fail('Manuscript identity or section changed',409,'identity_conflict');
       const pending=(await q(db,`SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND state IN ('queued','dispatching') LIMIT 1`,ctx.orgId,workId,locale,'site-'+workspace.siteId))[0];
       if(pending)p.fail('Query the current website publication before submitting another revision',409,'publication_pending');
       let translationOf=null;
@@ -303,6 +343,15 @@ class RssdEditorial {
       const {section}=await nested.workspace(db,ctx,workspaceId,data.sectionId),destinationId='site-'+workspace.siteId;
       if(intent==='publish'&&!section.policy.targets.some(t=>t.destinationId===destinationId&&t.locale===locale))p.fail('This section has no website destination for the requested language',409,'missing_destination');
       const previousEdition=current?(await nested.edition(ctx,workId,locale,current.revision)).payload:null;
+      let structured=null;
+      if(structuredDraft){
+        const sourceData=await editorial.data(ctx,workspaceId,current,current.revision);
+        structured=prepareStructuredDraft({edition:previousEdition,source:sourceData,proposed:data,expected:{kind:current.kind,documentId:current.documentId,articleId:current.articleId,sectionId:current.sectionId,locale}});
+      }
+      for(const key of ['summary','author','category']){
+        const prior=key==='summary'?previousEdition?.summary:previousEdition?.metadata?.[key];
+        if(!data[key].trim()&&(!previousEdition||typeof prior==='string'&&prior.trim()))p.fail('Only an existing empty '+key+' can remain empty in a private draft');
+      }
       // Legacy editor envelopes contain only some attachments and do not carry alt metadata.
       // Preserve the exact previous edition's attachments; omission is not a deletion instruction.
       const attachments=(previousEdition?.media||[]).map(item=>({...item}));let bodyMarkdown=data.markdown;
@@ -310,7 +359,8 @@ class RssdEditorial {
       const route=current?.url||(locale==='en'?(source?'/en/news/'+source.articleId+'/':'/en/news/'+data.id+'/'):'/news/'+data.id+'/');
       const metadata={...(previousEdition?.metadata||{}),author:data.author,date:data.date,category:data.category,
         publication:{...(previousEdition?.metadata?.publication||{}),path:route},editorial:{...(previousEdition?.metadata?.editorial||{}),articleId:data.id,...(data.record?{documentId:data.record.documentId}:{})}};
-      if(data.record)metadata.record=record(data.record);
+      if(structured)metadata.record={...structured.metadata.record,fields:{...structured.metadata.record.fields,...structured.sections}};
+      else if(data.record)metadata.record=record(data.record);
       const packet={requestId:'editorial-'+p.hash([workspaceId,input.requestKey]).slice(0,48),workId,workspaceId,sectionId:data.sectionId,baseRevisions:{[locale]:input.expectedVersion},editions:[{locale,title:data.title,summary:data.summary,bodyMarkdown,sources:previousEdition?.sources||[],media:attachments,translationOf,metadata}]};
       const saved=await nested.submit(ctx,packet,{publish:intent==='publish'}),revision=saved.editions[0].revision;
       const publication=intent==='publish'?(await q(db,'SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND revision=$4 AND "destinationId"=$5',ctx.orgId,workId,locale,revision,destinationId))[0]:null;
@@ -382,11 +432,19 @@ class RssdEditorial {
     let result;
     if(method==='GET'&&parts.length===1&&first==='site'){
       const workspace=await this.workspace(ctx,workspaceId);
-      result={protocol:'scholay-content',version:1,siteId:workspace.siteId,spaceId:workspace.id,origin:workspace.origin,capabilities:['language-editions-v1','rssd-center-v1']};
+      result={protocol:'scholay-content',version:1,siteId:workspace.siteId,spaceId:workspace.id,origin:workspace.origin,capabilities:['language-editions-v1','rssd-center-v1','staged-drafts-v1','bounded-media-v1']};
+    }else if(first==='staged-drafts'){
+      const drafts=new StagedDrafts(this,inputData);
+      if(method==='GET'&&parts.length===1)result=await drafts.list(ctx,workspaceId,query);
+      else if(method==='GET'&&parts.length===3&&id==='requests')result=await drafts.receipt(ctx,workspaceId,third);
+      else if(method==='GET'&&parts.length===3&&id==='promotions')result=await drafts.promotion(ctx,workspaceId,third,query);
+      else if(method==='GET'&&parts.length===2)result=await drafts.detail(ctx,workspaceId,id,query);
+      else if(method==='POST'&&parts.length===1)result=await drafts.save(ctx,workspaceId,input);
+      else p.fail('Unknown staged draft operation',404,'not_found');
     }else if(method==='GET'&&parts.length===3&&first==='cloud'&&id==='batch'&&third==='read')result=await this.cloudBatch(ctx,workspaceId,query);
     else if(method==='GET'&&parts.length===1&&first==='catalog')result=await this.catalog(ctx,workspaceId,query);
     else if(method==='GET'&&parts.length===1&&first==='index')result=await this.index(ctx,workspaceId,query);
-    else if(method==='GET'&&parts.length===2&&['cloud','published'].includes(first))result=await this.detail(ctx,workspaceId,id,{scope:first,locale:query.locale});
+    else if(method==='GET'&&parts.length===2&&['cloud','published'].includes(first))result=await this.detail(ctx,workspaceId,id,{scope:first,locale:query.locale,media:query.media});
     else if(method==='GET'&&parts.length===2&&first==='requests')result=await this.receipt(ctx,workspaceId,id);
     else if(method==='GET'&&parts.length===3&&first==='drafts'&&id==='requests')result=await this.receipt(ctx,workspaceId,third,{intent:'draft'});
     else if(method==='GET'&&parts.length===3&&first==='source-archives'&&id==='private-notes')result=await this.privateNotes(ctx,workspaceId,third,query.revision);

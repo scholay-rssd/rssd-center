@@ -80,10 +80,27 @@ publication. Migration and browser-export work remain separate delivery gates.
 verified final legacy bundle without publishing it. Staged workspaces expose
 `writable: false` and cannot create/claim demands or accept submissions. Lists
 support bounded `limit` and `offset`; work search covers the latest full text.
+Private editor branches use a separate staged-drafts API and do not grant
+publication or production access. Their bases still require reconciliation with
+the final legacy snapshot. An existing writable workspace with no migration row
+requires a separately fenced bootstrap; a new workspace and fence are created
+atomically. Import uses a renewable five-minute owner lease: concurrent attempts
+are refused; an interrupted attempt can resume the same manifest after expiry.
 
 After the original writer is disabled, in-flight publication is drained and every
 pending manuscript has a recorded destination, run
 `node rssd/migration-cli.cjs activate ORGANIZATION SITE PRIVATE-EVIDENCE.json`.
+If private staged branches exist, first run `node rssd/migration-cli.cjs
+reconcile ORGANIZATION SITE PRIVATE-EVIDENCE.json` repeatedly until its
+`pending` count is zero. The first call freezes the evidence and branch-history
+hash under a persistent `reconciling` fence; each later call commits at most
+eight private promotions and can be retried after a crash. Ordinary writes stay
+fenced until final activation verifies every promotion and the original import.
+An incompatible final legacy snapshot returns `staged_reconcile_conflict`;
+both the branch and snapshot must be retained for a deliberate human merge.
+The operator must independently recheck the original writer's live fence,
+queues and unchanged snapshot before every batch and final activation: the
+evidence file and Center alone do not prove that external condition.
 The private operator receipt must contain `receiptId`, `oldWriterDisabled: true`,
 `inFlightCount: 0`, `pendingWorkReconciled: true`, `receiverRelease`,
 `rollbackReference`, and the final `sourceDatabaseSha256`, `editionIndexSha256`,
@@ -91,6 +108,9 @@ The private operator receipt must contain `receiptId`, `oldWriterDisabled: true`
 preserves the evidence hash. Repeating the same activation is safe; changing its
 evidence or importing over an active workspace is rejected. This operator receipt
 records external cutover checks; it does not itself disable an old server.
+The receipt ID must be `<runId>:<siteId>` with a valid run ID, and the receiver
+release must use only letters, numbers, `.`, `_`, `:` and `-`, so that an
+activated site can produce a valid scoped device proof.
 
 Activation does not enable the dispatcher or broaden destination policies.
 During isolated restoration also set `RSSD_POSTIZ_ORCHESTRATOR_ENABLED=0` and
