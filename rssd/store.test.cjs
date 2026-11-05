@@ -286,6 +286,88 @@ test('editorial publishing only reports the website receipt and retries the same
  const after=await f.service.detail(f.ctx,'research',f.packet.data.id,{scope:'published'});assert.equal(after.revision,1);assert.equal(after.data.locale,'en');
 });
 
+test('editorial legacy drafts preserve existing attachment metadata, hidden assets and nested editorial metadata',async()=>{
+ const f=await editorialFixture(),workId=randomUUID();
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYZkAAAAASUVORK5CYII=','base64');
+ const image=async (bytes,name)=>{const manifest=mediaProtocol.imageManifest(bytes);const uploaded=await f.media.upload(f.ctx,{workspaceId:'research',name,...manifest,data:bytes.toString('base64')});return {...uploaded,bytes};};
+ const inline=await image(png,'inline.png'),hidden=await image(Buffer.concat([png,Buffer.from([1])]),'retained.png');
+ const sources=[{title:'A source',url:'https://example.org/source'}];
+ const metadata={author:'Author',date:'2026-01-01',category:'Methods',publication:{path:'/news/synthetic-manuscript/',channel:'retained-channel'},editorial:{articleId:'synthetic-manuscript',extra:'retained-extra'},privateField:{keep:true}};
+ await store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'Synthetic title',summary:'Synthetic summary',bodyMarkdown:'Inline ![visible]('+inline.url+')',media:[{id:inline.id,alt:'Important inline alt'},{id:hidden.id,alt:'Hidden attachment alt'}],sources,metadata}]},{publish:false});
+ const detail=await f.service.detail(f.ctx,'research','synthetic-manuscript');assert.equal(detail.preservesEditorialFieldsOnSave,true);assert.equal(detail.data.assets.length,2);
+ const bounded=await f.service.api(f.ctx,'research','GET',['cloud','synthetic-manuscript'],{locale:'zh-CN',media:'referenced'});
+ assert.equal(bounded.boundedMediaReads,true);assert.deepEqual(bounded.data.assets.map(a=>a.path),[inline.manifest.path]);
+ const batch=await f.service.api(f.ctx,'research','GET',['cloud','batch','read'],{locale:'zh-CN',ids:'synthetic-manuscript',media:'referenced'});
+ assert.equal(batch.items[0].detail.boundedMediaReads,true);assert.deepEqual(batch.items[0].detail.data.assets.map(a=>a.path),[inline.manifest.path]);
+ await assert.rejects(f.service.api(f.ctx,'research','GET',['cloud','synthetic-manuscript'],{media:'unknown'}),{status:400});
+ const request={requestKey:randomUUID(),expectedVersion:1,expectedPublishedVersion:null,data:{...detail.data,markdown:detail.data.markdown+' updated',assets:detail.data.assets.filter(a=>a.path===inline.manifest.path)}};
+ const saved=await f.service.submit(f.ctx,'research',request,{intent:'draft'});assert.equal(saved.revision,2);
+ const edition=(await store.edition(f.ctx,workId,'zh-CN',2)).payload;
+ assert.deepEqual(edition.media,[{id:inline.id,alt:'Important inline alt'},{id:hidden.id,alt:'Hidden attachment alt'}]);
+ assert.equal(edition.metadata.publication.channel,'retained-channel');assert.equal(edition.metadata.editorial.extra,'retained-extra');assert.deepEqual(edition.metadata.privateField,{keep:true});assert.deepEqual(edition.sources,sources);
+ const again=await f.service.detail(f.ctx,'research','synthetic-manuscript');assert.equal(again.data.assets.length,2);
+ await assert.rejects(f.service.submit(f.ctx,'research',{...request,requestKey:randomUUID()},{intent:'draft'}),{code:'revision_conflict'});
+ const newBytes=Buffer.concat([png,Buffer.from([2])]),newManifest=mediaProtocol.imageManifest(newBytes),newAsset={path:newManifest.path,data:newBytes.toString('base64')};
+ const third={requestKey:randomUUID(),expectedVersion:2,expectedPublishedVersion:null,data:{...again.data,markdown:again.data.markdown+' ![new]('+newAsset.path+')',assets:[again.data.assets.find(a=>a.path===inline.manifest.path),newAsset,newAsset]}};
+ await f.service.submit(f.ctx,'research',third,{intent:'draft'});
+ const next=(await store.edition(f.ctx,workId,'zh-CN',3)).payload,newId=mediaProtocol.mediaId('research',newManifest.sha256);
+ assert.deepEqual(next.media,[{id:inline.id,alt:'Important inline alt'},{id:hidden.id,alt:'Hidden attachment alt'},{id:newId,alt:''}]);
+});
+
+test('editorial detail and private save distinguish locales sharing an article identity',async()=>{
+ const f=await editorialFixture(),workId=randomUUID(),id='shared-language-article';
+ const metadata={author:'Author',date:'2026-01-01',category:'Methods',editorial:{articleId:id}};
+ await store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[
+  {locale:'zh-CN',title:'中文版本',summary:'中文摘要',bodyMarkdown:'中文正文',metadata},
+  {locale:'en',title:'English edition',summary:'English summary',bodyMarkdown:'English body',metadata}
+ ]},{publish:false});
+ await assert.rejects(f.service.detail(f.ctx,'research',id),{code:'identity_conflict'});
+ const zh=await f.service.api(f.ctx,'research','GET',['cloud',id],{locale:'zh-CN'});
+ const en=await f.service.api(f.ctx,'research','GET',['cloud',id],{locale:'en'});
+ assert.equal(zh.locale,'zh-CN');assert.equal(zh.data.locale,undefined);assert.equal(zh.data.title,'中文版本');
+ assert.equal(en.locale,'en');assert.equal(en.data.locale,'en');assert.equal(en.data.title,'English edition');
+ await assert.rejects(f.service.detail(f.ctx,'research',id,{locale:'fr'}),{status:400});
+ const req={requestKey:randomUUID(),expectedVersion:1,expectedPublishedVersion:null,data:{...en.data,title:'Updated English'}};
+ assert.equal((await f.service.submit(f.ctx,'research',req,{intent:'draft'})).revision,2);
+ assert.equal((await f.service.detail(f.ctx,'research',id,{locale:'en'})).data.title,'Updated English');
+ assert.equal((await f.service.detail(f.ctx,'research',id,{locale:'zh-CN'})).data.title,'中文版本');
+ const zhReq={requestKey:randomUUID(),expectedVersion:1,expectedPublishedVersion:null,data:{...zh.data,title:'更新中文',locale:'zh-CN'}};
+ assert.equal((await f.service.submit(f.ctx,'research',zhReq,{intent:'draft'})).revision,2);
+ assert.equal((await f.service.detail(f.ctx,'research',id,{locale:'en'})).version,2);
+ assert.equal((await f.service.detail(f.ctx,'research',id,{locale:'zh-CN'})).data.title,'更新中文');
+ const unique={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id:'unique-en-only',locale:'en'}};
+ await f.service.submit(f.ctx,'research',unique,{intent:'draft'});
+ assert.equal((await f.service.detail(f.ctx,'research',unique.data.id)).locale,'en');
+ await assert.rejects(f.service.detail(f.ctx,'research',unique.data.id,{locale:'zh-CN'}),{status:404});
+ await assert.rejects(f.service.submit(f.ctx,'research',{...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id:'unique-en-only'}},{intent:'draft'}),{code:'identity_conflict'});
+ const duplicateId='same-locale-conflict';
+ for(let i=0;i<2;i++)await store.submit(f.ctx,{requestId:randomUUID(),workId:randomUUID(),workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'Duplicate',bodyMarkdown:'Body',metadata:{...metadata,editorial:{articleId:duplicateId}}}]},{publish:false});
+ await assert.rejects(f.service.detail(f.ctx,'research',duplicateId,{locale:'zh-CN'}),{code:'identity_conflict'});
+});
+
+test('same-ID translation resolves its source in the opposite locale',async()=>{
+ const f=await editorialFixture(),id='same-id-translation',zh={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id}};
+ await f.service.submit(f.ctx,'research',zh,{intent:'draft'});
+ const source=await f.service.detail(f.ctx,'research',id,{locale:'zh-CN'});
+ const en={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id,locale:'en',translationOf:{articleId:id,revision:source.revision,sha256:legacyFingerprint(source.data)}}};
+ await f.service.submit(f.ctx,'research',en,{intent:'draft'});
+ const english=await f.service.detail(f.ctx,'research',id,{locale:'en'});assert.equal(english.workId,source.workId);assert.equal(english.data.translationOf.articleId,id);
+ const next={requestKey:randomUUID(),expectedVersion:1,expectedPublishedVersion:null,data:{...english.data,title:'Updated translation'}};
+ await f.service.submit(f.ctx,'research',next,{intent:'draft'});
+ assert.equal((await f.service.detail(f.ctx,'research',id,{locale:'en'})).version,2);
+ assert.equal((await f.service.detail(f.ctx,'research',id,{locale:'zh-CN'})).version,1);
+});
+
+test('concurrent independent language creations with the same ID cannot accidentally share a work',async()=>{
+ const f=await editorialFixture(),id='same-id-concurrent';
+ const zh={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id}};
+ const en={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id,locale:'en'}};
+ const results=await Promise.allSettled([f.service.submit(f.ctx,'research',zh,{intent:'draft'}),f.service.submit(f.ctx,'research',en,{intent:'draft'})]);
+ assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+ assert.equal(results.find(r=>r.status==='rejected').reason.code,'identity_conflict');
+ const only=await f.service.detail(f.ctx,'research',id);assert(['en','zh-CN'].includes(only.locale));
+});
+
 test('editorial translations retain their work identity and exact source version while English originals stay independent',async()=>{
  const f=await editorialFixture();await f.service.submit(f.ctx,'research',f.packet,{intent:'draft'});
  const source=await f.service.detail(f.ctx,'research',f.packet.data.id),translation={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id:'english-translation',locale:'en',translationOf:{articleId:f.packet.data.id,revision:1,sha256:legacyFingerprint(source.data)}}};
@@ -308,6 +390,32 @@ test('editorial private originals round-trip exact bytes, keep author notes priv
  await assert.rejects(f.service.saveArchive(f.ctx,'research',{...bundle,files:[{...bundle.files[0],path:'../unsafe'}]}),{status:400});
  await f.service.submit(f.ctx,'research',{...f.packet,requestKey:randomUUID(),expectedVersion:1},{intent:'draft'});
  await assert.rejects(f.service.saveArchive(f.ctx,'research',bundle),{code:'revision_conflict'});
+});
+
+test('native edition author notes are privately readable with immutable body hash and scope boundaries',async()=>{
+ const f=await editorialFixture(),workId=randomUUID(),id='native-private-notes',body='Public native body',notebook={version:2,blocks:[{id:'para',type:'paragraph',text:body}],internalNotes:{writing:'NATIVE_PRIVATE'},blockNotes:{para:{notes:{verification:'ROW_PRIVATE'}}},modelSignatures:[]};
+ await store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'Native title',bodyMarkdown:body,metadata:{editorial:{articleId:id},notebook}}]},{publish:false});
+ const result=await f.service.privateNotes(f.ctx,'research',id,1);
+ assert.equal(result.revision,1);assert.equal(result.privateEditorial.bodySha,require('node:crypto').createHash('sha256').update(body).digest('hex'));
+ assert.equal(result.privateEditorial.internalNotes.writing,'NATIVE_PRIVATE');assert.deepEqual(result.privateEditorial.blockNotes.para.anchor,{type:'paragraph',text:body});
+ assert.equal((await f.service.privateNotes(f.ctx,'research',id,0)).privateEditorial,null);
+ assert(!(JSON.stringify(await f.service.catalog(f.ctx,'research',{scope:'all'}))).includes('NATIVE_PRIVATE'));
+ assert(!(JSON.stringify(await f.service.detail(f.ctx,'research',id))).includes('ROW_PRIVATE'));
+ await assert.rejects(f.service.privateNotes({...f.ctx,orgId:randomUUID()},'research',id),{status:404});
+ await assert.rejects(f.service.privateNotes({...f.ctx,workspaceIds:['other']},'research',id),{status:403});
+});
+
+test('native notes use the newest bounded revision and prefer an original archive only at the same revision',async()=>{
+ const f=await editorialFixture(),workId=randomUUID(),id='native-note-versions';
+ const put=async(revision,writing,locale='zh-CN',articleId=id)=>store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',baseRevisions:{[locale]:revision-1},editions:[{locale,title:'Native notes',bodyMarkdown:'Body '+revision,metadata:{editorial:{articleId},notebook:{internalNotes:{writing},modelSignatures:[]}}}]},{publish:false});
+ const archive=async(revision,writing)=>{const bytes=Buffer.from(JSON.stringify({version:1,bodySha:'a'.repeat(64),internalNotes:{writing},modelSignatures:[]}));return f.service.saveArchive(f.ctx,'research',{articleId:id,revision,files:[{path:'internal-notes.json',sha256:require('node:crypto').createHash('sha256').update(bytes).digest('hex'),data:bytes.toString('base64')}]});};
+ await put(1,'NATIVE_V1');await archive(1,'ARCHIVE_V1');await put(2,'NATIVE_V2');await put(1,'ENGLISH_PRIVATE','en',id+'-en');
+ assert.equal((await f.service.privateNotes(f.ctx,'research',id)).privateEditorial.internalNotes.writing,'NATIVE_V2');
+ assert.equal((await f.service.privateNotes(f.ctx,'research',id,1)).privateEditorial.internalNotes.writing,'ARCHIVE_V1');
+ assert.equal((await f.service.privateNotes(f.ctx,'research',id+'-en',99)).privateEditorial.internalNotes.writing,'ENGLISH_PRIVATE');
+ await archive(2,'ARCHIVE_V2');assert.equal((await f.service.privateNotes(f.ctx,'research',id)).privateEditorial.internalNotes.writing,'ARCHIVE_V2');
+ await put(3,'');assert.equal((await f.service.privateNotes(f.ctx,'research',id)).privateEditorial.internalNotes.writing,'');
+ assert.equal((await f.service.privateNotes(f.ctx,'research',id,2)).privateEditorial.internalNotes.writing,'ARCHIVE_V2');
 });
 
 test('editorial migration fencing, revocation and a missing website policy retain manuscripts without publication',async()=>{
@@ -540,7 +648,12 @@ test('private center media is idempotent, workspace-scoped and rewritten only fo
 test('legacy import preserves revisions and receipts, is replayable, and fences the old writer handoff',async()=>{
  const f=await fixture(),directory=await fs.promises.mkdtemp(path.join(require('node:os').tmpdir(),'rssd-migration-test-'));
  try{
-  const siteId='fixture-site',media=new RssdMedia(store,{directory:path.join(directory,'media')}),migration=new RssdMigration(store,media),payload=p.edition(f.packet.editions[0]);
+  const siteId='fixture-site',media=new RssdMedia(store,{directory:path.join(directory,'media')}),migration=new RssdMigration(store,media);
+  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYZkAAAAASUVORK5CYII=','base64'),manifestImage=mediaProtocol.imageManifest(png);
+  const originalImage=await media.upload(f.ctx,{workspaceId:'research',name:'original',...manifestImage,data:png.toString('base64')});
+  const payload=p.edition({...f.packet.editions[0],bodyMarkdown:'Original ![old]('+originalImage.url+')',media:[{id:originalImage.id,alt:'Keep original alt'}]});
+  await store.saveWorkspace(f.owner,{id:'research',siteId,name:'Research',sections:[{id:'methods',name:'Methods',policy:{version:1,targets:[]}}]},1);
+  await db.$executeRawUnsafe('INSERT INTO rssd_migrations ("orgId","siteId","workspaceId",state,manifest,ancillary) VALUES ($1,$2,\'research\',\'staged\',\'{}\',\'{}\')',f.owner.orgId,siteId);
   const source={document:{id:'original-doc',updated:1700000000000,published_revision:1,permalink:'/en/news/original/'},revisions:[{version:1,payload:JSON.stringify({title:'Original',markdown:'Full body'}),actor:'original-owner'}],requests:[{key:'original-request',revision:1}],jobs:[],tombstone:null};
   const value={version:1,siteId,workspaceId:'research',workId:f.packet.workId,sectionId:'methods',locale:'en',source,sourceHash:p.hash(source),editions:[{revision:1,payload,hash:p.hash(payload),createdAt:'2026-01-01T00:00:00.000Z'}]};
   const save=async(name,data)=>{const raw=JSON.stringify(data);await fs.promises.writeFile(path.join(directory,name),raw);return {path:name,sha256:p.hash(raw)};};
@@ -554,13 +667,55 @@ test('legacy import preserves revisions and receipts, is replayable, and fences 
   assert.equal((await store.registry(f.owner)).workspaces[0].writable,false);
   await assert.rejects(store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Cannot start before cutover'}),{code:'migration_staged'});
   assert.equal(await store.claim(f.ctx),null);
+  await db.$executeRawUnsafe(`INSERT INTO rssd_staged_drafts ("orgId","workspaceId","workId",locale,"articleId","baseRevision","baseHash","baseSourceHash","basePublishedVersion","overlayRevision",data,"requestKey","requestHash",receipt) VALUES ($1,'research',$2,'en','fixture',1,$3,$3,1,1,'{}','test-request','fixture','{}')`,f.owner.orgId,value.workId,'a'.repeat(64));
+  await assert.rejects(migration.import(f.owner,directory),{code:'staged_reconcile_conflict'});
+  assert.equal((await migration.inspect(f.owner,siteId)).state,'staged');
+  await db.$executeRawUnsafe('DELETE FROM rssd_staged_drafts WHERE "orgId"=$1',f.owner.orgId);
+  const stagedService=new RssdEditorial(store,media),stagedRow=(await stagedService.entries(f.ctx,'research')).find(x=>x.workId===value.workId&&x.locale==='en');
+  const stagedBase=await stagedService.api(f.ctx,'research','GET',['staged-drafts',stagedRow.articleId],{locale:'en'});
+  const newImage=Buffer.concat([png,Buffer.from([42])]),newManifest=mediaProtocol.imageManifest(newImage),newAsset={path:newManifest.path,data:newImage.toString('base64')};
+  const stagedInput={requestKey:randomUUID(),articleId:stagedBase.articleId,workId:stagedBase.workId,locale:'en',baseRevision:stagedBase.baseRevision,baseHash:stagedBase.baseHash,basePublishedVersion:stagedBase.basePublishedVersion,overlayRevision:0,data:{...stagedBase.data,markdown:'Retained private staged change ![new]('+newAsset.path+')',assets:[newAsset]}};
+  await stagedService.api(f.ctx,'research','POST',['staged-drafts'],{},stagedInput);
+  assert.equal((await migration.import(f.owner,directory)).state,'staged');
+  const latestImage=Buffer.concat([png,Buffer.from([43])]),latestManifest=mediaProtocol.imageManifest(latestImage),latestAsset={path:latestManifest.path,data:latestImage.toString('base64')};
+  const nextInput={...stagedInput,requestKey:randomUUID(),overlayRevision:1,data:{...stagedInput.data,markdown:'Retained private staged change ![new]('+latestAsset.path+')',assets:[latestAsset]}};
+  await stagedService.api(f.ctx,'research','POST',['staged-drafts'],{},nextInput);
   await fs.promises.writeFile(path.join(directory,'document.json'),'corrupted');await assert.rejects(migration.import(f.owner,directory),/checksum/);
   assert.equal((await migration.inspect(f.owner,siteId)).state,'staged');
-  const evidence={receiptId:'fixture-cutover',oldWriterDisabled:true,inFlightCount:0,pendingWorkReconciled:true,receiverRelease:'fixture-release',rollbackReference:'fixture-only-readonly-snapshot',sourceDatabaseSha256:manifest.databaseSha256,editionIndexSha256:first.editionIndexSha256,baselineSha256:manifest.baseline.sha256};
+  const evidence={receiptId:'fixture-cutover:'+siteId,oldWriterDisabled:true,inFlightCount:0,pendingWorkReconciled:true,receiverRelease:'fixture-release',rollbackReference:'fixture-only-readonly-snapshot',sourceDatabaseSha256:manifest.databaseSha256,editionIndexSha256:first.editionIndexSha256,baselineSha256:manifest.baseline.sha256};
+  for(const bad of [{...evidence,receiptId:'handoff'},{...evidence,receiptId:'bad run:'+siteId},{...evidence,receiverRelease:'release / v1'}]){
+   await assert.rejects(migration.reconcile(f.owner,siteId,bad),{code:'invalid_evidence'});
+   await assert.rejects(migration.activate(f.owner,siteId,bad),{code:'invalid_evidence'});
+   assert.equal((await migration.inspect(f.owner,siteId)).state,'staged');
+  }
   await assert.rejects(migration.activate(f.owner,siteId,{...evidence,oldWriterDisabled:false}),{code:'handoff_incomplete'});
   await assert.rejects(migration.activate(f.owner,siteId,{...evidence,baselineSha256:'b'.repeat(64)}),{code:'stale_snapshot'});
+  await assert.rejects(migration.activate(f.owner,siteId,evidence),{code:'staged_drafts_unreconciled'});
+  const racedInput={...nextInput,requestKey:randomUUID(),overlayRevision:2,data:{...nextInput.data,markdown:nextInput.data.markdown+' concurrent'}};
+  const [beginRace,saveRace]=await Promise.allSettled([migration.reconcile(f.owner,siteId,evidence),stagedService.api(f.ctx,'research','POST',['staged-drafts'],{},racedInput)]);
+  assert.equal(beginRace.status,'fulfilled');assert.deepEqual(beginRace.value,{state:'reconciling',processed:0,pending:1});
+  if(saveRace.status==='rejected')assert.equal(saveRace.reason.code,'migration_state_changed');
+  const winningRevision=saveRace.status==='fulfilled'?3:2,winningMarkdown=saveRace.status==='fulfilled'?racedInput.data.markdown:nextInput.data.markdown;
+  await assert.rejects(stagedService.api(f.ctx,'research','POST',['staged-drafts'],{},{...stagedInput,requestKey:randomUUID(),overlayRevision:winningRevision}),{code:'migration_state_changed'});
+  assert.equal((await stagedService.api(f.ctx,'research','POST',['staged-drafts'],{},stagedInput)).overlayRevision,1);
+  assert.deepEqual(await migration.reconcile(f.owner,siteId,evidence),{state:'reconciling',processed:1,pending:0});
+  assert.equal((await migration.inspect(f.owner,siteId)).state,'reconciling');assert.equal((await store.registry(f.owner)).workspaces[0].writable,false);
+  await assert.rejects(stagedService.api(f.ctx,'research','GET',['staged-drafts','promotions',stagedRow.articleId],{locale:'en',overlayRevision:String(winningRevision)}),{code:'migration_state_changed'});
   assert.equal((await migration.activate(f.owner,siteId,evidence)).state,'active');
   assert.equal((await migration.activate(f.owner,siteId,evidence)).state,'active');
+  assert.deepEqual(await migration.reconcile(f.owner,siteId,evidence),{state:'active',processed:0,pending:0});
+  assert.equal((await migration.deviceProof(f.ctx,siteId,'research')).runId,'fixture-cutover');
+  const promoted=(await db.$queryRawUnsafe('SELECT * FROM rssd_staged_draft_promotions WHERE "orgId"=$1',f.owner.orgId))[0];
+  assert.equal(promoted.overlayRevision,winningRevision);assert.equal(promoted.canonicalRevision,2);
+  const promotion=await stagedService.api(f.ctx,'research','GET',['staged-drafts','promotions',stagedRow.articleId],{locale:'en',overlayRevision:String(winningRevision)});
+  assert.equal(promotion.baseHash,stagedBase.baseHash);assert.equal(promotion.overlayRevision,winningRevision);assert.equal(promotion.canonicalRevision,2);
+  await assert.rejects(stagedService.api(f.ctx,'research','GET',['staged-drafts','promotions',stagedRow.articleId],{locale:'en',overlayRevision:String(winningRevision+1)}),{status:404});
+  const promotedEdition=(await store.edition(f.owner,value.workId,'en',2)).payload;
+  assert(promotedEdition.bodyMarkdown.includes('/api/rssd/v1/media/'));assert.equal(promotedEdition.media.find(a=>a.id===originalImage.id).alt,'Keep original alt');assert.equal(promotedEdition.media.length,2);
+  assert(!promotedEdition.media.some(a=>a.id===mediaProtocol.mediaId('research',newManifest.sha256)));assert(promotedEdition.media.some(a=>a.id===mediaProtocol.mediaId('research',latestManifest.sha256)));
+  assert.equal((await stagedService.detail(f.ctx,'research',stagedRow.articleId,{locale:'en'})).data.markdown,winningMarkdown);
+  assert.equal((await store.publications(f.owner)).length,1);
+  assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_staged_drafts WHERE "orgId"=$1',f.owner.orgId))[0].n,winningRevision);
   await assert.rejects(migration.import(f.owner,directory),/active workspace/);
   assert.equal((await store.registry(f.owner)).workspaces[0].writable,true);
   await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Now available'});assert.ok(await store.claim(f.ctx));
@@ -596,4 +751,329 @@ test('forum dispatch persists uncertain creation before sending and recovers one
  const tick=async()=>{await db.$executeRawUnsafe('UPDATE rssd_publications SET "nextAttemptAt"=CURRENT_TIMESTAMP-interval \'1 second\' WHERE "orgId"=$1',f.owner.orgId);return publisher.tick({orgId:f.owner.orgId});};
  assert.equal((await tick()).state,'queued');assert.equal((await store.publications(f.ctx))[0].receipt.createIntent,true);
  assert.equal((await tick()).state,'published');assert.equal(creates,1);assert.equal((await store.publications(f.ctx))[0].receipt.topicId,17);
+});
+
+test('batch cloud reads preserve authorization, identities, locale and individual outcomes',async()=>{
+ const f=await editorialFixture();
+ await f.service.submit(f.ctx,'research',f.packet,{intent:'draft'});
+ const second={...f.packet,requestKey:randomUUID(),data:{...f.packet.data,id:'second-manuscript',title:'Other title'}};
+ await f.service.submit(f.ctx,'research',second,{intent:'draft'});
+ const response=await f.service.api(f.ctx,'research','GET',['cloud','batch','read'],{locale:'zh-CN',ids:'synthetic-manuscript,missing-manuscript,second-manuscript'});
+ assert.equal(response.centerManaged,true);assert.equal(response.locale,'zh-CN');
+ assert.deepEqual(response.items.map(item=>[item.articleId,item.ok]),[['synthetic-manuscript',true],['missing-manuscript',false],['second-manuscript',true]]);
+ assert.equal(response.items[1].error.code,'not_found');
+ assert.deepEqual(response.items[0].detail,await f.service.detail(f.ctx,'research','synthetic-manuscript',{scope:'cloud',locale:'zh-CN'}));
+ assert.equal((await f.service.api(f.ctx,'research','GET',['cloud','batch','read'],{locale:'en',ids:'synthetic-manuscript'})).items[0].error.code,'not_found');
+ await assert.rejects(f.service.api({...f.ctx,workspaceIds:[]},'research','GET',['cloud','batch','read'],{locale:'zh-CN',ids:'synthetic-manuscript'}),{status:403});
+ for(const ids of ['', 'a,a', 'a/escape',Array.from({length:9},(_,i)=>'item'+i).join(',')])await assert.rejects(f.service.cloudBatch(f.ctx,'research',{locale:'zh-CN',ids}),{status:400});
+ await assert.rejects(f.service.cloudBatch(f.ctx,'research',{locale:'fr',ids:'a'}),{status:400});
+});
+
+test('batch cloud reads bound total response size and keep internal errors private',async()=>{
+ const service=new RssdEditorial({},{});let calls=0;
+ const row=id=>({articleId:id,workId:'work-'+id,locale:'zh-CN',revision:1,publishedVersion:null});
+ service.entries=async()=>{calls++;return [row('large'),row('small'),row('failed'),row('dup'),row('dup')];};
+ service.data=async(_ctx,_space,r)=>{if(r.articleId==='failed')throw Error('private filesystem path');return {id:r.articleId,markdown:r.articleId==='large'?'x'.repeat(4*1024*1024):'small'};};
+ const result=await service.cloudBatch({},'research',{locale:'zh-CN',ids:'large,small,failed,dup,missing'});
+ assert.equal(calls,1);assert.equal(result.items[0].error.code,'batch_response_limit');assert.equal(result.items[1].ok,true);
+ assert.equal(result.items[2].error.code,'batch_item_error');assert.doesNotMatch(JSON.stringify(result),/private filesystem path/);
+ assert.equal(result.items[3].error.code,'identity_conflict');assert.equal(result.items[4].error.code,'not_found');
+ assert.ok(Buffer.byteLength(JSON.stringify({...result,centerManaged:true}))<=4*1024*1024);
+});
+
+test('batch cloud error messages are bounded and redact accidental credentials',async()=>{
+ const service=new RssdEditorial({},{});const ids=Array.from({length:8},(_,i)=>'id'+i);
+ service.entries=async()=>ids.map(articleId=>({articleId,workId:'work-'+articleId,locale:'zh-CN',revision:1}));
+ service.data=async()=>{throw new p.ProtocolError('rssd_device_'+'a'.repeat(48)+' '+('x'.repeat(10000)),400,'bad_asset');};
+ const result=await service.cloudBatch({},'research',{locale:'zh-CN',ids:ids.join(',')});
+ assert.equal(result.items.length,8);assert.ok(result.items.every(item=>item.error.message.length<=160));
+ assert.doesNotMatch(JSON.stringify(result),/rssd_device_/);assert.ok(Buffer.byteLength(JSON.stringify(result))<4096);
+});
+
+test('staged private drafts retain canonical data, exact-base concurrency, receipts, scopes and migration fence',async()=>{
+ const f=await editorialFixture();
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYZkAAAAASUVORK5CYII=','base64');
+ const asset=bytes=>({path:mediaProtocol.imageManifest(bytes).path,data:bytes.toString('base64')});
+ const inline=asset(png),hidden=asset(Buffer.concat([png,Buffer.from([1])]));
+ f.packet.data.assets=[inline,hidden];f.packet.data.markdown+=' ![first]('+inline.path+')';
+ await f.service.submit(f.ctx,'research',f.packet,{intent:'draft'});
+ const canonical=await f.service.detail(f.ctx,'research',f.packet.data.id,{locale:'zh-CN'});
+ const source={document:{id:'original-document',kind:'news',permalink:'/news/original/',published_revision:null},revisions:[{payload:JSON.stringify({id:f.packet.data.id})}],requests:[],drafts:[],jobs:[]};
+ await db.$executeRawUnsafe(`INSERT INTO rssd_legacy_documents ("orgId","siteId","documentId","workId",locale,"sourceHash",source) VALUES ($1,'research-site','original-document',$2,'zh-CN',$3,$4::jsonb)`,f.owner.orgId,canonical.workId,p.hash(source),JSON.stringify(source));
+ await db.$executeRawUnsafe(`INSERT INTO rssd_migrations ("orgId","siteId","workspaceId",state,manifest,ancillary) VALUES ($1,'research-site','research','staged','{}','{}')`,f.owner.orgId);
+ const site=await f.service.api(f.ctx,'research','GET',['site']);assert(site.capabilities.includes('staged-drafts-v1'));
+ const base=await f.service.api(f.ctx,'research','GET',['staged-drafts',f.packet.data.id],{locale:'zh-CN'});
+ assert.equal(base.baseState,'current');assert.equal(base.overlayRevision,0);assert.equal(base.baseRevision,1);
+ const input={requestKey:randomUUID(),articleId:base.articleId,locale:'zh-CN',baseRevision:base.baseRevision,baseHash:base.baseHash,basePublishedVersion:base.basePublishedVersion,overlayRevision:0,data:{...base.data,assets:[inline],markdown:'Private branch only ![first]('+inline.path+')'}};
+ const [first,second]=await Promise.all([f.service.api(f.ctx,'research','POST',['staged-drafts'],{},input),f.service.api(f.ctx,'research','POST',['staged-drafts'],{},input)]);
+ assert.deepEqual(first,second);assert.equal(first.overlayRevision,1);assert.equal(first.status,'draft_saved');
+ assert.deepEqual(await f.service.api(f.ctx,'research','GET',['staged-drafts','requests',input.requestKey]),first);
+ const overlay=await f.service.api(f.ctx,'research','GET',['staged-drafts',input.articleId],{locale:'zh-CN'});assert.equal(overlay.data.markdown,input.data.markdown);assert.equal(overlay.baseState,'current');assert(!overlay.data.assets.some(a=>a.path===hidden.path));
+ const stored=(await db.$queryRawUnsafe('SELECT data FROM rssd_staged_drafts WHERE "orgId"=$1',f.owner.orgId))[0].data;assert(stored.assets.every(a=>a.id&&!('data' in a)));assert(stored.assets.some(a=>a.path===hidden.path));
+ assert.equal((await f.service.detail(f.ctx,'research',input.articleId,{locale:'zh-CN'})).data.markdown,canonical.data.markdown);
+ assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_editions WHERE "orgId"=$1',f.owner.orgId))[0].n,1);
+ assert.equal((await store.registry(f.ctx)).workspaces[0].writable,false);
+ await assert.rejects(f.service.api(f.ctx,'research','POST',['drafts'],{},{...f.packet,requestKey:randomUUID()}),{code:'migration_staged'});
+ await assert.rejects(f.service.api(f.ctx,'research','POST',['staged-drafts'],{},{...input,data:{...input.data,markdown:'changed payload'}}),{code:'request_conflict'});
+ await assert.rejects(f.service.api(f.ctx,'research','POST',['staged-drafts'],{},{...input,requestKey:randomUUID(),data:{...input.data,unvalidated:'x'.repeat(1024*1024)}}),{status:400});
+ await assert.rejects(f.service.api(f.ctx,'research','POST',['staged-drafts'],{},{...input,requestKey:randomUUID()}),{code:'revision_conflict'});
+ const list=await f.service.api(f.ctx,'research','GET',['staged-drafts'],{locale:'zh-CN',limit:'1'});assert.equal(list.items.length,1);assert.equal(list.items[0].overlayRevision,1);assert.equal(list.next,null);
+ const next={...input,requestKey:randomUUID(),overlayRevision:1};
+ const competing=await Promise.allSettled([next,{...next,requestKey:randomUUID()}].map(v=>f.service.api(f.ctx,'research','POST',['staged-drafts'],{},v)));
+ assert.equal(competing.filter(v=>v.status==='fulfilled'&&v.value.overlayRevision===2).length,1);
+ assert.equal(competing.filter(v=>v.status==='rejected'&&v.reason.code==='revision_conflict').length,1);
+ const revised=await f.service.api(f.ctx,'research','GET',['staged-drafts',input.articleId],{locale:'zh-CN'});assert.equal(revised.data.author,input.data.author);assert(!revised.data.assets.some(a=>a.path===hidden.path));
+ await assert.rejects(f.service.api(f.ctx,'research','GET',['staged-drafts'],{locale:'zh-CN',generation:list.generation}),{code:'catalog_changed'});
+ await assert.rejects(f.service.api({...f.ctx,workspaceIds:[]},'research','GET',['staged-drafts'],{locale:'zh-CN'}),{code:'forbidden'});
+ await assert.rejects(new RssdMigration(store,f.media).activate(f.owner,'research-site',{receiptId:'fixture:research-site',oldWriterDisabled:true,inFlightCount:0,pendingWorkReconciled:true,receiverRelease:'fixture',rollbackReference:'fixture'}),{code:'stale_snapshot'});
+ await db.$executeRawUnsafe('UPDATE rssd_editions SET hash=$2 WHERE "orgId"=$1',f.owner.orgId,'f'.repeat(64));
+ const changed=await f.service.api(f.ctx,'research','GET',['staged-drafts',input.articleId],{locale:'zh-CN'});assert.equal(changed.baseState,'changed');assert.equal(changed.data.markdown,input.data.markdown);
+ await assert.rejects(f.service.api(f.ctx,'research','POST',['staged-drafts'],{},{...input,requestKey:randomUUID(),overlayRevision:2}),{code:'staged_base_changed'});
+});
+
+test('private edits preserve legacy empty optional fields without weakening creation or publication',async()=>{
+ const f=await editorialFixture(),workId=randomUUID();
+ const edition={locale:'zh-CN',title:'Existing',summary:'',bodyMarkdown:'Original',metadata:{author:'',category:'',date:'2026-01-01',editorial:{articleId:'empty-legacy'}}};
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[edition]},{publish:false});
+ const before=await f.service.detail(f.ctx,'research','empty-legacy',{locale:'zh-CN'});
+ const update={requestKey:randomUUID(),expectedVersion:1,expectedPublishedVersion:null,data:{...before.data,markdown:'Edited privately'}};
+ const saved=await f.service.submit(f.ctx,'research',update,{intent:'draft'});assert.equal(saved.revision,2);
+ const after=await f.service.detail(f.ctx,'research','empty-legacy',{locale:'zh-CN'});assert.equal(after.data.author,'');assert.equal(after.data.category,'');assert.equal(after.data.summary,'');assert.equal(after.data.markdown,'Edited privately');
+ await assert.rejects(f.service.submit(f.ctx,'research',{...update,requestKey:randomUUID(),expectedVersion:2},{intent:'publish'}),{status:400});
+ await assert.rejects(f.service.submit(f.ctx,'research',{...update,requestKey:randomUUID(),expectedVersion:0,data:{...update.data,id:'new-empty-record'}},{intent:'draft'}),{status:400});
+ await f.service.submit(f.ctx,'research',f.packet,{intent:'draft'});
+ await assert.rejects(f.service.submit(f.ctx,'research',{requestKey:randomUUID(),expectedVersion:1,expectedPublishedVersion:null,data:{...f.packet.data,author:''}},{intent:'draft'}),{status:400});
+});
+
+test('staged translation source fingerprints do not load oversized source image bytes',async()=>{
+ const f=await editorialFixture(),workId=randomUUID();
+ const png=Buffer.concat([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYZkAAAAASUVORK5CYII=','base64'),Buffer.alloc(2*1024*1024)]);
+ const manifest=mediaProtocol.imageManifest(png),image=await f.media.upload(f.ctx,{workspaceId:'research',name:'large.png',...manifest,data:png.toString('base64')});
+ const meta={author:'Author',date:'2026-01-01',category:'Methods',editorial:{articleId:'source-with-large-image'}};
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'中文',summary:'摘要',bodyMarkdown:'![image]('+image.url+')',media:[{id:image.id,alt:'image'}],metadata:meta}]},{publish:false});
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',baseRevisions:{en:0},editions:[{locale:'en',title:'English',summary:'Summary',bodyMarkdown:'English body',metadata:meta,translationOf:{workId,locale:'zh-CN',revision:1}}]},{publish:false});
+ const rows=await f.service.entries(f.ctx,'research'),english=rows.find(x=>x.workId===workId&&x.locale==='en');
+ const originalBytes=f.media.bytes.bind(f.media);f.media.bytes=async(ctx,id)=>{if(id===image.id)throw Error('oversized image was read');return originalBytes(ctx,id);};
+ const result=await f.service.data(f.ctx,'research',english,english.revision,rows,{referencedOnly:true});
+ assert.equal(result.markdown,'English body');assert.equal(result.translationOf.revision,1);assert.match(result.translationOf.sha256,/^[a-f0-9]{64}$/);
+});
+
+test('staged reads return only current referenced media and reject oversize before reading bytes',async()=>{
+ const f=await editorialFixture();
+ await f.service.submit(f.ctx,'research',f.packet,{intent:'draft'});
+ const initial=await f.service.detail(f.ctx,'research',f.packet.data.id,{locale:'zh-CN'});
+ const source={document:{id:'media-source',kind:'news'},revisions:[{payload:JSON.stringify({id:f.packet.data.id})}],requests:[],drafts:[],jobs:[]};
+ await db.$executeRawUnsafe('INSERT INTO rssd_legacy_documents ("orgId","siteId","documentId","workId",locale,"sourceHash",source) VALUES ($1,\'research-site\',\'media-source\',$2,\'zh-CN\',$3,$4::jsonb)',f.owner.orgId,initial.workId,p.hash(source),JSON.stringify(source));
+ await db.$executeRawUnsafe('INSERT INTO rssd_migrations ("orgId","siteId","workspaceId",state,manifest,ancillary) VALUES ($1,\'research-site\',\'research\',\'staged\',\'{}\',\'{}\')',f.owner.orgId);
+ const base=await f.service.api(f.ctx,'research','GET',['staged-drafts',f.packet.data.id],{locale:'zh-CN'});
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYZkAAAAASUVORK5CYII=','base64');
+ let last;for(let i=0;i<3;i++){
+  const bytes=Buffer.concat([png,Buffer.alloc(900*1024,i)]),manifest=mediaProtocol.imageManifest(bytes),asset={path:manifest.path,data:bytes.toString('base64')};
+  const input={requestKey:randomUUID(),articleId:base.articleId,workId:base.workId,locale:'zh-CN',baseRevision:base.baseRevision,baseHash:base.baseHash,basePublishedVersion:base.basePublishedVersion,overlayRevision:i,data:{...base.data,markdown:'![current]('+asset.path+')',assets:[asset]}};
+  await f.service.api(f.ctx,'research','POST',['staged-drafts'],{},input);last=asset;
+ }
+ const raw=(await db.$queryRawUnsafe('SELECT data FROM rssd_staged_drafts WHERE "orgId"=$1 ORDER BY "overlayRevision" DESC LIMIT 1',f.owner.orgId))[0].data;
+ assert.equal(raw.assets.length,3);
+ const savedBytes=f.media.bytes.bind(f.media);let reads=0;f.media.bytes=async(...args)=>{reads++;return savedBytes(...args);};
+ const detail=await f.service.api(f.ctx,'research','GET',['staged-drafts',base.articleId],{locale:'zh-CN'});assert.equal(reads,1);assert.deepEqual(detail.data.assets,[last]);
+ const big=Buffer.concat([png,Buffer.alloc(2*1024*1024)]),manifest=mediaProtocol.imageManifest(big),uploaded=await f.media.upload(f.ctx,{workspaceId:'research',name:'large',...manifest,data:big.toString('base64')});
+ raw.assets=[{id:uploaded.id,path:manifest.path}];raw.markdown='![large]('+manifest.path+')';
+ await db.$executeRawUnsafe('UPDATE rssd_staged_drafts SET data=$2::jsonb WHERE "orgId"=$1 AND "overlayRevision"=3',f.owner.orgId,JSON.stringify(raw));
+ reads=0;await assert.rejects(f.service.api(f.ctx,'research','GET',['staged-drafts',base.articleId],{locale:'zh-CN'}),{code:'media_limit'});assert.equal(reads,0);
+});
+
+test('reconciliation promotes 100 matching staged branches in recoverable fenced batches',async()=>{
+ const total=Number(process.env.RSSD_BRANCH_CAPACITY_TOTAL||100);assert(Number.isInteger(total)&&total>=100&&total<=3000);
+ const f=await fixture(),siteId='capacity-fixture-site',dir=await fs.promises.mkdtemp(path.join(require('node:os').tmpdir(),'rssd-branch-capacity-'));
+ try{
+  await store.saveWorkspace(f.owner,{id:'research',siteId,name:'Research',sections:[{id:'methods',name:'Methods',policy:{version:1,targets:[]}}]},1);
+  const media=new RssdMedia(store,{directory:dir}),migration=new RssdMigration(store,media),documents=[];
+  for(let i=0;i<total;i++){
+   const workId=randomUUID(),articleId='capacity-'+i,documentId='doc-'+i;
+   const edition=p.edition({locale:'en',title:'Original '+i,summary:'Summary',bodyMarkdown:'Original',metadata:{author:'Author',category:'Methods',date:'2026-01-01',editorial:{articleId}}});
+   await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[edition]},{publish:false});
+   const source={document:{id:documentId,kind:'news',permalink:'/en/news/'+i+'/'},revisions:[{payload:JSON.stringify({id:articleId})}],requests:[],drafts:[],jobs:[]},sourceHash=p.hash(source),baseHash=p.hash(edition);
+   await db.$executeRawUnsafe('INSERT INTO rssd_legacy_documents ("orgId","siteId","documentId","workId",locale,"sourceHash",source) VALUES ($1,$2,$3,$4,\'en\',$5,$6::jsonb)',f.owner.orgId,siteId,documentId,workId,sourceHash,JSON.stringify(source));
+   if(i<100){const data={id:articleId,locale:'en',sectionId:'methods',title:'Original '+i,summary:'Summary',author:'Author',category:'Methods',date:'2026-01-01',markdown:'Private update '+i,assets:[]};
+   await db.$executeRawUnsafe(`INSERT INTO rssd_staged_drafts ("orgId","workspaceId","workId",locale,"articleId","baseRevision","baseHash","baseSourceHash","basePublishedVersion","overlayRevision",data,"requestKey","requestHash",receipt) VALUES ($1,'research',$2,'en',$3,1,$4,$5,NULL,1,$6::jsonb,$7,'fixture','{}')`,f.owner.orgId,workId,articleId,baseHash,sourceHash,JSON.stringify(data),randomUUID());}
+   documents.push({documentId,workId,locale:'en',sourceHash,deleted:false});
+  }
+  const manifest={version:1,site:{id:siteId,spaceId:'research'},workspace:{id:'research'},databaseSha256:'a'.repeat(64),baseline:{sha256:'b'.repeat(64)},documents,counts:{documents:total,revisions:total,published:0,deleted:0,media:0}};
+  const report=await migration.verify(f.owner,manifest);
+  await db.$executeRawUnsafe('INSERT INTO rssd_migrations ("orgId","siteId","workspaceId",state,manifest,ancillary,report) VALUES ($1,$2,\'research\',\'staged\',$3::jsonb,\'{}\',$4::jsonb)',f.owner.orgId,siteId,JSON.stringify(manifest),JSON.stringify(report));
+  const evidence={receiptId:'capacity-fixture:'+siteId,oldWriterDisabled:true,inFlightCount:0,pendingWorkReconciled:true,receiverRelease:'fixture',rollbackReference:'fixture',sourceDatabaseSha256:manifest.databaseSha256,editionIndexSha256:report.editionIndexSha256,baselineSha256:manifest.baseline.sha256};
+  const start=Date.now();let longest=0,step=await migration.reconcile(f.owner,siteId,evidence);
+  let inserted=0;const crashingStore={db:store.db,transaction:fn=>store.transaction(async tx=>fn({...tx,$executeRawUnsafe:async(sql,...args)=>{
+   if(sql.includes('INSERT INTO rssd_staged_draft_promotions')&&++inserted===2)throw Error('synthetic process interruption');
+   return tx.$executeRawUnsafe(sql,...args);
+  }}))};
+  await assert.rejects(new RssdMigration(crashingStore,media).reconcile(f.owner,siteId,evidence),/synthetic process interruption/);
+  assert.equal((await migration.inspect(f.owner,siteId)).state,'reconciling');
+  assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_staged_draft_promotions WHERE "orgId"=$1',f.owner.orgId))[0].n,0);
+  assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_editions WHERE "orgId"=$1',f.owner.orgId))[0].n,total);
+  assert.equal((await store.registry(f.owner)).workspaces[0].writable,false);
+  await assert.rejects(migration.activate(f.owner,siteId,evidence),{code:'staged_drafts_unreconciled'});
+  const frozen=(await migration.inspect(f.owner,siteId)).report;
+  await db.$executeRawUnsafe('UPDATE rssd_migrations SET report=$3::jsonb WHERE "orgId"=$1 AND "siteId"=$2',f.owner.orgId,siteId,JSON.stringify({...frozen,reconciliation:{...frozen.reconciliation,manifestHash:'0'.repeat(64)}}));
+  await assert.rejects(migration.reconcile(f.owner,siteId,evidence),{code:'reconcile_plan_changed'});
+  await db.$executeRawUnsafe('UPDATE rssd_migrations SET report=$3::jsonb WHERE "orgId"=$1 AND "siteId"=$2',f.owner.orgId,siteId,JSON.stringify(frozen));
+  const savedDraft=(await db.$queryRawUnsafe('SELECT "requestKey",data FROM rssd_staged_drafts WHERE "orgId"=$1 LIMIT 1',f.owner.orgId))[0];
+  await db.$executeRawUnsafe('UPDATE rssd_staged_drafts SET data=$3::jsonb WHERE "orgId"=$1 AND "requestKey"=$2',f.owner.orgId,savedDraft.requestKey,JSON.stringify({...savedDraft.data,title:'tampered'}));
+  await assert.rejects(migration.reconcile(f.owner,siteId,evidence),{code:'reconcile_plan_changed'});
+  await db.$executeRawUnsafe('UPDATE rssd_staged_drafts SET data=$3::jsonb WHERE "orgId"=$1 AND "requestKey"=$2',f.owner.orgId,savedDraft.requestKey,JSON.stringify(savedDraft.data));
+  const parallel=await Promise.all([migration.reconcile(f.owner,siteId,evidence),migration.reconcile(f.owner,siteId,evidence)]);
+  assert.equal(parallel[0].processed+parallel[1].processed,16);
+  assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_staged_draft_promotions WHERE "orgId"=$1',f.owner.orgId))[0].n,16);
+  step=parallel.find(v=>v.pending===Math.min(...parallel.map(x=>x.pending)));
+  while(step.pending){const tick=Date.now();step=await migration.reconcile(f.owner,siteId,evidence);longest=Math.max(longest,Date.now()-tick);assert(step.processed<=8);assert.equal(step.state,'reconciling');}
+  const result=await migration.activate(f.owner,siteId,evidence),elapsed=Date.now()-start;
+  assert.equal(result.stagedDraftReconciliation.count,100);assert(longest<15000,'an individual local batch must finish below the 20s transaction limit; observed '+longest+'ms');
+  assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_staged_draft_promotions WHERE "orgId"=$1',f.owner.orgId))[0].n,100);
+  assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_publications WHERE "orgId"=$1',f.owner.orgId))[0].n,0);
+  console.log('100 synthetic branches in '+total+' documents total/longest batch milliseconds:',elapsed,longest);
+ }finally{await fs.promises.rm(dir,{recursive:true,force:true});}
+});
+
+test('structured private drafts map only approved prose and preserve raw metadata for all record kinds',async()=>{
+ const examples=[
+  ['year','摘要','正文',{id:'year:1',category:'Event',start:'2026-01-01',tags:['original'],unknown:{private:'keep'}}],
+  ['history','事实摘要','历史意义',{id:'history:1',year:1901,dateKey:'01-01',sources:[],unknown:{private:'keep'}}],
+  ['openSource','项目简介','使用价值',{url:'https://example.org/tool',relatedUrl:'',status:'active',unknown:{private:'keep'}}],
+ ];
+ for(const [kind,first,second,fields] of examples){
+  const f=await editorialFixture(),workId=randomUUID(),documentId=randomUUID(),id='record-'+documentId;
+  const markdown=`# Original\n\n## ${first}\n\nFirst section\n\n## ${second}\n\nSecond section\n`;
+  const metadata={author:'Author',category:'Methods',date:'2026-01-01',editorial:{documentId,unknown:'keep'},record:{kind,fields},privateUnknown:{nested:'keep'}};
+  await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'Original',summary:'Summary',bodyMarkdown:markdown,metadata}]},{publish:false});
+  const base=await f.service.detail(f.ctx,'research',id,{locale:'zh-CN'});assert.equal(base.preservesStructuredDraftsOnSave,true);assert.equal(base.data.record.kind,kind);
+  const proposed={...base.data,title:'Revised',markdown:markdown.replace('# Original','# Revised').replace('First section','Revised first')};delete proposed.record;
+  const input={requestKey:randomUUID(),expectedVersion:1,expectedPublishedVersion:null,data:proposed};
+  const receipt=await f.service.submit(f.ctx,'research',input,{intent:'draft'});assert.equal(receipt.revision,2);
+  const saved=(await store.edition(f.owner,workId,'zh-CN',2)).payload;
+  assert.deepEqual(saved.metadata.privateUnknown,{nested:'keep'});assert.deepEqual(saved.metadata.record.fields.unknown,{private:'keep'});assert.equal(saved.metadata.editorial.unknown,'keep');
+  const updated=await f.service.detail(f.ctx,'research',id,{locale:'zh-CN'});assert.equal(updated.data.record.kind,kind);assert.match(updated.data.markdown,/Revised first/);
+  await assert.rejects(f.service.submit(f.ctx,'research',{...input,requestKey:randomUUID(),expectedVersion:2,data:{...proposed,author:'Other'}},{intent:'draft'}),{code:'structured_property_unmapped'});
+  await assert.rejects(f.service.submit(f.ctx,'research',{...input,requestKey:randomUUID(),expectedVersion:2,data:{...proposed,record:{...base.data.record,fields:{...base.data.record.fields,id:'forged'}}}},{intent:'draft'}),{code:'structured_fields_read_only'});
+  assert.equal((await store.publications(f.owner)).length,0);
+ }
+});
+
+test('structured staged drafts retain trusted fields through fenced reconciliation and promotion',async()=>{
+ const f=await editorialFixture(),siteId='research-site',documents=[],works=[],branchRecords=new Map();
+ const examples=[
+  ['year','摘要','正文','summary',{id:'year:1',category:'Event',start:'2026-01-01',tags:['original'],unknown:{private:'keep'}}],
+  ['history','事实摘要','历史意义','factSummary',{id:'history:1',year:1901,dateKey:'01-01',sources:[],unknown:{private:'keep'}}],
+  ['openSource','项目简介','使用价值','summary',{url:'https://example.org/tool',relatedUrl:'',status:'active',unknown:{private:'keep'}}],
+ ];
+ for(const [kind,first,second,sectionKey,fields] of examples){
+  const workId=randomUUID(),documentId=randomUUID(),id='record-'+documentId;
+  const markdown=`# Original\n\n## ${first}\n\nFirst section\n\n## ${second}\n\nSecond section\n`;
+  const metadata={author:'Author',category:'Methods',date:'2026-01-01',editorial:{documentId,unknown:'keep'},record:{kind,fields},privateUnknown:{nested:'keep'}};
+  const edition=p.edition({locale:'zh-CN',title:'Original',summary:'Summary',bodyMarkdown:markdown,metadata});
+  await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[edition]},{publish:false});
+  const source={document:{id:documentId,kind,permalink:'/news/'+documentId+'/'},revisions:[{payload:JSON.stringify({id})}],requests:[],drafts:[],jobs:[]},sourceHash=p.hash(source);
+  await db.$executeRawUnsafe('INSERT INTO rssd_legacy_documents ("orgId","siteId","documentId","workId",locale,"sourceHash",source) VALUES ($1,$2,$3,$4,\'zh-CN\',$5,$6::jsonb)',f.owner.orgId,siteId,documentId,workId,sourceHash,JSON.stringify(source));
+  documents.push({documentId,workId,locale:'zh-CN',sourceHash,deleted:false});works.push({kind,workId,id,markdown,sectionKey});
+ }
+ const manifest={version:1,site:{id:siteId,spaceId:'research'},workspace:{id:'research'},databaseSha256:'a'.repeat(64),baseline:{sha256:'b'.repeat(64)},documents,counts:{documents:3,revisions:3,published:0,deleted:0,media:0}};
+ const migration=new RssdMigration(store,f.media),report=await migration.verify(f.owner,manifest);
+ await db.$executeRawUnsafe('INSERT INTO rssd_migrations ("orgId","siteId","workspaceId",state,manifest,ancillary,report) VALUES ($1,$2,\'research\',\'staged\',$3::jsonb,\'{}\',$4::jsonb)',f.owner.orgId,siteId,JSON.stringify(manifest),JSON.stringify(report));
+ for(const item of works){
+  const base=await f.service.api(f.ctx,'research','GET',['staged-drafts',item.id],{locale:'zh-CN'});assert.equal(base.preservesStructuredDraftsOnSave,true);assert.equal(base.data.record.kind,item.kind);
+  const data={...base.data,markdown:item.markdown.replace('First section','Private prose')};delete data.record;
+  const input={requestKey:randomUUID(),articleId:item.id,workId:item.workId,locale:'zh-CN',baseRevision:base.baseRevision,baseHash:base.baseHash,basePublishedVersion:base.basePublishedVersion,overlayRevision:0,data};
+  assert.equal((await f.service.api(f.ctx,'research','POST',['staged-drafts'],{},input)).overlayRevision,1);
+  const branch=await f.service.api(f.ctx,'research','GET',['staged-drafts',item.id],{locale:'zh-CN'});assert.equal(branch.data.record.kind,item.kind);assert.equal(branch.data.record.fields[item.sectionKey],'Private prose');branchRecords.set(item.id,branch.data.record);
+  await assert.rejects(f.service.api(f.ctx,'research','POST',['staged-drafts'],{},{...input,requestKey:randomUUID(),overlayRevision:1,data:{...data,author:'Changed'}}),{code:'structured_property_unmapped'});
+  await assert.rejects(f.service.api(f.ctx,'research','POST',['staged-drafts'],{},{...input,requestKey:randomUUID(),overlayRevision:1,data:{...data,record:{kind:item.kind}}}),{status:400});
+ }
+ const evidence={receiptId:'structured-fixture:'+siteId,oldWriterDisabled:true,inFlightCount:0,pendingWorkReconciled:true,receiverRelease:'fixture',rollbackReference:'fixture',sourceDatabaseSha256:manifest.databaseSha256,editionIndexSha256:report.editionIndexSha256,baselineSha256:manifest.baseline.sha256};
+ assert.equal((await migration.reconcile(f.owner,siteId,evidence)).pending,3);
+ assert.equal((await migration.reconcile(f.owner,siteId,evidence)).pending,0);
+ assert.equal((await migration.activate(f.owner,siteId,evidence)).state,'active');
+ for(const item of works){
+  const saved=(await store.edition(f.owner,item.workId,'zh-CN',2)).payload;
+  assert.deepEqual(saved.metadata.privateUnknown,{nested:'keep'});assert.deepEqual(saved.metadata.record.fields.unknown,{private:'keep'});assert.equal(saved.metadata.record.fields[item.sectionKey],'Private prose');
+  assert.deepEqual((await f.service.detail(f.ctx,'research',item.id,{locale:'zh-CN'})).data.record,branchRecords.get(item.id));
+ }
+ assert.equal((await store.publications(f.owner)).length,0);
+});
+
+test('overlapping imports are fenced by lease generation and stale importer cannot undo activation',async()=>{
+ const f=await fixture(),siteId='import-fence-site',directory=await fs.promises.mkdtemp(path.join(require('node:os').tmpdir(),'rssd-import-fence-'));
+ try{
+  const media=new RssdMedia(store,{directory:path.join(directory,'media')}),migration=new RssdMigration(store,media),payload=p.edition(f.packet.editions[0]);
+  const source={document:{id:'original-doc',updated:1700000000000,published_revision:null,permalink:'/news/original/'},revisions:[{version:1,payload:JSON.stringify({title:'Original',markdown:'Body'})}],requests:[],jobs:[],tombstone:null};
+  const value={version:1,siteId,workspaceId:'research',workId:f.packet.workId,sectionId:'methods',locale:'en',source,sourceHash:p.hash(source),editions:[{revision:1,payload,hash:p.hash(payload),createdAt:'2026-01-01T00:00:00.000Z'}]};
+  const save=async(name,data)=>{const raw=JSON.stringify(data);await fs.promises.writeFile(path.join(directory,name),raw);return {path:name,sha256:p.hash(raw)};};
+  const doc=await save('doc.json',value),baseline=await save('baseline.json',{}),ancillary=await save('ancillary.json',{});
+  const manifest={version:1,site:{id:siteId,spaceId:'research',origin:'https://example.test'},workspace:{id:'research',siteId,name:'Research',sections:[{id:'methods',name:'Methods',policy:{version:1,targets:[]}}]},databaseSha256:'a'.repeat(64),documents:[{...doc,documentId:'original-doc',workId:value.workId,locale:'en',sourceHash:value.sourceHash,revisions:1,publishedRevision:null,deleted:false}],media:[],baseline,ancillary,counts:{documents:1,revisions:1,published:0,deleted:0,media:0}};
+  await save('manifest.json',manifest);
+  let writerReached,releaseWriter;const writableRead=new Promise(r=>writerReached=r),writerGate=new Promise(r=>releaseWriter=r);
+  const writerDb={...db,$transaction:fn=>db.$transaction(tx=>fn({...tx,$queryRawUnsafe:async(sql,...args)=>{const result=await tx.$queryRawUnsafe(sql,...args);if(sql.startsWith('SELECT state FROM rssd_migrations')){writerReached();await writerGate;}return result;}}))};
+  const heldWriter=new RssdStore(writerDb).submit(f.owner,f.packet,{publish:false});await writableRead;
+  await assert.rejects(migration.import(f.owner,directory),{code:'migration_bootstrap_required'});
+  assert.equal(await migration.inspect(f.owner,siteId),null);releaseWriter();await heldWriter;
+  await db.$executeRawUnsafe('INSERT INTO rssd_migrations ("orgId","siteId","workspaceId",state,manifest,ancillary) VALUES ($1,$2,\'research\',\'staged\',\'{}\',\'{}\')',f.owner.orgId,siteId);
+  let reached,release,didPause=false;const paused=new Promise(r=>reached=r),gate=new Promise(r=>release=r);
+  const pausingStore={db:store.db,registry:(...args)=>store.registry(...args),saveWorkspace:(...args)=>store.saveWorkspace(...args),transaction:async fn=>{let starting=false;const result=await store.transaction(tx=>fn({...tx,$executeRawUnsafe:async(sql,...args)=>{if(sql.includes('INSERT INTO rssd_migrations')&&sql.includes("'staging'"))starting=true;return tx.$executeRawUnsafe(sql,...args);}}));if(starting&&!didPause){didPause=true;reached();await gate;}return result;}};
+  const first=new RssdMigration(pausingStore,media).import(f.owner,directory);await paused;
+  assert.equal((await migration.inspect(f.owner,siteId)).state,'staging');
+  await assert.rejects(migration.import(f.owner,directory),{code:'import_in_progress'});
+  const noProof={receiptId:'run:'+siteId,oldWriterDisabled:true,inFlightCount:0,pendingWorkReconciled:true,receiverRelease:'fixture',rollbackReference:'fixture'};
+  await assert.rejects(migration.reconcile(f.owner,siteId,noProof));await assert.rejects(migration.activate(f.owner,siteId,noProof));
+  await db.$executeRawUnsafe('UPDATE rssd_migrations SET "importLeaseUntil"=CURRENT_TIMESTAMP-interval \'1 second\' WHERE "orgId"=$1 AND "siteId"=$2',f.owner.orgId,siteId);
+  await save('manifest.json',{...manifest,databaseSha256:'c'.repeat(64)});
+  await assert.rejects(migration.import(f.owner,directory),{code:'import_plan_changed'});
+  await save('manifest.json',manifest);
+  const completed=await migration.import(f.owner,directory);assert.equal(completed.state,'staged');
+  const evidence={...noProof,sourceDatabaseSha256:manifest.databaseSha256,editionIndexSha256:completed.editionIndexSha256,baselineSha256:manifest.baseline.sha256};
+  assert.equal((await migration.activate(f.owner,siteId,evidence)).state,'active');
+  release();await assert.rejects(first,{code:'import_lease_lost'});
+  assert.equal((await migration.inspect(f.owner,siteId)).state,'active');
+  const fresh={orgId:randomUUID(),userId:'fixture-owner',admin:true,workspaceIds:null};
+  assert.equal((await migration.import(fresh,directory)).state,'staged');
+  const registry=await store.registry(fresh);assert.equal(registry.workspaces.length,1);assert.equal(registry.workspaces[0].writable,false);
+ }finally{await fs.promises.rm(directory,{recursive:true,force:true});}
+});
+
+test('bounded canonical reads avoid historical image amplification while legacy reads remain compatible',async()=>{
+ const f=await editorialFixture(),workId=randomUUID(),png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYZkAAAAASUVORK5CYII=','base64'),images=[];
+ for(let i=0;i<3;i++){const bytes=Buffer.concat([png,Buffer.alloc(900*1024,i)]),manifest=mediaProtocol.imageManifest(bytes);images.push(await f.media.upload(f.ctx,{workspaceId:'research',name:'image-'+i,...manifest,data:bytes.toString('base64')}));}
+ const metadata={author:'Author',date:'2026-01-01',category:'Methods',editorial:{articleId:'bounded-example'}};
+ const edition={locale:'zh-CN',title:'Title',summary:'Summary',bodyMarkdown:'![current]('+images[2].url+')',metadata,media:images.map((a,i)=>({id:a.id,alt:'alt-'+i}))};
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[edition]},{publish:false});
+ const read=f.media.bytes.bind(f.media);let readCount=0;f.media.bytes=async(...args)=>{readCount++;return read(...args);};
+ const bounded=await f.service.api(f.ctx,'research','GET',['cloud','bounded-example'],{locale:'zh-CN',media:'referenced'});
+ assert.equal(bounded.boundedMediaReads,true);assert.deepEqual(bounded.data.assets.map(a=>a.path),[images[2].manifest.path]);assert.equal(readCount,1);
+ readCount=0;const legacy=await f.service.api(f.ctx,'research','GET',['cloud','bounded-example'],{locale:'zh-CN'});assert.equal(legacy.data.assets.length,3);assert.equal(readCount,3);
+ const full={...edition,bodyMarkdown:images.map(a=>'![]('+a.url+')').join('\n')};
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',baseRevisions:{'zh-CN':1},editions:[full]},{publish:false});
+ readCount=0;await assert.rejects(f.service.api(f.ctx,'research','GET',['cloud','bounded-example'],{locale:'zh-CN',media:'referenced'}),{code:'media_limit'});assert.equal(readCount,0);
+ const batch=await f.service.api(f.ctx,'research','GET',['cloud','batch','read'],{locale:'zh-CN',ids:'bounded-example',media:'referenced'});assert.equal(batch.items[0].ok,false);assert.equal(batch.items[0].error.code,'media_limit');
+});
+
+test('retired migration columns allow only their imported works to save and publish, without reopening production columns',async()=>{
+ const f=await editorialFixture();
+ await f.service.submit(f.ctx,'research',f.packet,{intent:'draft'});
+ const before=await f.service.detail(f.ctx,'research',f.packet.data.id),workId=before.workId;
+ await db.$executeRawUnsafe('UPDATE rssd_works SET "sectionId"=\'archive\' WHERE "orgId"=$1 AND id=$2',f.owner.orgId,workId);
+ const manifest={site:{id:'research-site',spaceId:'research'},compatibilitySections:[{id:'archive',name:'Historical'}]};
+ await db.$executeRawUnsafe('INSERT INTO rssd_migrations ("orgId","siteId","workspaceId",state,manifest,ancillary) VALUES ($1,\'research-site\',\'research\',\'active\',$2::jsonb,\'{}\')',f.owner.orgId,JSON.stringify(manifest));
+ await db.$executeRawUnsafe('INSERT INTO rssd_legacy_documents ("orgId","siteId","documentId","workId",locale,"sourceHash",source) VALUES ($1,\'research-site\',\'old-document\',$2,\'zh-CN\',$3,\'{}\')',f.owner.orgId,workId,'a'.repeat(64));
+ const current=await f.service.detail(f.ctx,'research',f.packet.data.id);
+ const update={requestKey:randomUUID(),expectedVersion:1,expectedPublishedVersion:null,data:{...current.data,markdown:'Edited historical manuscript'}};
+ const saved=await f.service.submit(f.ctx,'research',update,{intent:'draft'});assert.equal(saved.revision,2);
+ const published=await f.service.submit(f.ctx,'research',{...update,requestKey:randomUUID(),expectedVersion:2},{intent:'publish'});
+ assert(published.job.id);assert.equal((await f.service.detail(f.ctx,'research',f.packet.data.id)).workId,workId);
+ const targets=await db.$queryRawUnsafe('SELECT "destinationId" FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2',f.owner.orgId,workId);
+ assert.deepEqual(targets.map(t=>t.destinationId),['site-research-site']);
+ assert.deepEqual((await store.registry(f.ctx)).workspaces[0].sections.map(s=>s.id),['methods']);
+ await assert.rejects(f.service.submit(f.ctx,'research',{...update,requestKey:randomUUID(),expectedVersion:0,data:{...update.data,id:'new-in-retired-column'}},{intent:'draft'}),{status:404});
+ await assert.rejects(store.workspace(db,f.ctx,'research','archive'),{status:404});
+ await assert.rejects(store.workSection(db,{...f.ctx,workspaceIds:[]},'research','archive',workId),{status:403});
+ await assert.rejects(store.workSection(db,f.ctx,'research','archive',randomUUID()),{status:404});
+ await assert.rejects(store.workSection(db,f.ctx,'research','another-old-column',workId),{status:404});
+ await db.$executeRawUnsafe('UPDATE rssd_migrations SET state=\'staged\' WHERE "orgId"=$1',f.owner.orgId);
+ await assert.rejects(f.service.submit(f.ctx,'research',{...update,requestKey:randomUUID(),expectedVersion:3},{intent:'draft'}),{code:'migration_staged'});
 });

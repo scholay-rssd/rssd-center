@@ -13,6 +13,8 @@ Append the existing operation path:
 | GET | `/catalog`, `/index` | Complete versioned, paginated read models |
 | GET | `/:id`, `/cloud/:id`, `/published/:id` | Stable article identity, current and public revisions |
 | POST | `/drafts`, `/publish` | Exact-base save or publication using the original `requestKey` |
+| GET / POST | `/staged-drafts`, `/staged-drafts/:id` | Paginated private branches and exact-base draft saves while a site is staged |
+| GET | `/staged-drafts/requests/:key`, `/staged-drafts/promotions/:id` | Recover original branch receipt or exact promotion (`locale` and `overlayRevision` required) |
 | GET | `/requests/:key`, `/drafts/requests/:key` | Recovery of original center or migrated requests |
 | POST | `/requests/:key/retry` | Explicit retry of the original website job |
 | POST / GET | `/source-archives`, `/source-archives/:sha256` | Private original archives with byte-level readback |
@@ -32,6 +34,19 @@ The response keeps site-relative `url` values. Catalog URLs are absolute.
 Migrated request keys can be queried without creating a new request. A POST
 that reuses a migrated key is rejected and instructs the client to recover
 its preserved receipt. Versions and tombstones are never discarded.
+
+Staged drafts are separate append-only private branches, not canonical editions
+or publications. Their cursor binds `baseRevision`, `baseHash`,
+`basePublishedVersion` and independent `overlayRevision`. `baseState:changed`
+means the Center snapshot moved and both branches must be retained for explicit
+reconciliation. The Center snapshot is not proof that the still-running legacy
+writer has stopped or that its data has not changed.
+
+Clients opting into `media=referenced` on `/cloud/:id` and `/cloud/batch/read`
+receive `boundedMediaReads:true` and only media referenced in the Markdown,
+up to 2 MiB total. Existing clients without this option keep their prior read
+behavior. Hidden original attachment IDs and alt text remain in canonical
+editions; old staged branch media references remain in the private history.
 
 Visibility actions run only when `RSSD_DISPATCH_ENABLED=1`. Their confirmed
 content revision, published revision and center visibility generation stay

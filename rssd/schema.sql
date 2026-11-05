@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS rssd_migrations (
  state TEXT NOT NULL, manifest JSONB NOT NULL, ancillary JSONB NOT NULL, report JSONB NOT NULL DEFAULT '{}',
  "updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY ("orgId","siteId")
 );
+ALTER TABLE rssd_migrations ADD COLUMN IF NOT EXISTS "importGeneration" TEXT;
+ALTER TABLE rssd_migrations ADD COLUMN IF NOT EXISTS "importLeaseUntil" TIMESTAMPTZ(3);
 CREATE TABLE IF NOT EXISTS rssd_legacy_documents (
  "orgId" TEXT NOT NULL,"siteId" TEXT NOT NULL,"documentId" TEXT NOT NULL,"workId" TEXT NOT NULL,
  locale TEXT NOT NULL,"sourceHash" TEXT NOT NULL,source JSONB NOT NULL,"deletedAt" TIMESTAMPTZ(3),
@@ -105,6 +107,24 @@ CREATE TABLE IF NOT EXISTS rssd_editorial_archives (
  "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
  PRIMARY KEY ("orgId","workspaceId",id)
 );
+CREATE TABLE IF NOT EXISTS rssd_staged_drafts (
+ "orgId" TEXT NOT NULL,"workspaceId" TEXT NOT NULL,"workId" TEXT NOT NULL,locale TEXT NOT NULL,
+ "articleId" TEXT NOT NULL,"baseRevision" INTEGER NOT NULL,"baseHash" TEXT NOT NULL,
+ "baseSourceHash" TEXT NOT NULL,"basePublishedVersion" INTEGER,"overlayRevision" INTEGER NOT NULL,
+ data JSONB NOT NULL,"requestKey" TEXT NOT NULL,"requestHash" TEXT NOT NULL,receipt JSONB NOT NULL,
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY ("orgId","workspaceId","workId",locale,"overlayRevision"),
+ UNIQUE ("orgId","workspaceId","requestKey")
+);
+CREATE TABLE IF NOT EXISTS rssd_staged_draft_promotions (
+ "orgId" TEXT NOT NULL,"workspaceId" TEXT NOT NULL,"workId" TEXT NOT NULL,locale TEXT NOT NULL,
+ "articleId" TEXT NOT NULL,"overlayRevision" INTEGER NOT NULL,"baseRevision" INTEGER NOT NULL,
+ "baseHash" TEXT NOT NULL,"canonicalRevision" INTEGER NOT NULL,"canonicalHash" TEXT NOT NULL,"requestId" TEXT NOT NULL,
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY ("orgId","workspaceId","workId",locale,"overlayRevision"),
+ UNIQUE ("orgId","requestId")
+);
+ALTER TABLE rssd_staged_draft_promotions ADD COLUMN IF NOT EXISTS "canonicalHash" TEXT;
 CREATE TABLE IF NOT EXISTS rssd_editorial_states (
  "orgId" TEXT NOT NULL,"workId" TEXT NOT NULL,locale TEXT NOT NULL,visibility TEXT NOT NULL,
  "previousVisibility" TEXT,"previousPublishedVersion" INTEGER,generation INTEGER NOT NULL DEFAULT 0,"operationSequence" INTEGER NOT NULL DEFAULT 0,

@@ -59,7 +59,7 @@ class RssdEditorialActions {
    const destination=(await q(db,'SELECT * FROM rssd_destinations WHERE "orgId"=$1 AND id=$2',ctx.orgId,destinationId))[0];
    if(!destination||destination.kind!=='site'||!destination.enabled||!destination.workspaceIds.includes(workspaceId))p.fail('Website destination is not configured for this workspace',409,'missing_destination');
    if(input.action==='publish'){
-    const {section}=await nested.workspace(db,ctx,workspaceId,row.sectionId);
+    const {section}=await nested.workSection(db,ctx,workspaceId,row.sectionId,row.workId);
     if(!section.policy.targets.some(t=>t.destinationId===destinationId&&t.locale===row.locale))p.fail('This section has no website destination for the requested language',409,'missing_destination');
    }
    const prior=(await q(db,'SELECT * FROM rssd_editorial_states WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3',ctx.orgId,row.workId,row.locale))[0];
