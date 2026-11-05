@@ -392,6 +392,32 @@ test('editorial private originals round-trip exact bytes, keep author notes priv
  await assert.rejects(f.service.saveArchive(f.ctx,'research',bundle),{code:'revision_conflict'});
 });
 
+test('native edition author notes are privately readable with immutable body hash and scope boundaries',async()=>{
+ const f=await editorialFixture(),workId=randomUUID(),id='native-private-notes',body='Public native body',notebook={version:2,blocks:[{id:'para',type:'paragraph',text:body}],internalNotes:{writing:'NATIVE_PRIVATE'},blockNotes:{para:{notes:{verification:'ROW_PRIVATE'}}},modelSignatures:[]};
+ await store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'Native title',bodyMarkdown:body,metadata:{editorial:{articleId:id},notebook}}]},{publish:false});
+ const result=await f.service.privateNotes(f.ctx,'research',id,1);
+ assert.equal(result.revision,1);assert.equal(result.privateEditorial.bodySha,require('node:crypto').createHash('sha256').update(body).digest('hex'));
+ assert.equal(result.privateEditorial.internalNotes.writing,'NATIVE_PRIVATE');assert.deepEqual(result.privateEditorial.blockNotes.para.anchor,{type:'paragraph',text:body});
+ assert.equal((await f.service.privateNotes(f.ctx,'research',id,0)).privateEditorial,null);
+ assert(!(JSON.stringify(await f.service.catalog(f.ctx,'research',{scope:'all'}))).includes('NATIVE_PRIVATE'));
+ assert(!(JSON.stringify(await f.service.detail(f.ctx,'research',id))).includes('ROW_PRIVATE'));
+ await assert.rejects(f.service.privateNotes({...f.ctx,orgId:randomUUID()},'research',id),{status:404});
+ await assert.rejects(f.service.privateNotes({...f.ctx,workspaceIds:['other']},'research',id),{status:403});
+});
+
+test('native notes use the newest bounded revision and prefer an original archive only at the same revision',async()=>{
+ const f=await editorialFixture(),workId=randomUUID(),id='native-note-versions';
+ const put=async(revision,writing,locale='zh-CN',articleId=id)=>store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',baseRevisions:{[locale]:revision-1},editions:[{locale,title:'Native notes',bodyMarkdown:'Body '+revision,metadata:{editorial:{articleId},notebook:{internalNotes:{writing},modelSignatures:[]}}}]},{publish:false});
+ const archive=async(revision,writing)=>{const bytes=Buffer.from(JSON.stringify({version:1,bodySha:'a'.repeat(64),internalNotes:{writing},modelSignatures:[]}));return f.service.saveArchive(f.ctx,'research',{articleId:id,revision,files:[{path:'internal-notes.json',sha256:require('node:crypto').createHash('sha256').update(bytes).digest('hex'),data:bytes.toString('base64')}]});};
+ await put(1,'NATIVE_V1');await archive(1,'ARCHIVE_V1');await put(2,'NATIVE_V2');await put(1,'ENGLISH_PRIVATE','en',id+'-en');
+ assert.equal((await f.service.privateNotes(f.ctx,'research',id)).privateEditorial.internalNotes.writing,'NATIVE_V2');
+ assert.equal((await f.service.privateNotes(f.ctx,'research',id,1)).privateEditorial.internalNotes.writing,'ARCHIVE_V1');
+ assert.equal((await f.service.privateNotes(f.ctx,'research',id+'-en',99)).privateEditorial.internalNotes.writing,'ENGLISH_PRIVATE');
+ await archive(2,'ARCHIVE_V2');assert.equal((await f.service.privateNotes(f.ctx,'research',id)).privateEditorial.internalNotes.writing,'ARCHIVE_V2');
+ await put(3,'');assert.equal((await f.service.privateNotes(f.ctx,'research',id)).privateEditorial.internalNotes.writing,'');
+ assert.equal((await f.service.privateNotes(f.ctx,'research',id,2)).privateEditorial.internalNotes.writing,'ARCHIVE_V2');
+});
+
 test('editorial migration fencing, revocation and a missing website policy retain manuscripts without publication',async()=>{
  const f=await editorialFixture();
  await db.$executeRawUnsafe(`INSERT INTO rssd_migrations ("orgId","siteId","workspaceId",state,manifest,ancillary) VALUES ($1,'research-site','research','staged','{}','{}')`,f.ctx.orgId);
@@ -1025,4 +1051,29 @@ test('bounded canonical reads avoid historical image amplification while legacy 
  await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',baseRevisions:{'zh-CN':1},editions:[full]},{publish:false});
  readCount=0;await assert.rejects(f.service.api(f.ctx,'research','GET',['cloud','bounded-example'],{locale:'zh-CN',media:'referenced'}),{code:'media_limit'});assert.equal(readCount,0);
  const batch=await f.service.api(f.ctx,'research','GET',['cloud','batch','read'],{locale:'zh-CN',ids:'bounded-example',media:'referenced'});assert.equal(batch.items[0].ok,false);assert.equal(batch.items[0].error.code,'media_limit');
+});
+
+test('retired migration columns allow only their imported works to save and publish, without reopening production columns',async()=>{
+ const f=await editorialFixture();
+ await f.service.submit(f.ctx,'research',f.packet,{intent:'draft'});
+ const before=await f.service.detail(f.ctx,'research',f.packet.data.id),workId=before.workId;
+ await db.$executeRawUnsafe('UPDATE rssd_works SET "sectionId"=\'archive\' WHERE "orgId"=$1 AND id=$2',f.owner.orgId,workId);
+ const manifest={site:{id:'research-site',spaceId:'research'},compatibilitySections:[{id:'archive',name:'Historical'}]};
+ await db.$executeRawUnsafe('INSERT INTO rssd_migrations ("orgId","siteId","workspaceId",state,manifest,ancillary) VALUES ($1,\'research-site\',\'research\',\'active\',$2::jsonb,\'{}\')',f.owner.orgId,JSON.stringify(manifest));
+ await db.$executeRawUnsafe('INSERT INTO rssd_legacy_documents ("orgId","siteId","documentId","workId",locale,"sourceHash",source) VALUES ($1,\'research-site\',\'old-document\',$2,\'zh-CN\',$3,\'{}\')',f.owner.orgId,workId,'a'.repeat(64));
+ const current=await f.service.detail(f.ctx,'research',f.packet.data.id);
+ const update={requestKey:randomUUID(),expectedVersion:1,expectedPublishedVersion:null,data:{...current.data,markdown:'Edited historical manuscript'}};
+ const saved=await f.service.submit(f.ctx,'research',update,{intent:'draft'});assert.equal(saved.revision,2);
+ const published=await f.service.submit(f.ctx,'research',{...update,requestKey:randomUUID(),expectedVersion:2},{intent:'publish'});
+ assert(published.job.id);assert.equal((await f.service.detail(f.ctx,'research',f.packet.data.id)).workId,workId);
+ const targets=await db.$queryRawUnsafe('SELECT "destinationId" FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2',f.owner.orgId,workId);
+ assert.deepEqual(targets.map(t=>t.destinationId),['site-research-site']);
+ assert.deepEqual((await store.registry(f.ctx)).workspaces[0].sections.map(s=>s.id),['methods']);
+ await assert.rejects(f.service.submit(f.ctx,'research',{...update,requestKey:randomUUID(),expectedVersion:0,data:{...update.data,id:'new-in-retired-column'}},{intent:'draft'}),{status:404});
+ await assert.rejects(store.workspace(db,f.ctx,'research','archive'),{status:404});
+ await assert.rejects(store.workSection(db,{...f.ctx,workspaceIds:[]},'research','archive',workId),{status:403});
+ await assert.rejects(store.workSection(db,f.ctx,'research','archive',randomUUID()),{status:404});
+ await assert.rejects(store.workSection(db,f.ctx,'research','another-old-column',workId),{status:404});
+ await db.$executeRawUnsafe('UPDATE rssd_migrations SET state=\'staged\' WHERE "orgId"=$1',f.owner.orgId);
+ await assert.rejects(f.service.submit(f.ctx,'research',{...update,requestKey:randomUUID(),expectedVersion:3},{intent:'draft'}),{code:'migration_staged'});
 });

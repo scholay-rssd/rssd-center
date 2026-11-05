@@ -34,6 +34,23 @@ class RssdStore {
     if (sectionId && !section) p.fail('Section not found',404,'not_found');
     return {row,section};
   }
+  async workSection(db,ctx,workspaceId,sectionId,workId) {
+    const {row}=await this.workspace(db,ctx,workspaceId);
+    const section=row.payload.sections.find(s=>s.id===sectionId);
+    if(section)return {row,section};
+    // Retired columns are available only to an already imported work. They
+    // cannot be selected for a new work, demand, or another workspace.
+    const legacy=workId&&await one(db,`SELECT m.manifest FROM rssd_works w
+      JOIN rssd_legacy_documents l ON l."orgId"=w."orgId" AND l."workId"=w.id
+      JOIN rssd_migrations m ON m."orgId"=l."orgId" AND m."siteId"=l."siteId" AND m."workspaceId"=w."workspaceId"
+      WHERE w."orgId"=$1 AND w."workspaceId"=$2 AND w.id=$3 AND w."sectionId"=$4 LIMIT 1`,ctx.orgId,workspaceId,workId,sectionId);
+    const archived=legacy?.manifest?.compatibilitySections?.find(s=>s.id===sectionId);
+    if(!archived)p.fail('Section not found',404,'not_found');
+    const destinationId='site-'+row.payload.siteId;
+    const targets=[...new Map(row.payload.sections.flatMap(s=>s.policy.targets)
+      .filter(t=>t.destinationId===destinationId).map(t=>[t.destinationId+':'+t.locale,t])).values()];
+    return {row,section:{id:sectionId,name:archived.name,policy:{version:1,targets}}};
+  }
   async registry(ctx) {
     const all = await rows(this.db,'SELECT w.*,m.state AS "migrationState" FROM rssd_workspaces w LEFT JOIN rssd_migrations m ON m."orgId"=w."orgId" AND m."workspaceId"=w.id WHERE w."orgId"=$1 ORDER BY w.id',ctx.orgId);
     return {protocolVersion:p.VERSION,workspaces:all.filter(w => ctx.workspaceIds === null || ctx.workspaceIds.includes(w.id)).map(w => ({...w.payload,revision:w.revision,migrationState:w.migrationState||null,writable:!w.migrationState||w.migrationState==='active'}))};
@@ -191,7 +208,7 @@ class RssdStore {
       if(previous){if(previous.payloadHash!==fingerprint)p.fail('Request identity was reused with different content',409,'request_conflict');return previous.result;}
       // Check revocation inside the transaction, not only at the HTTP boundary.
       if(ctx.workerId){const worker=await one(db,'SELECT id FROM rssd_workers WHERE "orgId"=$1 AND id=$2 AND "revokedAt" IS NULL',ctx.orgId,ctx.workerId);if(!worker)p.fail('Device revoked',401);}
-      const {section}=await this.workspace(db,ctx,value.workspaceId,value.sectionId);
+      const {section}=await this.workSection(db,ctx,value.workspaceId,value.sectionId,value.workId);
       await this.writable(db,ctx,value.workspaceId);
       let policy=section.policy,demand=null;
       if(value.demandId){

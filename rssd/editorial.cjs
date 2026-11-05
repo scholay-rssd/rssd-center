@@ -79,6 +79,32 @@ function archiveBundle(row){
   if(digest(raw)!==row.id)p.fail('Archived original identity mismatch',409,'archive_conflict');
   return {archiveId:row.id,archiveSha256:row.id,bundle:JSON.parse(raw.toString('utf8'))};
 }
+// Native producers already save author-only fields with the immutable edition.
+// Read only the private-note contract here; never return the full notebook,
+// blocks, mounts or arbitrary metadata to the public manuscript projection.
+function nativePrivateEditorial(notebook,bodyMarkdown){
+  if(!notebook||typeof notebook!=='object'||Array.isArray(notebook))return null;
+  if(!['internalNotes','blockNotes','modelSignatures'].some(key=>Object.hasOwn(notebook,key)))return null;
+  const fields=new Set(['supplement','writing','images','verification','other']);
+  const notes=value=>{
+    if(value===undefined)return {};
+    if(!value||typeof value!=='object'||Array.isArray(value)||Object.entries(value).some(([key,text])=>!fields.has(key)||typeof text!=='string'||text.length>16000))p.fail('Invalid native author notes',409,'private_notes_invalid');
+    return value;
+  };
+  const internalNotes=notes(notebook.internalNotes),source=notebook.blockNotes||{};
+  if(typeof source!=='object'||Array.isArray(source)||Object.keys(source).length>500)p.fail('Invalid native row notes',409,'private_notes_invalid');
+  const blockNotes=Object.fromEntries(Object.entries(source).map(([id,entry])=>{
+    if(!id||id.length>200||!entry||typeof entry!=='object'||Array.isArray(entry)||!entry.notes)p.fail('Invalid native row notes',409,'private_notes_invalid');
+    const block=Array.isArray(notebook.blocks)?notebook.blocks.find(item=>item.id===id):null,anchor=block?{type:block.type,text:block.text}:entry.anchor;
+    if(anchor&&(!['heading','paragraph','image','markdown','annotation'].includes(anchor.type)||typeof anchor.text!=='string'))p.fail('Invalid native note anchor',409,'private_notes_invalid');
+    return [id,{notes:notes(entry.notes),...(anchor?{anchor}:{})}];
+  }));
+  const modelSignatures=notebook.modelSignatures||[];
+  if(!Array.isArray(modelSignatures)||modelSignatures.length>2000||modelSignatures.some(record=>!record||typeof record.runId!=='string'||typeof record.agentId!=='string'||typeof record.agentName!=='string'||typeof record.startedAt!=='string'||typeof record.action!=='string'||!['running','completed','interrupted'].includes(record.status)||(record.modelId!==null&&typeof record.modelId!=='string')||(record.modelName!==null&&typeof record.modelName!=='string')||(record.device!=null&&(typeof record.device!=='string'||record.device.length>120))))p.fail('Invalid native model records',409,'private_notes_invalid');
+  const result={version:1,bodySha:digest(bodyMarkdown),internalNotes,...(Object.keys(blockNotes).length?{blockNotes}:{}),modelSignatures};
+  if(JSON.stringify(result).length>1000000)p.fail('Native author notes exceed the private-note limit',409,'private_notes_invalid');
+  return JSON.parse(JSON.stringify(result));
+}
 class RssdEditorial {
   constructor(store,media){this.store=store;this.media=media;}
   async workspace(ctx,workspaceId){
@@ -340,7 +366,7 @@ class RssdEditorial {
           AND e.revision=(SELECT max(v.revision) FROM rssd_editions v WHERE v."orgId"=e."orgId" AND v."workId"=e."workId" AND v.locale=e.locale)`,ctx.orgId,workspaceId,workId,data.record.fields.url||'');
         if(duplicates.length)p.fail('This resource link already has a work; update the existing record',409,'duplicate_source');
       }
-      const {section}=await nested.workspace(db,ctx,workspaceId,data.sectionId),destinationId='site-'+workspace.siteId;
+      const {section}=await nested.workSection(db,ctx,workspaceId,data.sectionId,existing?.workId),destinationId='site-'+workspace.siteId;
       if(intent==='publish'&&!section.policy.targets.some(t=>t.destinationId===destinationId&&t.locale===locale))p.fail('This section has no website destination for the requested language',409,'missing_destination');
       const previousEdition=current?(await nested.edition(ctx,workId,locale,current.revision)).payload:null;
       let structured=null;
@@ -393,11 +419,19 @@ class RssdEditorial {
   }
   async privateNotes(ctx,workspaceId,id,revision){
     const row=await this.find(ctx,workspaceId,id);if(!row)p.fail('Manuscript not found',404);
-    const bound=revision===undefined?row.revision:page(revision,row.revision,Number.MAX_SAFE_INTEGER);
+    const bound=revision===undefined?row.revision:Math.min(row.revision,page(revision,row.revision,Number.MAX_SAFE_INTEGER));
     const saved=await q(this.store.db,'SELECT id,revision,payload,sha256,"createdAt" FROM rssd_editorial_archives WHERE "orgId"=$1 AND "workspaceId"=$2 AND "workId"=$3 AND locale=$4 AND revision<=$5',ctx.orgId,workspaceId,row.workId,row.locale,bound);
     const legacy=(await q(this.store.db,'SELECT source->\'sourceArchives\' AS archives FROM rssd_legacy_documents WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3',ctx.orgId,row.workId,row.locale))[0];
-    const rows=[...saved,...(legacy?.archives||[])].filter(r=>r.revision<=bound).sort((a,b)=>b.revision-a.revision||new Date(b.createdAt||b.created)-new Date(a.createdAt||a.created));
-    for(const archive of rows){
+    const native=(await q(this.store.db,`SELECT revision,payload->'metadata'->'notebook' AS notebook,payload->>'bodyMarkdown' AS "bodyMarkdown"
+      FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND revision<=$4
+      AND jsonb_typeof(payload->'metadata'->'notebook')='object'
+      AND (payload->'metadata'->'notebook') ?| ARRAY['internalNotes','blockNotes','modelSignatures']
+      ORDER BY revision DESC LIMIT 1`,ctx.orgId,row.workId,row.locale,bound))[0];
+    const rows=[...saved,...(legacy?.archives||[])].map(archive=>({...archive,kind:'archive'}));
+    if(native)rows.push({...native,kind:'native'});
+    rows.sort((a,b)=>b.revision-a.revision||(a.kind!==b.kind?(a.kind==='archive'?-1:1):new Date(b.createdAt||b.created)-new Date(a.createdAt||a.created)));
+    for(const archive of rows.filter(r=>r.revision<=bound)){
+      if(archive.kind==='native')return {articleId:id,revision:archive.revision,privateEditorial:nativePrivateEditorial(archive.notebook,archive.bodyMarkdown),centerManaged:true};
       const bundle=archiveBundle(archive).bundle,notes=(bundle.files||[]).filter(f=>/(^|\/)internal-notes\.json$/.test(f.path));if(!notes.length)continue;
       if(notes.length!==1)p.fail('Original archive contains several author-note files',409,'archive_conflict');
       const bytes=Buffer.from(notes[0].data,'base64');if(digest(bytes)!==notes[0].sha256)p.fail('Author-note checksum mismatch',409,'archive_conflict');
@@ -464,4 +498,4 @@ class RssdEditorial {
     return {...result,centerManaged:true};
   }
 }
-module.exports={RssdEditorial,archiveBundle,legacyFingerprint};
+module.exports={RssdEditorial,archiveBundle,legacyFingerprint,nativePrivateEditorial};
