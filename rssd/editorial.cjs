@@ -190,10 +190,11 @@ class RssdEditorial {
     let material;
     if(options.fingerprintOnly){
       let bodyMarkdown=e.bodyMarkdown;
-      for(const item of e.media||[]){
-        const media=await this.media.row(ctx,item.id);
+      const ids=[...new Set([...(e.media||[]).map(item=>item.id),...p.referencedMediaIds(bodyMarkdown)])];
+      for(const id of ids){
+        const media=await this.media.row(ctx,id);
         if(media.workspaceId!==workspaceId)p.fail('Media belongs to a different workspace',403,'forbidden');
-        const escaped=item.id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+        const escaped=id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
         bodyMarkdown=bodyMarkdown.replace(new RegExp('(?:https?:\\/\\/[^/\\s)]+)?/api/rssd/v1/media/'+escaped+'/raw','g'),media.manifest.path);
       }
       if(/\/api\/rssd\/v1\/media\//.test(bodyMarkdown))p.fail('Article references media missing from its edition manifest',400,'missing_media');
@@ -202,14 +203,15 @@ class RssdEditorial {
     const assets=[];
     // Preserve unreferenced attachments too; they can be used by a channel or
     // retained in an original manuscript even when absent from the current body.
-    for(const item of e.media||[]){
+    const assetIds=[...new Set([...(e.media||[]).map(item=>item.id),...p.referencedMediaIds(e.bodyMarkdown)])];
+    for(const id of assetIds){
       if(options.referencedOnly){
-        const media=await this.media.row(ctx,item.id);
+        const media=await this.media.row(ctx,id);
         if(media.workspaceId!==workspaceId)p.fail('Media belongs to a different workspace',403,'forbidden');
         if(options.fingerprintOnly){assets.push({path:media.manifest.path});continue;}
         if(!material.edition.bodyMarkdown.includes(media.manifest.path))continue;
       }
-      const {bytes,row:media}=await this.media.bytes(ctx,item.id);assets.push({path:media.manifest.path,data:bytes.toString('base64')});
+      const {bytes,row:media}=await this.media.bytes(ctx,id);assets.push({path:media.manifest.path,data:bytes.toString('base64')});
     }
     const value={id:row.articleId,title:e.title,summary:e.summary,markdown:material.edition.bodyMarkdown,
       author:e.metadata?.author||'',date:e.metadata?.date||new Date(edition.createdAt).toISOString().slice(0,10),

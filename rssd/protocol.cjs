@@ -79,6 +79,10 @@ function demand(input) {
     brief: text(value.brief ?? '', 'brief', 100000, true), requiredLocales, source,
     priority: integer(value.priority ?? 0, 'priority', -100, 100)};
 }
+const MEDIA_REF = /(?:https?:\/\/[^/\s)"']+)?\/api\/rssd\/v1\/media\/([a-zA-Z0-9._:-]+)\/raw/g;
+function referencedMediaIds(markdown) {
+  return [...new Set(String(markdown || '').matchAll(MEDIA_REF).map(match => match[1]))];
+}
 function edition(input) {
   const value = object(input, 'edition');
   const sources = array(value.sources || [], 'sources', 500).map(source => ({
@@ -87,6 +91,9 @@ function edition(input) {
   const media = array(value.media || [], 'media', 500).map(item => ({
     id: id(item.id, 'mediaId'), alt: text(item.alt || '', 'media alt', 2000, true),
   }));
+  for (const mediaId of referencedMediaIds(value.bodyMarkdown)) {
+    if (!media.some(item => item.id === mediaId)) fail('Article references media missing from its edition manifest', 400, 'missing_media');
+  }
   const translationOf = value.translationOf == null ? null : {workId: id(value.translationOf.workId),
     locale: locale(value.translationOf.locale), revision: integer(value.translationOf.revision, 'translation revision', 1)};
   return {locale: locale(value.locale), title: text(value.title, 'edition title', 1000),
@@ -108,4 +115,4 @@ function submission(input) {
     baseRevisions: bases, editions};
 }
 module.exports = {VERSION, ProtocolError, fail, object, text, id, locale, array, integer, canonical, hash,
-  publicUrl, json, policy, workspace, demand, edition, submission};
+  publicUrl, json, policy, workspace, demand, referencedMediaIds, edition, submission};

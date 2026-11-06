@@ -6,7 +6,7 @@ const path = require('node:path');
 const {randomUUID} = require('node:crypto');
 const {Pool} = require('pg');
 const {RssdStore} = require('./store.cjs');
-const {RssdPublisher,CredentialCipher}=require('./publisher.cjs');
+const {RssdPublisher,CredentialCipher,classifyDestinationError}=require('./publisher.cjs');
 const {RssdMedia}=require('./media.cjs');
 const mediaProtocol=require('./rssd-media.cjs');
 const {RssdMigration}=require('./migration.cjs');
@@ -626,6 +626,31 @@ test('destination credentials are encrypted, scoped to their identity, and omitt
   const cipher=new CredentialCipher('fixture-only-encryption-key-not-production');assert.throws(()=>cipher.open(raw[0].config.sealedToken,'other-org:site'));
   await assert.rejects(f.publisher.destinations(f.ctx),{status:403});
 });
+test('devices retry website jobs through editorial requests while destination configuration stays owner-only',async()=>{
+  const f=await editorialFixture();
+  f.packet.data={...f.packet.data,locale:'en'};
+  const receipt=await f.service.submit(f.ctx,'research',f.packet);
+  await assert.rejects(f.publisher.destinations(f.ctx),{status:403,code:'forbidden'});
+  await assert.rejects(f.publisher.retry(f.ctx,receipt.job.id),{status:403,code:'forbidden'});
+  await db.$executeRawUnsafe("UPDATE rssd_publications SET state='blocked',error='Synthetic website failure' WHERE \"orgId\"=$1 AND id=$2",f.ctx.orgId,receipt.job.id);
+  assert.equal((await f.service.retry(f.ctx,'research',f.packet.requestKey,{jobId:receipt.job.id})).job.status,'queued');
+  assert.equal((await f.publisher.destinations(f.owner)).some(row=>row.id==='site-research-site'),true);
+});
+test('destination failures keep original identities and classify the observed cause without secrets',()=>{
+  const network=classifyDestinationError(Object.assign(Error('fetch failed'),{code:'ECONNREFUSED'}));
+  assert.equal(network.blocked,false);assert.equal(network.code,'destination_network');
+  const auth=classifyDestinationError(Object.assign(Error('Destination returned HTTP 401'),{status:401}));
+  assert.equal(auth.blocked,true);assert.equal(auth.code,'destination_auth');
+  const http=classifyDestinationError(Object.assign(Error('Destination returned HTTP 502'),{status:502}));
+  assert.equal(http.blocked,false);assert.equal(http.code,'destination_http');
+  const storage=classifyDestinationError(Object.assign(Error('ENOSPC: no space left on device'),{code:'ENOSPC'}));
+  assert.equal(storage.blocked,true);assert.equal(storage.code,'destination_storage');
+  const opaque=classifyDestinationError(Error('unclassified'));
+  assert.equal(opaque.code,'destination_unavailable');assert.match(opaque.message,/queried before retry/);
+  assert.equal(JSON.stringify(opaque).includes('fixture-only'),false);
+  const protocol=classifyDestinationError(new p.ProtocolError('Article references media missing from its edition manifest',400,'missing_media'));
+  assert.equal(protocol.blocked,true);assert.equal(protocol.code,'missing_media');
+});
 test('concurrent publisher instances cannot acquire the same publication lease',async()=>{
   const f=await publishingFixture(fakeSite().fetchImpl);
   const results=await Promise.all(Array.from({length:6},()=>f.publisher.claim(f.owner.orgId)));
@@ -640,7 +665,10 @@ test('private center media is idempotent, workspace-scoped and rewritten only fo
   const edition={...f.packet.editions[0],bodyMarkdown:'![Evidence]('+a.url+')',media:[{id:a.id,alt:'Evidence'}]},packet={...f.packet,editions:[edition]};await store.submit(f.ctx,packet);
   const output=await media.publication(f.owner.orgId,'research',edition);assert.equal(output.edition.bodyMarkdown,'![Evidence]('+manifest.path+')');assert.deepEqual(output.assets,[manifest]);assert.equal(output.uploads[0].id,a.id);
   const platformOnly=await media.publication(f.owner.orgId,'research',{...edition,bodyMarkdown:'Article without an inline image.'});assert.deepEqual(platformOnly.assets,[]);assert.deepEqual(platformOnly.uploads,[]);
-  await assert.rejects(media.publication(f.owner.orgId,'research',{...edition,media:[]}),{code:'missing_media'});
+  const omitted=await media.publication(f.owner.orgId,'research',{...edition,media:[]});
+  assert.deepEqual(omitted.assets,[manifest]);assert.equal(omitted.uploads[0].id,a.id);assert.equal(omitted.edition.bodyMarkdown,'![Evidence]('+manifest.path+')');
+  await assert.rejects(store.submit(f.ctx,{...f.packet,requestId:randomUUID(),editions:[{...edition,media:[]}]}),{code:'missing_media'});
+  await assert.rejects(media.publication(f.owner.orgId,'research',{...edition,bodyMarkdown:'![Missing]('+a.url.replace(a.id,'media-missingasset000000000000000000000000000000')+')',media:[]}),{status:404});
   await store.revokeWorker(f.owner,f.worker.id);await assert.rejects(media.upload(f.ctx,input),{status:401});
  }finally{await fs.promises.rm(directory,{recursive:true,force:true});}
 });
