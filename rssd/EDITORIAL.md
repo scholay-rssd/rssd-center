@@ -15,8 +15,8 @@ Append the existing operation path:
 | POST | `/drafts`, `/publish` | Exact-base save or publication using the original `requestKey` |
 | GET / POST | `/staged-drafts`, `/staged-drafts/:id` | Paginated private branches and exact-base draft saves while a site is staged |
 | GET | `/staged-drafts/requests/:key`, `/staged-drafts/promotions/:id` | Recover original branch receipt or exact promotion (`locale` and `overlayRevision` required) |
-| GET | `/requests/:key`, `/drafts/requests/:key` | Recovery of original center or migrated requests |
-| POST | `/requests/:key/retry` | Explicit retry of the original website job |
+| GET | `/requests/:key`, `/drafts/requests/:key` | Recovery of original editorial `requestKey`, migrated request, native center `requestId`, or website publication/job id |
+| POST | `/requests/:key/retry` | Explicit retry of the original website job (`jobId` required). Owner-only `POST /publications/:id/retry` is unchanged |
 | POST / GET | `/source-archives`, `/source-archives/:sha256` | Private original archives with byte-level readback |
 | GET | `/source-archives/private-notes/:id` | Bounded private author-note lookup |
 | POST / GET | `/actions`, `/actions/:key` | Confirmed publish, withdraw, soft-delete or restore |
@@ -34,6 +34,14 @@ The response keeps site-relative `url` values. Catalog URLs are absolute.
 Migrated request keys can be queried without creating a new request. A POST
 that reuses a migrated key is rejected and instructs the client to recover
 its preserved receipt. Versions and tombstones are never discarded.
+
+Native claim-submit receipts (`GET /submissions/:requestId` / `rssd_receipt`)
+return `publicationIds`. Those ids are the website `job.id` values for site
+destinations; they are not editorial `requestKey`s. `GET /requests/:key`
+accepts the original submit `requestId` or that publication/job id and returns
+`job.id` so a device can `POST /requests/:key/retry` without guessing. When one
+submission created several site jobs, recover the specific publication id
+instead. `POST /publications/:id/retry` stays Owner-only.
 
 Staged drafts are separate append-only private branches, not canonical editions
 or publications. Their cursor binds `baseRevision`, `baseHash`,

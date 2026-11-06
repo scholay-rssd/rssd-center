@@ -636,6 +636,38 @@ test('devices retry website jobs through editorial requests while destination co
   assert.equal((await f.service.retry(f.ctx,'research',f.packet.requestKey,{jobId:receipt.job.id})).job.status,'queued');
   assert.equal((await f.publisher.destinations(f.owner)).some(row=>row.id==='site-research-site'),true);
 });
+test('native center submissions recover the original website job without the owner retry route',async()=>{
+  const f=await editorialFixture();
+  const packet={requestId:randomUUID(),workId:randomUUID(),workspaceId:'research',sectionId:'methods',editions:[{locale:'en',title:'Native article',bodyMarkdown:'Original body.'}]};
+  const submitted=await store.submit(f.ctx,packet);
+  const pubs=await store.publications(f.ctx);
+  const site=pubs.find(row=>row.destinationId==='site-research-site'),external=pubs.find(row=>row.destinationId==='external');
+  assert.equal(submitted.publicationIds.includes(site.id),true);
+  const byRequest=await f.service.receipt(f.ctx,'research',packet.requestId);
+  assert.equal(byRequest.job.id,site.id);assert.equal(byRequest.workId,packet.workId);assert.equal(byRequest.requestKey,packet.requestId);
+  assert.equal((await f.service.receipt(f.ctx,'research',site.id)).job.id,site.id);
+  await assert.rejects(f.service.receipt(f.ctx,'research',external.id),{code:'not_found'});
+  await assert.rejects(f.service.receipt(f.ctx,'research',packet.requestId,{intent:'draft'}),{code:'not_found'});
+  await assert.rejects(f.service.receipt({...f.ctx,workspaceIds:[]},'research',packet.requestId),{status:403});
+  await assert.rejects(f.publisher.retry(f.ctx,site.id),{status:403,code:'forbidden'});
+  await db.$executeRawUnsafe("UPDATE rssd_publications SET state='blocked',error='Synthetic website failure' WHERE \"orgId\"=$1 AND id=$2",f.ctx.orgId,site.id);
+  assert.equal((await f.service.retry(f.ctx,'research',packet.requestId,{jobId:site.id})).job.status,'queued');
+  await assert.rejects(f.service.retry(f.ctx,'research',packet.requestId,{jobId:external.id}),{code:'request_conflict'});
+  await assert.rejects(f.publisher.retry(f.ctx,site.id),{status:403,code:'forbidden'});
+});
+test('a bilingual native submission must recover the specific website publication identity',async()=>{
+  const f=await editorialFixture();
+  const packet={requestId:randomUUID(),workId:randomUUID(),workspaceId:'research',sectionId:'methods',editions:[
+    {locale:'zh-CN',title:'中文原稿',bodyMarkdown:'完整的中文正文。'},
+    {locale:'en',title:'English original',bodyMarkdown:'Original body.'}
+  ]};
+  const submitted=await store.submit(f.ctx,packet);
+  const sites=(await store.publications(f.ctx)).filter(row=>row.destinationId==='site-research-site');
+  assert.equal(sites.length,2);assert.equal(submitted.publicationIds.filter(id=>sites.some(row=>row.id===id)).length,2);
+  await assert.rejects(f.service.receipt(f.ctx,'research',packet.requestId),{code:'identity_conflict'});
+  const zh=sites.find(row=>row.locale==='zh-CN');
+  assert.equal((await f.service.receipt(f.ctx,'research',zh.id)).job.id,zh.id);
+});
 test('destination failures keep original identities and classify the observed cause without secrets',()=>{
   const network=classifyDestinationError(Object.assign(Error('fetch failed'),{code:'ECONNREFUSED'}));
   assert.equal(network.blocked,false);assert.equal(network.code,'destination_network');
