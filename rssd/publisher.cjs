@@ -94,7 +94,7 @@ class RssdPublisher {
     if(destination.kind!=='site')return this.finish(row,{state:'blocked',error:'Connector is not implemented'});
     const config=destination.config,token=this.cipher().open(config.sealedToken,row.orgId+':'+destination.id);
     const path=old?.receipt.url?new URL(old.receipt.url).pathname:row.payload.edition.metadata?.publication?.path||((row.locale==='en'?'/en':'')+'/news/'+p.hash(row.workId).slice(0,32)+'/');
-    if(row.payload.edition.media?.length&&!this.media)p.fail('Media storage is unavailable',400,'missing_media');
+    if((row.payload.edition.media?.length||/\/api\/rssd\/v1\/media\//.test(row.payload.edition.bodyMarkdown||''))&&!this.media)p.fail('Media storage is unavailable',400,'missing_media');
     const prepared=this.media?await this.media.publication(row.orgId,row.workspaceId,row.payload.edition):{edition:row.payload.edition,assets:[],uploads:[]};
     const content=publicContent(prepared.edition);if(!content.metadata.date)content.metadata.date=new Date(row.createdAt).toISOString().slice(0,10);
     const packet=publication({version:1,requestId:row.id,siteId:config.siteId,workspaceId:row.workspaceId,sectionId:row.payload.sectionId,workId:row.workId,locale:row.locale,revision:row.revision,contentHash:row.payload.hash,content,route:path,...(prepared.assets.length?{assets:prepared.assets}:{})});
@@ -116,8 +116,20 @@ class RssdPublisher {
     return this.finish(row,{state:'published',receipt:{...receipt,publicUrl,url:config.origin+path,verifiedAt:new Date().toISOString()}});
   }
   async tick({orgId=null}={}){if(this.running)return null;this.running=true;let row;try{row=await this.claim(orgId);if(!row)return null;return await this.dispatch(row);}catch(error){
-    if(!row)throw error;const blocked=error instanceof p.ProtocolError||[400,401,403,409,422].includes(error.status);
-    return this.finish(row,{state:blocked?'blocked':'queued',receipt:row.receipt,error:error instanceof p.ProtocolError?error.message:blocked?'Destination rejected the publication (HTTP '+error.status+')':'Destination unavailable; original request will be queried before retry',delay:Math.min(300000,10000*Math.max(1,row.attempts))});
+    if(!row)throw error;const classified=classifyDestinationError(error);
+    return this.finish(row,{state:classified.blocked?'blocked':'queued',receipt:{...row.receipt,failureCode:classified.code},error:classified.message,delay:Math.min(300000,10000*Math.max(1,row.attempts))});
   }finally{this.running=false;}}
 }
-module.exports={RssdPublisher,CredentialCipher};
+function classifyDestinationError(error){
+  if(error instanceof p.ProtocolError)return {blocked:true,code:error.code||'invalid_request',message:error.message};
+  const status=error.status;
+  if(status===401||status===403)return {blocked:true,code:'destination_auth',message:'Destination rejected the publication (HTTP '+status+')'};
+  if([400,409,422].includes(status))return {blocked:true,code:'destination_rejected',message:'Destination rejected the publication (HTTP '+status+')'};
+  if(typeof status==='number'&&status>=500)return {blocked:false,code:'destination_http',message:'Destination returned HTTP '+status+'; original request will be queried before retry'};
+  if(error.code==='ENOSPC')return {blocked:true,code:'destination_storage',message:'Destination storage is full'};
+  if(error.name==='AbortError'||error.name==='TimeoutError'||['ECONNREFUSED','ENOTFOUND','EAI_AGAIN','ETIMEDOUT','ECONNRESET'].includes(error.code)||/fetch failed|network|unreachable|interrupted/i.test(error.message||''))
+    return {blocked:false,code:'destination_network',message:'Destination network error; original request will be queried before retry'};
+  if(error instanceof SyntaxError)return {blocked:false,code:'destination_protocol',message:'Destination response could not be parsed; original request will be queried before retry'};
+  return {blocked:false,code:'destination_unavailable',message:'Destination unavailable; original request will be queried before retry'};
+}
+module.exports={RssdPublisher,CredentialCipher,classifyDestinationError};
