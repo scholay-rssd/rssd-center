@@ -307,10 +307,27 @@ class RssdEditorial {
     const job=row.jobs.find(j=>j.id===row.request.job_id);
     return {...result,job:job?{id:job.id,status:job.status,error:job.error,release:job.release}:{id:row.request.job_id,status:'failed',error:'Historical job receipt is missing; reconcile the archived request'}};
   }
+  websiteJob(pub){
+    const status=['published','legacy_published'].includes(pub.state)?'success':pub.state==='dispatching'?'running':pub.state==='queued'?'queued':'failed';
+    return {id:pub.id,status,error:pub.error||null,release:pub.receipt.latestVisibilityAction?.release||pub.receipt.release||pub.receipt.releaseId||null};
+  }
+  async nativeWebsiteRequest(ctx,workspaceId,key,intent){
+    if(intent!=='publish')return null;
+    const workspace=await this.workspace(ctx,workspaceId),destinationId='site-'+workspace.siteId;
+    const byJob=(await q(this.store.db,'SELECT id,state,error,receipt,"workId" FROM rssd_publications WHERE "orgId"=$1 AND "workspaceId"=$2 AND id=$3 AND "destinationId"=$4',ctx.orgId,workspaceId,key,destinationId))[0];
+    if(byJob)return {centerManaged:true,requestKey:key,workId:byJob.workId,job:this.websiteJob(byJob)};
+    const submission=(await q(this.store.db,'SELECT result FROM rssd_submissions WHERE "orgId"=$1 AND "workspaceId"=$2 AND "requestId"=$3',ctx.orgId,workspaceId,key))[0];
+    const ids=submission?.result?.publicationIds||[];
+    if(!ids.length)return null;
+    const pubs=await q(this.store.db,`SELECT id,state,error,receipt,"workId" FROM rssd_publications WHERE "orgId"=$1 AND "workspaceId"=$2 AND "destinationId"=$3 AND id IN (SELECT jsonb_array_elements_text($4::jsonb))`,ctx.orgId,workspaceId,destinationId,JSON.stringify(ids));
+    if(!pubs.length)return null;
+    if(pubs.length>1)p.fail('Several website jobs belong to this submission; recover the original publication identity',409,'identity_conflict');
+    return {centerManaged:true,requestKey:key,workId:pubs[0].workId,job:this.websiteJob(pubs[0])};
+  }
   async receipt(ctx,workspaceId,key,{intent='publish'}={}){
     await this.workspace(ctx,workspaceId);p.id(key);
     const row=(await q(this.store.db,'SELECT * FROM rssd_editorial_requests WHERE "orgId"=$1 AND "workspaceId"=$2 AND "requestKey"=$3',ctx.orgId,workspaceId,key))[0];
-    if(!row){const old=await this.legacyRequest(ctx,workspaceId,key,intent);if(old)return old;p.fail('Editorial request not found',404,'not_found');}
+    if(!row){const old=await this.legacyRequest(ctx,workspaceId,key,intent);if(old)return old;const native=await this.nativeWebsiteRequest(ctx,workspaceId,key,intent);if(native)return native;p.fail('Editorial request not found',404,'not_found');}
     if(row.intent!==intent)p.fail('Editorial request not found',404,'not_found');
     const result={...row.receipt,centerManaged:true};
     if(intent==='draft'){
@@ -320,8 +337,7 @@ class RssdEditorial {
     }
     const pub=(await q(this.store.db,'SELECT id,state,error,receipt FROM rssd_publications WHERE "orgId"=$1 AND id=$2',ctx.orgId,row.publicationId))[0];
     if(!pub)p.fail('Website publication receipt is missing',409,'receipt_missing');
-    const status=['published','legacy_published'].includes(pub.state)?'success':pub.state==='dispatching'?'running':pub.state==='queued'?'queued':'failed';
-    return {...result,job:{id:pub.id,status,error:pub.error||null,release:pub.receipt.latestVisibilityAction?.release||pub.receipt.release||pub.receipt.releaseId||null}};
+    return {...result,job:this.websiteJob(pub)};
   }
   async submit(ctx,workspaceId,input,{intent='publish'}={}){
     if(!['publish','draft'].includes(intent))p.fail('Invalid editorial submission intent');
