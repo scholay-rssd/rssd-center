@@ -5,7 +5,12 @@ const {schedulingGranted}=require('./store.cjs');
 const string={type:'string'},number={type:'integer'},object={type:'object'};
 const schema=(properties={},required=[])=>({type:'object',properties,required,additionalProperties:false});
 class RssdMcp {
- constructor(store,coordination){this.store=store;this.coordination=coordination;}
+ constructor(store,coordination,existingSitePublish){this.store=store;this.coordination=coordination;this._existingSitePublish=existingSitePublish;}
+ existingSitePublish(){
+  if(this._existingSitePublish)return this._existingSitePublish;
+  const {RssdExistingSitePublish}=require('./existing-site-publish.cjs');
+  this._existingSitePublish=new RssdExistingSitePublish(this.store);return this._existingSitePublish;
+ }
  definitions(ctx){
   const reads={
    rssd_overview:['Read workspace goals, real progress and capabilities',schema({workspaceIds:string}),(a)=>this.coordination.overview(ctx,a)],
@@ -16,6 +21,7 @@ class RssdMcp {
    rssd_channels:['Read scoped destination and channel status without credentials',schema({workspaceIds:string}),(a)=>this.coordination.channels(ctx,a)],
    rssd_goals:['Read goal definitions, periods and maintainer results',schema({workspaceIds:string}),(a)=>this.coordination.goals(ctx,a)],
    rssd_receipt:['Recover the original submission before considering retry',schema({requestId:string},['requestId']),(a)=>this.store.submissionStatus(ctx,a.requestId)],
+   rssd_existing_english_site_receipt:['Recover an existing-English website publication request; it never retries or rewrites editions',schema({requestId:string},['requestId']),(a)=>this.existingSitePublish().receipt(ctx,a.requestId)],
   };
   const writes={
    rssd_edit_demand:['Edit a queued demand using its generation and a stable requestId; claimed rules are frozen',schema({id:string,baseGeneration:number,requestId:string,changes:object},['id','baseGeneration','requestId','changes']),(a)=>this.coordination.editDemand(ctx,a.id,a)],
@@ -28,6 +34,7 @@ class RssdMcp {
   }
   if(ctx.admin||ctx.workerId){
    writes.rssd_schedule_publication=['Reschedule an unstarted RSSD publication using its unchanged identity; native Postiz posts are managed in the original calendar',schema({id:string,expectedUpdatedAt:string,requestId:string,scheduledAt:string},['id','expectedUpdatedAt','requestId','scheduledAt']),(a)=>this.coordination.schedule(ctx,a.id,a)];
+   writes.rssd_publish_existing_english_site=['Publish an existing English revision to the workspace website only; never rewrites editions or creates external tasks',schema({requestId:string,workId:string,locale:string,revision:number,hash:string,destinationId:string,articleId:string},['requestId','workId','locale','revision','hash','destinationId']),(a)=>this.existingSitePublish().publish(ctx,a)];
   }
   if(ctx.workerId){
    reads.rssd_current_claim=['Read this device claim for explicit recovery',schema(),()=>this.store.activeClaim(ctx)];
@@ -47,7 +54,7 @@ class RssdMcp {
   if(message.method==='initialize')return result({protocolVersion:['2025-03-26','2025-06-18','2025-11-25'].includes(message.params?.protocolVersion)?message.params.protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false}},serverInfo:{name:'RSSD Center',version:'1.1.0'},instructions:'Use the center as the only authority for claims and publishing. Query original receipts after timeout. Never put credentials in tool arguments.'});
   if(message.method==='ping')return result({});
   const definitions=this.definitions(ctx);
-  if(message.method==='tools/list')return result({tools:Object.entries(definitions).filter(([name])=>name!=='rssd_schedule_publication'||schedulingGranted(ctx)).map(([name,d])=>({name,description:d.description,inputSchema:d.inputSchema,annotations:{readOnlyHint:d.readOnly,destructiveHint:!d.readOnly,idempotentHint:d.readOnly||['rssd_edit_demand','rssd_save_goal','rssd_schedule_publication','rssd_submit','rssd_create_demand','rssd_grant_capability','rssd_revoke_capability'].includes(name),openWorldHint:!d.readOnly}}))});
+  if(message.method==='tools/list')return result({tools:Object.entries(definitions).filter(([name])=>name!=='rssd_schedule_publication'||schedulingGranted(ctx)).map(([name,d])=>({name,description:d.description,inputSchema:d.inputSchema,annotations:{readOnlyHint:d.readOnly,destructiveHint:!d.readOnly,idempotentHint:d.readOnly||['rssd_edit_demand','rssd_save_goal','rssd_schedule_publication','rssd_submit','rssd_create_demand','rssd_grant_capability','rssd_revoke_capability','rssd_publish_existing_english_site'].includes(name),openWorldHint:!d.readOnly}}))});
   if(message.method!=='tools/call')return error(-32601,'Method not found',id);
   const name=message.params?.name,d=definitions[name],args=message.params?.arguments||{};
   if(!d)return error(-32602,'Unknown or unavailable tool',id);

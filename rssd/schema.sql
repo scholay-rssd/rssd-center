@@ -163,3 +163,10 @@ CREATE TABLE IF NOT EXISTS rssd_worker_grants (
  PRIMARY KEY ("orgId",id)
 );
 CREATE INDEX IF NOT EXISTS rssd_worker_grants_worker ON rssd_worker_grants ("orgId","workerId");
+CREATE TABLE IF NOT EXISTS rssd_existing_site_publishes (
+ "orgId" TEXT NOT NULL,"requestId" TEXT NOT NULL,"workspaceId" TEXT NOT NULL,"workId" TEXT NOT NULL,
+ locale TEXT NOT NULL,revision INTEGER NOT NULL,"destinationId" TEXT NOT NULL,"editionHash" TEXT NOT NULL,
+ "articleId" TEXT NOT NULL,"publicationId" TEXT NOT NULL,"payloadHash" TEXT NOT NULL,result JSONB NOT NULL,
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY ("orgId","requestId")
+);
+CREATE INDEX IF NOT EXISTS rssd_existing_site_publishes_work ON rssd_existing_site_publishes ("orgId","workId",locale,revision,"destinationId");
