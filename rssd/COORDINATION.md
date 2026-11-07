@@ -4,7 +4,7 @@ All endpoints extend `/api/rssd/v1`; original v1 and Postiz APIs remain compatib
 
 | Endpoint | Contract |
 | --- | --- |
-| GET /coordination/overview | contractVersion, workspaces, demand counts, distinct work counts, goals, capabilities, original Postiz paths |
+| GET /coordination/overview | contractVersion, workspaces, demand counts, distinct work counts, goals, capabilities, contracts, original Postiz paths. `contracts.translateContinuation` is a read-only server safety contract (`version` integer plus `guarantees`); it is not a permission grant. Missing or old keys mean the center does not implement this pack. Presence of `rssd_create_demand` is not sufficient |
 | GET /coordination/channels | Scoped destinations and provider status; no secret configuration |
 | GET /coordination/calendar | from/to ISO instants (up to 367 days), limit 1–200, offset; items/hasNext/total/range |
 | PATCH /demands/:id/definition | requestId, baseGeneration, changes; queued only; increments generation |
@@ -31,7 +31,7 @@ This is deterministic goal maintenance, not an LLM choosing topics. Owners suppl
 
 `POST /api/rssd/v1/mcp` provides stateless JSON responses; GET returns 405. It supports the pinned SDK's 2025-03-26, 2025-06-18 and 2025-11-25 versions and follows the [official transport specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-11-25/basic/transports.mdx). Supplied origins are validated, and every call reuses HTTP authentication.
 
-Tools cover overview, goals, demands, works, calendar, channels, original receipts, demand edits and demand creation. Devices also get their own claim/release/submit tools. Owners get goal management and can grant or revoke a minimal `publicationScheduling` capability. `rssd_schedule_publication` is listed only after an unrevoked grant; HTTP `POST /publications/:id/schedule` is always present. Both writes, including a crafted MCP `tools/call`, authorize workspace+destination+operation in `authorizeSchedule` and return 403 when missing, out of scope, or revoked. Tools delegate to the existing business services. Audit records contain actor, tool and argument hash. Postiz native MCP, OAuth and agent routes remain unchanged.
+Tools cover overview, goals, demands, works, calendar, channels, original receipts, demand edits and demand creation. Devices also get their own claim/release/submit tools. Owners get goal management and can grant or revoke a minimal `publicationScheduling` capability. `rssd_schedule_publication` is listed only after an unrevoked grant; HTTP `POST /publications/:id/schedule` is always present. Both writes, including a crafted MCP `tools/call`, authorize workspace+destination+operation in `authorizeSchedule` and return 403 when missing, out of scope, or revoked. Probe English continuation safety through `rssd_overview` / `GET /coordination/overview` `contracts.translateContinuation`, not tool names or descriptions. Tools delegate to the existing business services. Audit records contain actor, tool and argument hash. Postiz native MCP, OAuth and agent routes remain unchanged.
 
 ## Desktop division
 

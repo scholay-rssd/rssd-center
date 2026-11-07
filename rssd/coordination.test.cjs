@@ -1,7 +1,7 @@
 'use strict';
 const {test,before,after}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {Pool,Client}=require('pg'),{randomUUID}=require('node:crypto');
-const {RssdStore}=require('./store.cjs'),{RssdCoordination,windowFor}=require('./coordination.cjs'),{RssdMcp}=require('./mcp.cjs');
+const {RssdStore}=require('./store.cjs'),{RssdCoordination,windowFor,TRANSLATE_CONTINUATION_VERSION,TRANSLATE_CONTINUATION_GUARANTEES,supportsTranslateContinuation}=require('./coordination.cjs'),{RssdMcp}=require('./mcp.cjs');
 const schema='rssd_coord_'+randomUUID().replaceAll('-','');let pool,db,store,coord,control;
 function adapter(client){return {$queryRawUnsafe:async(sql,...a)=>(await client.query(sql,a)).rows,$executeRawUnsafe:async(sql,...a)=>(await client.query(sql,a)).rowCount,$transaction:async fn=>{const c=await pool.connect();try{await c.query('BEGIN');const r=await fn(adapter(c));await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}}};}
 before(async()=>{
@@ -52,6 +52,28 @@ test('MCP lists role-specific tools, rejects notification mutations and shares s
  const forbidden=await call('tools/call',{name:'rssd_overview',arguments:{workspaceIds:'b'}});assert(forbidden.result.isError);
  const ownerNames=(await mcp.handle(f.owner,{jsonrpc:'2.0',id:1,method:'tools/list'})).result.tools.map(t=>t.name);assert(ownerNames.includes('rssd_grant_capability'));assert(ownerNames.includes('rssd_schedule_publication'));
  const logs=await db.$queryRawUnsafe('SELECT action FROM rssd_audit WHERE "orgId"=$1',f.owner.orgId);assert(logs.some(r=>r.action==='mcp.rssd_overview'));
+});
+test('overview advertises translateContinuation as a read-only contract, not a grant; tool names are not enough',async()=>{
+ const f=await fixture();
+ const device=await coord.overview(f.ctx,{workspaceIds:'a'});
+ assert.equal(device.capabilities.publicationScheduling,false);assert.equal(device.capabilities.goalManagement,false);
+ assert.equal(device.contracts.translateContinuation.version,TRANSLATE_CONTINUATION_VERSION);
+ assert.deepEqual(device.contracts.translateContinuation.guarantees,[...TRANSLATE_CONTINUATION_GUARANTEES]);
+ assert.equal(supportsTranslateContinuation(device),true);
+ await assert.rejects(coord.overview(f.ctx,{workspaceIds:'b'}),{code:'forbidden'});
+ await assert.rejects(coord.overview({},{workspaceIds:'a'}),{status:401});
+ const mcp=new RssdMcp(store,coord);
+ const listed=(await mcp.handle(f.ctx,{jsonrpc:'2.0',id:1,method:'tools/list'})).result.tools;
+ assert.equal(listed.some(t=>t.name==='rssd_create_demand'),true);
+ assert.equal(supportsTranslateContinuation({tools:listed,capabilities:{mcp:true}}),false);
+ const viaMcp=JSON.parse((await mcp.handle(f.ctx,{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'rssd_overview',arguments:{workspaceIds:'a'}}})).result.content[0].text);
+ assert.equal(supportsTranslateContinuation(viaMcp),true);
+ assert.equal(supportsTranslateContinuation({}),false);
+ assert.equal(supportsTranslateContinuation({capabilities:{translateContinuation:true},contracts:{}}),false);
+ assert.equal(supportsTranslateContinuation({contracts:{translateContinuation:true}}),false);
+ assert.equal(supportsTranslateContinuation({contracts:{translateContinuation:{version:0,guarantees:[...TRANSLATE_CONTINUATION_GUARANTEES]}}}),false);
+ assert.equal(supportsTranslateContinuation({contracts:{translateContinuation:{version:1,guarantees:['receipt']}}}),false);
+ assert.equal(supportsTranslateContinuation({contracts:{translateContinuation:{version:'1',guarantees:[...TRANSLATE_CONTINUATION_GUARANTEES]}}}),false);
 });
 test('scheduling preserves the original publication, replays after a lost response and fences a started delivery',async()=>{
  const f=await fixture(),id=randomUUID(),workId=randomUUID();

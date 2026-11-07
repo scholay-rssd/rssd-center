@@ -6,6 +6,14 @@ const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args);
 const x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
 const one=async(...args)=>(await q(...args))[0]||null;
 const json=JSON.stringify;
+const TRANSLATE_CONTINUATION_VERSION=1;
+const TRANSLATE_CONTINUATION_GUARANTEES=Object.freeze(['sourceHash','currentHead','uniqueOpenWork','claimLease','englishOnly','sourceChangeReject','receipt']);
+function translateContinuationContract(){return {version:TRANSLATE_CONTINUATION_VERSION,guarantees:[...TRANSLATE_CONTINUATION_GUARANTEES]};}
+function supportsTranslateContinuation(overview){
+ const row=overview?.contracts?.translateContinuation;
+ if(!row||typeof row!=='object'||Array.isArray(row)||!Number.isInteger(row.version)||row.version<TRANSLATE_CONTINUATION_VERSION||!Array.isArray(row.guarantees))return false;
+ return TRANSLATE_CONTINUATION_GUARANTEES.every(token=>row.guarantees.includes(token));
+}
 function date(value,name){if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T/.test(value)||!Number.isFinite(Date.parse(value)))p.fail('Invalid '+name);return new Date(value).toISOString();}
 function page(input={}){const limit=p.integer(Number(input.limit??50),'limit',1,200),offset=p.integer(Number(input.offset??0),'offset',0,1000000);return {limit,offset};}
 function windowFor(timezone,period,now=new Date()){
@@ -194,7 +202,9 @@ class RssdCoordination {
   const goals=await this.goals(ctx,input);
   const publicationScheduling=Boolean(ctx.admin)||(ctx.grants||[]).some(grant=>grant.operation==='publicationScheduling'&&grant.workspaceIds.some(id=>ids.includes(id)));
   return {contractVersion:1,generatedAt:new Date().toISOString(),workspaces:registry.workspaces.filter(w=>ids.includes(w.id)),counts,works,goals,
-   capabilities:{goalManagement:Boolean(ctx.admin),publicationScheduling,demandEditing:true,mcp:true},nativePaths:{calendar:'/launches',media:'/media',analytics:'/analytics',agents:'/agents',settings:'/settings'}};
+   capabilities:{goalManagement:Boolean(ctx.admin),publicationScheduling,demandEditing:true,mcp:true},
+   contracts:{translateContinuation:translateContinuationContract()},
+   nativePaths:{calendar:'/launches',media:'/media',analytics:'/analytics',agents:'/agents',settings:'/settings'}};
  }
 }
-module.exports={RssdCoordination,windowFor,page};
+module.exports={RssdCoordination,windowFor,page,TRANSLATE_CONTINUATION_VERSION,TRANSLATE_CONTINUATION_GUARANTEES,translateContinuationContract,supportsTranslateContinuation};
