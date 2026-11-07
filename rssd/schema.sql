@@ -57,6 +57,8 @@ CREATE TABLE IF NOT EXISTS rssd_demands (
   "updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY ("orgId", id)
 );
 CREATE INDEX IF NOT EXISTS rssd_demands_queue ON rssd_demands ("orgId", state, priority DESC, "createdAt");
+CREATE UNIQUE INDEX IF NOT EXISTS rssd_demands_open_translate_work ON rssd_demands ("orgId", (payload->'source'->>'workId'))
+ WHERE kind='translate' AND state IN ('queued','claimed','blocked');
 CREATE TABLE IF NOT EXISTS rssd_works (
   "orgId" TEXT NOT NULL, id TEXT NOT NULL, "workspaceId" TEXT NOT NULL, "sectionId" TEXT NOT NULL,
   "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -154,3 +156,10 @@ CREATE TABLE IF NOT EXISTS rssd_coordination_requests (
  "orgId" TEXT NOT NULL,id TEXT NOT NULL,hash TEXT NOT NULL,result JSONB NOT NULL,
  "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY ("orgId",id)
 );
+CREATE TABLE IF NOT EXISTS rssd_worker_grants (
+ "orgId" TEXT NOT NULL,id TEXT NOT NULL,"workerId" TEXT NOT NULL,operation TEXT NOT NULL,
+ "workspaceIds" JSONB NOT NULL,"destinationIds" JSONB NOT NULL,"grantedBy" TEXT NOT NULL,
+ "revokedAt" TIMESTAMPTZ(3),"createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY ("orgId",id)
+);
+CREATE INDEX IF NOT EXISTS rssd_worker_grants_worker ON rssd_worker_grants ("orgId","workerId");

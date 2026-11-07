@@ -1,22 +1,25 @@
 # Coordination contract v1
 
-All endpoints extend `/api/rssd/v1`; original v1 and Postiz APIs remain compatible. Device requests use existing workspace-scoped credentials. Goal and scheduling writes require the existing owner browser session. Credentials never enter URLs, frontend persistence or model prompts.
+All endpoints extend `/api/rssd/v1`; original v1 and Postiz APIs remain compatible. Device requests use existing workspace-scoped credentials. Goal writes require the existing owner browser session. Scheduling writes require that session, or an Owner-granted device capability whose workspace and destination both match the publication. Credentials never enter URLs, frontend persistence or model prompts. Devices cannot self-authorize and never receive `admin=true`.
 
 | Endpoint | Contract |
 | --- | --- |
-| GET /coordination/overview | contractVersion, workspaces, demand counts, distinct work counts, goals, capabilities, original Postiz paths |
+| GET /coordination/overview | contractVersion, workspaces, demand counts, distinct work counts, goals, capabilities, contracts, original Postiz paths. `contracts.translateContinuation` is a read-only server safety contract (`version` integer plus `guarantees`); it is not a permission grant. Missing or old keys mean the center does not implement this pack. Presence of `rssd_create_demand` is not sufficient |
 | GET /coordination/channels | Scoped destinations and provider status; no secret configuration |
 | GET /coordination/calendar | from/to ISO instants (up to 367 days), limit 1–200, offset; items/hasNext/total/range |
 | PATCH /demands/:id/definition | requestId, baseGeneration, changes; queued only; increments generation |
 | GET /goals | Goal definitions, current local calendar period, completed/pending/published counts and maintenance status |
 | POST /goals | id, requestId, baseRevision, goal; owner only |
-| POST /publications/:id/schedule | requestId, expectedUpdatedAt, scheduledAt; owner only, unstarted queued RSSD intents only |
+| POST /demands | kind write/translate/update; translate binds source workId+locale+revision and the current edition hash, skips when the target locale already exists, and reuses one open demand when that bind still matches. A second open translate for the same work after the Chinese head moves is `open_translate_conflict`; the original source bind is not rewritten |
+| POST /publications/:id/schedule | requestId, expectedUpdatedAt, scheduledAt; owner or an unrevoked publicationScheduling grant covering that workspace and destination; unstarted queued RSSD intents only |
+| POST /workers/:id/grants | requestId, operation=publicationScheduling, workspaceIds, destinationIds; owner only; cannot exceed the device workspace scope |
+| POST /workers/:id/grants/:grantId/revoke | requestId; owner only |
 
 `workspaceId` or comma-separated `workspaceIds` narrows the authenticated scope. Calendar items retain source, publicationId, workId, locale, revision, destination, state, scheduledAt, hasSchedule, updatedAt, receipt and error. A fallback creation timestamp is not an explicit schedule. Native Postiz posts remain in their original publisher; root posts are counted once and RSSD-linked posts are deduplicated. Devices only see channels mapped to their workspaces; unmapped native channels are owner-only in the all-workspaces view.
 
 Demand edits accept title, brief, priority, requiredLocales and dueAt. Workspace, section, kind and source remain fixed. Claimed rules are frozen. Original request replay returns the original result; changed payloads conflict. Goal definitions contain workspaceId, sectionId, title, brief, target (0–1000), period (day/week/month), IANA timezone, requiredLocales and enabled. Scope is immutable. New goals default to paused. Native Postiz schedules continue through `/launches`; changing an RSSD schedule never creates a replacement post.
 
-Errors retain HTTP status and code: forbidden, not_found, revision_conflict, request_conflict, demand_frozen, migration_staged, publication_started. Clients retain original request IDs after timeout. No synthetic-data fallback is allowed.
+Errors retain HTTP status and code: forbidden, not_found, revision_conflict, request_conflict, demand_frozen, migration_staged, publication_started, source_conflict, open_translate_conflict. Clients retain original request IDs after timeout. No synthetic-data fallback is allowed.
 
 ## Persistent maintenance
 
@@ -28,7 +31,7 @@ This is deterministic goal maintenance, not an LLM choosing topics. Owners suppl
 
 `POST /api/rssd/v1/mcp` provides stateless JSON responses; GET returns 405. It supports the pinned SDK's 2025-03-26, 2025-06-18 and 2025-11-25 versions and follows the [official transport specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-11-25/basic/transports.mdx). Supplied origins are validated, and every call reuses HTTP authentication.
 
-Tools cover overview, goals, demands, works, calendar, channels, original receipts and demand edits. Devices also get their own claim/release/submit tools. Owners get goal and schedule management. Tools delegate to the existing business services. Audit records contain actor, tool and argument hash. Postiz native MCP, OAuth and agent routes remain unchanged.
+Tools cover overview, goals, demands, works, calendar, channels, original receipts, demand edits and demand creation. Devices also get their own claim/release/submit tools. Owners get goal management and can grant or revoke a minimal `publicationScheduling` capability. `rssd_schedule_publication` is listed only after an unrevoked grant; HTTP `POST /publications/:id/schedule` is always present. Both writes, including a crafted MCP `tools/call`, authorize workspace+destination+operation in `authorizeSchedule` and return 403 when missing, out of scope, or revoked. Probe English continuation safety through `rssd_overview` / `GET /coordination/overview` `contracts.translateContinuation`, not tool names or descriptions. Tools delegate to the existing business services. Audit records contain actor, tool and argument hash. Postiz native MCP, OAuth and agent routes remain unchanged.
 
 ## Desktop division
 

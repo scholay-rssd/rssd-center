@@ -62,6 +62,22 @@ test('guestbook HTTP session keeps secure same-site cookies and owner fields out
  const posted=await fetch(base+'/messages',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({requestKey:'original-request'})});assert.equal(posted.status,201);assert.equal((await posted.json()).id,'original-request');
  const publicResult=await(await fetch(base+'/messages')).json();assert.deepEqual(Object.keys(publicResult.messages[0]).sort(),['created','id','kind','message','name']);
 });
+test('HTTP schedule and grant writes return 403 from coordination, not from MCP listing',async t=>{
+ const {ProtocolError}=require('../apps/backend/dist/rssd/protocol.cjs');
+ const coordination={
+  schedule:async()=>{throw new ProtocolError('Owner access required',403,'forbidden');},
+  grantCapability:async()=>{throw new ProtocolError('Owner access required',403,'forbidden');},
+ };
+ const module=await Test.createTestingModule({imports:[ThrottlerModule.forRoot([{ttl:60000,limit:100}])],controllers:[RssdController],providers:[{provide:RssdService,useValue:{coordination}}]}).compile();
+ const app=module.createNestApplication();app.useLogger(false);app.use((req,res,next)=>{req.rssd={orgId:'org',workerId:'device',admin:false,workspaceIds:['a']};next();});
+ await app.listen(0,'127.0.0.1');t.after(()=>app.close());
+ const origin=await app.getUrl(),headers={'content-type':'application/json'};
+ const schedule=await fetch(origin+'/rssd/v1/publications/pub-1/schedule',{method:'POST',headers,body:JSON.stringify({requestId:'req-schedule',expectedUpdatedAt:'2026-01-01T00:00:00.000Z',scheduledAt:'2026-01-02T00:00:00.000Z'})});
+ assert.equal(schedule.status,403);assert.equal((await schedule.json()).code,'forbidden');
+ const grant=await fetch(origin+'/rssd/v1/workers/worker-1/grants',{method:'POST',headers,body:JSON.stringify({requestId:'req-grant',operation:'publicationScheduling',workspaceIds:['a'],destinationIds:['site']})});
+ assert.equal(grant.status,403);assert.equal((await grant.json()).code,'forbidden');
+});
+
 test('idle and active claims are valid JSON over the production HTTP controller',async t=>{
  let current=null;
  const module=await Test.createTestingModule({imports:[ThrottlerModule.forRoot([{ttl:60000,limit:100}])],controllers:[RssdController],providers:[{provide:RssdService,useValue:{store:{claim:async()=>current,activeClaim:async()=>current}}}]}).compile();

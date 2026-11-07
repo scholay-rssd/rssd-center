@@ -63,6 +63,45 @@ test('tab changes hide the prior row type immediately and ignore late responses'
   await screen.findByRole('button',{name:'Late work'});
 });
 
+test('translation demand creation reports skip when the target language already exists',async()=>{
+  mockFetch.mockImplementation(async(path:string,options:any)=>{
+    if(path.endsWith('/registry'))return response({workspaces:[{id:'one',name:'One',writable:true,sections:[{id:'methods',name:'Methods'}]}]});
+    if(path.includes('/works?'))return response([{id:'w1',editions:[{locale:'zh-CN',revision:1,title:'Fixture work'}]}]);
+    if(path.endsWith('/works/w1'))return response({id:'w1',workspaceId:'one',sectionId:'methods',editions:[{locale:'zh-CN',revision:1,payload:{title:'Fixture work',bodyMarkdown:'Fixture body',media:[]}}]});
+    if(path.endsWith('/demands')&&options?.method==='POST'){
+      const body=JSON.parse(options.body);expect(body.kind).toBe('translate');expect(body.source).toEqual({workId:'w1',locale:'zh-CN',revision:1});
+      return response({status:'skipped',reason:'locale_present',workId:'w1'});
+    }
+    return response([]);
+  });
+  render(<RssdWorkspace/>);
+  fireEvent.click(screen.getByRole('button',{name:'作品库',exact:true}));
+  fireEvent.click(await screen.findByRole('button',{name:'Fixture work'}));
+  fireEvent.click(await screen.findByRole('button',{name:'创建翻译需求'}));
+  fireEvent.click(screen.getByRole('button',{name:'创建'}));
+  await screen.findByText('该作品已有目标语言，未重复创建需求');
+});
+
+test('owner grants a scoped scheduling capability from the device list',async()=>{
+  mockFetch.mockImplementation(async(path:string,options:any)=>{
+    if(path.endsWith('/registry'))return response({workspaces:[{id:'one',name:'One',sections:[]}]});
+    if(path.endsWith('/workers'))return response([{id:'worker1',name:'Fixture device',workspaceIds:['one'],grants:[]}]);
+    if(path.endsWith('/destinations'))return response([{id:'site-one',name:'Site',workspaceIds:['one']}]);
+    if(path.includes('/workers/worker1/grants')&&options?.method==='POST'){
+      const body=JSON.parse(options.body);expect(body.operation).toBe('publicationScheduling');expect(body.workspaceIds).toContain('one');expect(body.destinationIds).toContain('site-one');
+      return response({id:'grant1'});
+    }
+    return response([]);
+  });
+  render(<RssdWorkspace/>);
+  fireEvent.click(screen.getByRole('button',{name:'执行设备',exact:true}));
+  fireEvent.click(await screen.findByRole('button',{name:'授予排期'}));
+  await screen.findByRole('heading',{name:'授予排期权限'});
+  fireEvent.click(screen.getByLabelText(/Site/));
+  fireEvent.click(screen.getByRole('button',{name:'授予'}));
+  await screen.findByText(/已授予最小排期范围/);
+});
+
 test('switching workspaces never displays the previous workspace contents while loading',async()=>{
   const second=deferred();
   mockFetch.mockImplementation(async(path:string)=>{

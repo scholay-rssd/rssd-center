@@ -6,6 +6,14 @@ const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args);
 const x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
 const one=async(...args)=>(await q(...args))[0]||null;
 const json=JSON.stringify;
+const TRANSLATE_CONTINUATION_VERSION=1;
+const TRANSLATE_CONTINUATION_GUARANTEES=Object.freeze(['sourceHash','currentHead','uniqueOpenWork','claimLease','englishOnly','sourceChangeReject','receipt']);
+function translateContinuationContract(){return {version:TRANSLATE_CONTINUATION_VERSION,guarantees:[...TRANSLATE_CONTINUATION_GUARANTEES]};}
+function supportsTranslateContinuation(overview){
+ const row=overview?.contracts?.translateContinuation;
+ if(!row||typeof row!=='object'||Array.isArray(row)||!Number.isInteger(row.version)||row.version<TRANSLATE_CONTINUATION_VERSION||!Array.isArray(row.guarantees))return false;
+ return TRANSLATE_CONTINUATION_GUARANTEES.every(token=>row.guarantees.includes(token));
+}
 function date(value,name){if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T/.test(value)||!Number.isFinite(Date.parse(value)))p.fail('Invalid '+name);return new Date(value).toISOString();}
 function page(input={}){const limit=p.integer(Number(input.limit??50),'limit',1,200),offset=p.integer(Number(input.offset??0),'offset',0,1000000);return {limit,offset};}
 function windowFor(timezone,period,now=new Date()){
@@ -45,6 +53,10 @@ class RssdCoordination {
    if(old.state!=='queued')p.fail('认领后写作规则已冻结',409,'demand_frozen');
    await this.store.writable(db,ctx,old.workspaceId);
    const value=p.demand({...old.payload,...input.changes,id,workspaceId:old.workspaceId,sectionId:old.sectionId,kind:old.kind,source:old.payload.source});
+   if(old.kind==='translate' && value.source){
+    value.requiredLocales=[...new Set(value.requiredLocales.filter(locale=>locale!==value.source.locale))];
+    if(!value.requiredLocales.length)p.fail('Translation demand needs a target locale');
+   }
    const dueAt=input.changes?.dueAt===null?null:input.changes?.dueAt?date(input.changes.dueAt,'dueAt'):old.payload.dueAt||null;
    const payload={...old.payload,...value,dueAt};
    const result=await one(db,'UPDATE rssd_demands SET title=$3,priority=$4,payload=$5::jsonb,generation=generation+1,"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2 RETURNING *',ctx.orgId,id,value.title,value.priority,json(payload));
@@ -124,11 +136,58 @@ class RssdCoordination {
   const rows=await q(this.db,sql,...values,Boolean(ctx.admin&&ids.length===all),limit+1,offset);
   return {items:rows.slice(0,limit).map(({totalCount,...r})=>r),hasNext:rows.length>limit,total:rows[0]?.totalCount||0,limit,offset,from,to};
  }
+ async authorizeSchedule(ctx,db,workspaceId,destinationId){
+  if(ctx.admin)return;
+  if(!ctx.workerId)p.fail('Owner access required',403,'forbidden');
+  if(!await one(db,'SELECT id FROM rssd_workers WHERE "orgId"=$1 AND id=$2 AND "revokedAt" IS NULL',ctx.orgId,ctx.workerId))p.fail('Device revoked',401,'unauthorized');
+  const grant=await one(db,`SELECT id FROM rssd_worker_grants WHERE "orgId"=$1 AND "workerId"=$2 AND operation='publicationScheduling'
+    AND "revokedAt" IS NULL AND "workspaceIds" ? $3 AND "destinationIds" ? $4`,ctx.orgId,ctx.workerId,workspaceId,destinationId);
+  if(!grant)p.fail('Owner access required',403,'forbidden');
+ }
+ async grantCapability(ctx,input){
+  admin(ctx);p.id(input.workerId,'workerId');
+  const operation=p.text(input.operation,'operation',80);
+  if(operation!=='publicationScheduling')p.fail('Unsupported capability');
+  const workspaceIds=[...new Set(p.array(input.workspaceIds,'workspaceIds').map(id=>p.id(id)))].sort();
+  const destinationIds=[...new Set(p.array(input.destinationIds,'destinationIds').map(id=>p.id(id)))].sort();
+  if(!workspaceIds.length||!destinationIds.length)p.fail('Select at least one workspace and destination');
+  return this.once(ctx,input.requestId,{action:'worker.grant',workerId:input.workerId,operation,workspaceIds,destinationIds},async db=>{
+   const worker=await one(db,'SELECT * FROM rssd_workers WHERE "orgId"=$1 AND id=$2',ctx.orgId,input.workerId);
+   if(!worker||worker.revokedAt)p.fail('Device not found',404,'not_found');
+   for(const workspaceId of workspaceIds){
+    if(!worker.workspaceIds.includes(workspaceId))p.fail('Grant exceeds the device workspace scope',403,'forbidden');
+    scope(ctx,workspaceId);await this.store.workspace(db,ctx,workspaceId);
+   }
+   for(const destinationId of destinationIds){
+    const destination=await one(db,'SELECT id,"workspaceIds" FROM rssd_destinations WHERE "orgId"=$1 AND id=$2',ctx.orgId,destinationId);
+    if(!destination)p.fail('Destination not found',404,'not_found');
+    if(!destination.workspaceIds.some(id=>workspaceIds.includes(id)))p.fail('Destination is not configured for the granted workspaces',400,'invalid_destination');
+   }
+   const existing=await one(db,`SELECT * FROM rssd_worker_grants WHERE "orgId"=$1 AND "workerId"=$2 AND operation=$3 AND "revokedAt" IS NULL
+     AND "workspaceIds"=$4::jsonb AND "destinationIds"=$5::jsonb`,ctx.orgId,input.workerId,operation,json(workspaceIds),json(destinationIds));
+   if(existing)return existing;
+   const result=await one(db,`INSERT INTO rssd_worker_grants ("orgId",id,"workerId",operation,"workspaceIds","destinationIds","grantedBy")
+     VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7) RETURNING id,"workerId",operation,"workspaceIds","destinationIds","grantedBy","revokedAt","createdAt"`,
+     ctx.orgId,randomUUID(),input.workerId,operation,json(workspaceIds),json(destinationIds),ctx.userId||'owner');
+   await audit(db,ctx,'worker.grant',{id:result.id,workerId:input.workerId,operation,workspaceIds,destinationIds});return result;
+  });
+ }
+ async revokeCapability(ctx,input){
+  admin(ctx);p.id(input.id);
+  return this.once(ctx,input.requestId,{action:'worker.grant.revoke',id:input.id},async db=>{
+   const row=await one(db,'SELECT * FROM rssd_worker_grants WHERE "orgId"=$1 AND id=$2 FOR UPDATE',ctx.orgId,input.id);
+   if(!row)p.fail('Grant not found',404,'not_found');
+   if(row.revokedAt)return {id:row.id,workerId:row.workerId,operation:row.operation,workspaceIds:row.workspaceIds,destinationIds:row.destinationIds,revokedAt:row.revokedAt};
+   const result=await one(db,'UPDATE rssd_worker_grants SET "revokedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2 RETURNING id,"workerId",operation,"workspaceIds","destinationIds","grantedBy","revokedAt","createdAt"',ctx.orgId,input.id);
+   await audit(db,ctx,'worker.grant.revoke',{id:input.id,workerId:row.workerId,operation:row.operation});return result;
+  });
+ }
  async schedule(ctx,id,input){
-  admin(ctx);p.id(id);const scheduledAt=date(input.scheduledAt,'scheduledAt');
+  p.id(id);const scheduledAt=date(input.scheduledAt,'scheduledAt');
   return this.once(ctx,input.requestId,{action:'publication.schedule',id,...input},async db=>{
    const row=await one(db,'SELECT * FROM rssd_publications WHERE "orgId"=$1 AND id=$2 FOR UPDATE',ctx.orgId,id);
    if(!row)p.fail('Publication not found',404,'not_found');scope(ctx,row.workspaceId);
+   await this.authorizeSchedule(ctx,db,row.workspaceId,row.destinationId);
    if(new Date(row.updatedAt).toISOString()!==input.expectedUpdatedAt)p.fail('Publication changed',409,'revision_conflict');
    if(row.state!=='queued'||row.leaseToken||row.attempts||row.receipt?.postiz)p.fail('原发布已开始，请在原发布入口处理',409,'publication_started');
    await this.store.writable(db,ctx,row.workspaceId);
@@ -141,8 +200,11 @@ class RssdCoordination {
   const counts=await q(this.db,`SELECT "workspaceId",state,count(*)::int AS count FROM rssd_demands WHERE "orgId"=$1 AND "workspaceId" IN (SELECT jsonb_array_elements_text($2::jsonb)) GROUP BY "workspaceId",state`,ctx.orgId,json(ids));
   const works=await q(this.db,`SELECT "workspaceId",count(*)::int AS count FROM rssd_works WHERE "orgId"=$1 AND "workspaceId" IN (SELECT jsonb_array_elements_text($2::jsonb)) GROUP BY "workspaceId"`,ctx.orgId,json(ids));
   const goals=await this.goals(ctx,input);
+  const publicationScheduling=Boolean(ctx.admin)||(ctx.grants||[]).some(grant=>grant.operation==='publicationScheduling'&&grant.workspaceIds.some(id=>ids.includes(id)));
   return {contractVersion:1,generatedAt:new Date().toISOString(),workspaces:registry.workspaces.filter(w=>ids.includes(w.id)),counts,works,goals,
-   capabilities:{goalManagement:Boolean(ctx.admin),publicationScheduling:Boolean(ctx.admin),demandEditing:true,mcp:true},nativePaths:{calendar:'/launches',media:'/media',analytics:'/analytics',agents:'/agents',settings:'/settings'}};
+   capabilities:{goalManagement:Boolean(ctx.admin),publicationScheduling,demandEditing:true,mcp:true},
+   contracts:{translateContinuation:translateContinuationContract()},
+   nativePaths:{calendar:'/launches',media:'/media',analytics:'/analytics',agents:'/agents',settings:'/settings'}};
  }
 }
-module.exports={RssdCoordination,windowFor,page};
+module.exports={RssdCoordination,windowFor,page,TRANSLATE_CONTINUATION_VERSION,TRANSLATE_CONTINUATION_GUARANTEES,translateContinuationContract,supportsTranslateContinuation};

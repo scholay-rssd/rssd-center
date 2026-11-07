@@ -32,6 +32,8 @@ export function RssdWorkspace({initialTab,initialWorkspace}: {initialTab?:string
   const [offset,setOffset]=useState(0),[drafts,setDrafts]=useState<Record<string,Row>>({}),[draftsLoaded,setDraftsLoaded]=useState(false);
   const [demandSource,setDemandSource]=useState<Row|null>(null),[demandKind,setDemandKind]=useState('write');
   const [conflict,setConflict]=useState<Row|null>(null);
+  const [destinations,setDestinations]=useState<Row[]>([]);
+  const [grantFor,setGrantFor]=useState<Row|null>(null);
   const requestGeneration=useRef(0);
   const listKey=JSON.stringify([tab,space,search,offset]);
   // A tab changes before its request finishes. Never render another tab's row shape.
@@ -104,8 +106,8 @@ export function RssdWorkspace({initialTab,initialWorkspace}: {initialTab?:string
   const create=async(form:HTMLFormElement)=>{
     const values=new FormData(form);
     if(tab==='demands'){
-      await api('/demands','POST',{workspaceId:space,sectionId:demandSource?.sectionId||values.get('section'),kind:demandKind,title:values.get('title'),brief:values.get('brief'),requiredLocales:values.get('languages')==='both'?['zh-CN','en']:[values.get('languages')],...(demandSource?{source:demandSource.source}:{})});
-      setNotice('需求已加入清单');
+      const result=await api('/demands','POST',{workspaceId:space,sectionId:demandSource?.sectionId||values.get('section'),kind:demandKind,title:values.get('title'),brief:values.get('brief'),requiredLocales:values.get('languages')==='both'?['zh-CN','en']:[values.get('languages')],...(demandSource?{source:demandSource.source}:{})});
+      setNotice(result.status==='skipped'?'该作品已有目标语言，未重复创建需求':result.status==='existing'?'已有相同补译需求，沿用原任务':'需求已加入清单');
     }else if(tab==='workers'){
       const worker=await api('/workers','POST',{name:values.get('name'),workspaceIds:values.getAll('spaces')});setToken(worker.token);
     }else if(tab==='settings'){
@@ -120,6 +122,7 @@ export function RssdWorkspace({initialTab,initialWorkspace}: {initialTab?:string
     setLanguage(values.get('language') as string);setTitle('');setBody('');setAttachments([]);setPlatformContent({});setCreating(false);
   };
   const deriveDemand=(kind:string)=>{if(!selected)return;const edition=selected.editions.find((e:Row)=>e.locale===language);if(!edition)return;setDemandSource({sectionId:selected.sectionId,title:edition.payload.title,source:{workId:selected.id,locale:language,revision:edition.revision}});setDemandKind(kind);setTab('demands');setSelected(null);setCreating(true);};
+  const openGrant=async(row:Row)=>{const list=await api('/destinations');setDestinations(list);setGrantFor(row);setCreating(false);};
   const upload=async(file:File)=>{
     if(!selected)return;if(file.size>20*1024*1024)throw Error('配图不能超过 20 MiB');
     const bytes=await file.arrayBuffer(),sha256=[...new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))].map(n=>n.toString(16).padStart(2,'0')).join('');
@@ -153,6 +156,14 @@ export function RssdWorkspace({initialTab,initialWorkspace}: {initialTab?:string
       {tab==='settings'&&<><label>名称<input name="name" required/></label><label>稳定标识<input name="id" required pattern="[a-zA-Z0-9][a-zA-Z0-9._:-]*"/></label><label>对应站点标识<input name="siteId"/></label><label>首个栏目名称<input name="sectionName" required/></label><label>首个栏目标识<input name="sectionId" required/></label><label>写作要求<textarea name="instructions" rows={5}/></label></>}
       <div className="rssd-form-actions"><button type="button" onClick={()=>setCreating(false)}>取消</button><button className="rssd-primary" disabled={busy}>创建</button></div>
     </form>}
+    {grantFor&&<form className="rssd-form" onSubmit={event=>{event.preventDefault();const form=event.currentTarget;void action(async()=>{const values=new FormData(form);await api('/workers/'+grantFor.id+'/grants','POST',{requestId:crypto.randomUUID(),operation:'publicationScheduling',workspaceIds:values.getAll('spaces'),destinationIds:values.getAll('destinations')});setGrantFor(null);setNotice('已授予最小排期范围。设备不会成为管理员；源码改动不会自动授权线上设备。');await refresh();});}}>
+      <h2>授予排期权限</h2>
+      <p>仅 Owner 可授予和撤销。必须显式选择工作空间和目的地。设备不能自行提权，也不会获得 admin 身份。</p>
+      <p>{grantFor.name}</p>
+      <fieldset><legend>工作空间</legend>{grantFor.workspaceIds.map((id:string)=><label className="rssd-checkbox" key={id}><input type="checkbox" name="spaces" value={id} defaultChecked/>{registry.find(w=>w.id===id)?.name||id}</label>)}</fieldset>
+      <fieldset><legend>目的地</legend>{destinations.filter((d:Row)=>d.workspaceIds?.some((id:string)=>grantFor.workspaceIds.includes(id))).map((d:Row)=><label className="rssd-checkbox" key={d.id}><input type="checkbox" name="destinations" value={d.id}/>{d.name} · {d.id}</label>)}</fieldset>
+      <div className="rssd-form-actions"><button type="button" onClick={()=>setGrantFor(null)}>取消</button><button className="rssd-primary" disabled={busy}>授予</button></div>
+    </form>}
     {token&&<div className="rssd-message"><strong>连接凭据只显示这一次</strong><p>复制到对应设备的 RSSD 中心设置中。</p><input aria-label="设备连接凭据" readOnly type="password" value={token}/><button onClick={()=>void navigator.clipboard.writeText(token).then(()=>setNotice('连接凭据已复制')).catch(()=>setError('复制失败，请选择后复制'))}>复制凭据</button><button onClick={()=>setToken('')}>关闭</button></div>}
     {!creating&&selected&&tab==='works'?<div className="rssd-editor"><div className="rssd-editor-toolbar"><button disabled={contextLocked} onClick={()=>setSelected(null)}>返回作品库</button><div><button disabled={contextLocked} aria-pressed={language==='zh-CN'} onClick={()=>chooseLanguage('zh-CN')}>中文</button><button disabled={contextLocked} aria-pressed={language==='en'} onClick={()=>chooseLanguage('en')}>English</button></div><span>版本 {selected.editions.find((e:Row)=>e.locale===language)?.revision||0}</span><button disabled={busy||Boolean(pending)||!writable||!title.trim()||!body.trim()} onClick={()=>void action(()=>sendEdition(false))}>保存草稿</button><button className="rssd-primary" disabled={busy||Boolean(pending)||!writable||!title.trim()||!body.trim()} onClick={()=>void action(()=>sendEdition(true))}>提交发布</button></div>
       <div className="rssd-form-actions"><button disabled={!writable||busy||!selected.editions.some((e:Row)=>e.locale===language)} onClick={()=>deriveDemand('translate')}>创建翻译需求</button><button disabled={!writable||busy||!selected.editions.some((e:Row)=>e.locale===language)} onClick={()=>deriveDemand('update')}>创建补充更新需求</button><span>编辑内容会保留在此浏览器，提交后同步到中心。</span></div>
@@ -163,10 +174,11 @@ export function RssdWorkspace({initialTab,initialWorkspace}: {initialTab?:string
       <PlatformContent api={api} workspaceId={selected.workspaceId} value={platformContent} onChange={setPlatformContent} attachments={attachments} disabled={busy||Boolean(pending)}/>
     </div>:!creating&&!['overview','calendar','goals','destinations','health','guestbooks','labels'].includes(tab)&&<div className="rssd-list" aria-busy={listLoading}>
       {tab==='settings'?registry.map(w=><article className="rssd-row" key={w.id}><div><h2>{w.name}</h2><p>{w.sections.map((s:Row)=>s.name).join(' · ')}</p></div><span>{w.siteId||'尚未关联站点'}</span></article>):rows.length?rows.map(row=><article className="rssd-row" key={row.id}>
-        <div className="rssd-row-main"><h2>{tab==='works'?<button disabled={contextLocked} className="rssd-work-link" onClick={()=>void action(()=>openWork(row.id))}>{row.editions[0]?.title||'未命名作品'}</button>:row.title||row.name||row.workId}</h2><p>{tab==='demands'?active?.sections.find((s:Row)=>s.id===row.sectionId)?.name||row.sectionId:tab==='works'?row.editions.map((e:Row)=>`${e.locale} · v${e.revision}`).join(' / '):tab==='workers'?row.details?.message||row.workspaceIds.join(' · '):`${row.locale} · v${row.revision} → ${row.destinationId}`}</p>{row.error&&<p className="rssd-error">{row.error}</p>}</div>
+        <div className="rssd-row-main"><h2>{tab==='works'?<button disabled={contextLocked} className="rssd-work-link" onClick={()=>void action(()=>openWork(row.id))}>{row.editions[0]?.title||'未命名作品'}</button>:row.title||row.name||row.workId}</h2><p>{tab==='demands'?active?.sections.find((s:Row)=>s.id===row.sectionId)?.name||row.sectionId:tab==='works'?row.editions.map((e:Row)=>`${e.locale} · v${e.revision}`).join(' / '):tab==='workers'?row.details?.message||row.workspaceIds.join(' · '):`${row.locale} · v${row.revision} → ${row.destinationId}`}</p>{tab==='workers'&&(row.grants||[]).filter((g:Row)=>!g.revokedAt).map((g:Row)=><p key={g.id}>排期 {g.workspaceIds.join(', ')} → {g.destinationIds.join(', ')} <button disabled={busy} onClick={()=>void action(async()=>{await api('/workers/'+row.id+'/grants/'+g.id+'/revoke','POST',{requestId:crypto.randomUUID()});await refresh();})}>撤销排期授权</button></p>)}{row.error&&<p className="rssd-error">{row.error}</p>}</div>
         {row.state&&<span className={'rssd-state rssd-state-'+row.state}>{label(row.state)}</span>}<time>{when(row.heartbeatAt||row.updatedAt||row.createdAt)}</time>
         {tab==='demands'&&['claimed','blocked'].includes(row.state)&&<button disabled={busy} onClick={()=>void action(async()=>{await api('/demands/'+row.id,'PATCH',{action:'release'});await refresh();})}>释放认领</button>}
         {tab==='workers'&&!row.revokedAt&&<button disabled={busy} onClick={()=>void action(async()=>{await api('/workers/'+row.id+'/revoke','POST',{});await refresh();})}>撤销连接</button>}
+        {tab==='workers'&&!row.revokedAt&&<button disabled={busy} onClick={()=>void action(()=>openGrant(row))}>授予排期</button>}
         {tab==='publications'&&row.state==='blocked'&&<button disabled={busy} onClick={()=>void action(async()=>{await api('/publications/'+row.id+'/retry','POST',{});await refresh();})}>恢复原发布</button>}
         {tab==='publications'&&['published','legacy_published'].includes(row.state)&&row.receipt?.url&&/^https?:\/\//.test(row.receipt.url)&&<a href={row.receipt.url} target="_blank" rel="noreferrer">查看成品</a>}
       </article>):<div className="rssd-empty"><h2>{listLoading?'正在读取…':tab==='demands'?'需求池里还没有任务':tab==='works'?'还没有作品':tab==='workers'?'尚未连接执行设备':'暂无发布记录'}</h2><p>{tab==='demands'?'添加选题后，在 PC 或无头版开启工作模式。':tab==='works'?'作品可以从生产设备提交，也可以在这里创建。':tab==='workers'?'连接凭据按工作空间授权，智能体账号留在设备上。':'提交作品后，各个目的地的结果会分别记录在这里。'}</p></div>}

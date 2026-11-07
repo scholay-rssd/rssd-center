@@ -1137,3 +1137,82 @@ test('retired migration columns allow only their imported works to save and publ
  await db.$executeRawUnsafe('UPDATE rssd_migrations SET state=\'staged\' WHERE "orgId"=$1',f.owner.orgId);
  await assert.rejects(f.service.submit(f.ctx,'research',{...update,requestKey:randomUUID(),expectedVersion:3},{intent:'draft'}),{code:'migration_staged'});
 });
+
+test('translate demands bind source hash, create once, skip existing English and keep Chinese identity',async()=>{
+ const f=await fixture(),missing=randomUUID(),present=randomUUID();
+ await store.submit(f.owner,{requestId:randomUUID(),workId:missing,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'待补译',bodyMarkdown:'完整的中文正文。'}]},{publish:false});
+ await store.submit(f.owner,{requestId:randomUUID(),workId:present,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'已有英文',bodyMarkdown:'中文正文。'},{locale:'en',title:'Existing English',bodyMarkdown:'English body.'}]},{publish:false});
+ const source=await store.edition(f.owner,missing,'zh-CN',1);
+ const created=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'补英文',requiredLocales:['en','zh-CN'],source:{workId:missing,locale:'zh-CN',revision:1}});
+ assert.equal(created.status,'created');assert.equal(created.kind,'translate');assert.deepEqual(created.payload.requiredLocales,['en']);assert.equal(created.payload.sourceHash,source.hash);
+ const reused=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'再次创建',requiredLocales:['en'],source:{workId:missing,locale:'zh-CN',revision:1}});
+ assert.equal(reused.status,'existing');assert.equal(reused.id,created.id);
+ const skipped=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'跳过',requiredLocales:['en'],source:{workId:present,locale:'zh-CN',revision:1}});
+ assert.equal(skipped.status,'skipped');assert.equal(skipped.reason,'locale_present');assert.equal(skipped.workId,present);
+ const work=await store.work(f.owner,present);assert.equal(work.editions.some(e=>e.locale==='zh-CN'),true);assert.equal(work.editions.some(e=>e.locale==='en'),true);
+ await store.submit(f.owner,{requestId:randomUUID(),workId:missing,workspaceId:'research',sectionId:'methods',baseRevisions:{'zh-CN':1},editions:[{locale:'zh-CN',title:'源文已改',bodyMarkdown:'更新后的中文正文。'}]},{publish:false});
+ await assert.rejects(store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'过期源',requiredLocales:['en'],source:{workId:missing,locale:'zh-CN',revision:1}}),{code:'source_conflict'});
+ await assert.rejects(store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'新源',requiredLocales:['en'],source:{workId:missing,locale:'zh-CN',revision:2}}),{code:'open_translate_conflict'});
+ const still=await store.demands(f.owner);assert.equal(still.filter(row=>row.payload?.source?.workId===missing && ['queued','claimed','blocked'].includes(row.state)).length,1);
+ assert.equal(still.find(row=>row.id===created.id).payload.source.revision,1);assert.equal(still.find(row=>row.id===created.id).payload.sourceHash,source.hash);
+});
+
+test('translate enqueue keeps one open task when Chinese moves from rev1 to rev2',async()=>{
+ const f=await fixture(),workId=randomUUID();
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'待补译',bodyMarkdown:'完整的中文正文。'}]},{publish:false});
+ const created=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'补英文',requiredLocales:['en'],source:{workId,locale:'zh-CN',revision:1}});
+ assert.equal(created.status,'created');assert.equal(created.payload.source.revision,1);
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',baseRevisions:{'zh-CN':1},editions:[{locale:'zh-CN',title:'中文已改',bodyMarkdown:'更新后的中文正文。'}]},{publish:false});
+ await assert.rejects(store.createDemand(f.owner,{id:randomUUID(),workspaceId:'research',sectionId:'methods',kind:'translate',title:'新绑定',requiredLocales:['en'],source:{workId,locale:'zh-CN',revision:2}}),{code:'open_translate_conflict'});
+ const open=(await store.demands(f.owner)).filter(row=>row.kind==='translate'&&['queued','claimed','blocked'].includes(row.state)&&row.payload?.source?.workId===workId);
+ assert.equal(open.length,1);assert.equal(open[0].id,created.id);assert.equal(open[0].payload.source.revision,1);assert.equal(open[0].payload.sourceHash,created.payload.sourceHash);
+});
+
+test('concurrent translate enqueue reuses one open task and the unique work constraint',async()=>{
+ const f=await fixture(),workId=randomUUID();
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'并发源',bodyMarkdown:'完整的中文正文。'}]},{publish:false});
+ const results=await Promise.allSettled(Array.from({length:8},()=>store.createDemand(f.owner,{id:randomUUID(),workspaceId:'research',sectionId:'methods',kind:'translate',title:'并发',requiredLocales:['en'],source:{workId,locale:'zh-CN',revision:1}})));
+ const ok=results.filter(row=>row.status==='fulfilled').map(row=>row.value);
+ assert.equal(ok.length,8);assert.equal(new Set(ok.map(row=>row.id)).size,1);
+ assert.equal(ok.filter(row=>row.status==='created').length,1);ok.filter(row=>row.status!=='created').forEach(row=>assert.equal(row.status,'existing'));
+ const first=ok.find(row=>row.status==='created');
+ await db.$executeRawUnsafe('INSERT INTO rssd_demands ("orgId",id,"workspaceId","sectionId",kind,title,payload) VALUES ($1,$2,\'research\',\'methods\',\'translate\',\'dup\',$3::jsonb)',f.owner.orgId,randomUUID(),JSON.stringify({...first.payload,source:{...first.payload.source},requiredLocales:['en']})).then(()=>{throw Error('expected unique violation');},error=>assert.match(String(error.code||error.message),/23505|duplicate key|unique/i));
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',baseRevisions:{'zh-CN':1},editions:[{locale:'zh-CN',title:'并发后改',bodyMarkdown:'第二版中文。'}]},{publish:false});
+ const moved=await Promise.allSettled(Array.from({length:6},()=>store.createDemand(f.owner,{id:randomUUID(),workspaceId:'research',sectionId:'methods',kind:'translate',title:'再绑定',requiredLocales:['en'],source:{workId,locale:'zh-CN',revision:2}})));
+ moved.forEach(row=>{assert.equal(row.status,'rejected');assert.equal(row.reason.code,'open_translate_conflict');});
+ const open=(await store.demands(f.owner)).filter(row=>row.kind==='translate'&&['queued','claimed','blocked'].includes(row.state)&&row.payload?.source?.workId===workId);
+ assert.equal(open.length,1);assert.equal(open[0].id,first.id);assert.equal(open[0].payload.source.revision,1);
+});
+
+test('translate submit is request-idempotent, refuses source change and Chinese rewrite, and does not steal claims',async()=>{
+ const f=await fixture(),workId=randomUUID(),other=await store.createWorker(f.owner,{name:'Other device',workspaceIds:['research']}),otherCtx=await store.authenticate(other.token);
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'源文',bodyMarkdown:'完整的中文正文。'}]},{publish:false});
+ const demand=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'译',requiredLocales:['en'],source:{workId,locale:'zh-CN',revision:1}});
+ const claim=await store.claim(f.ctx,{demandId:demand.id});
+ await assert.rejects(store.claim(otherCtx,{demandId:demand.id}),{code:'claim_conflict'});
+ const packet={requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',demandId:claim.id,claimToken:claim.claimToken,baseRevisions:{en:0},editions:[{locale:'en',title:'English',bodyMarkdown:'Translated body.',translationOf:{workId,locale:'zh-CN',revision:1}}]};
+ await assert.rejects(store.submit(f.ctx,{...packet,requestId:randomUUID(),editions:[{locale:'zh-CN',title:'改中文',bodyMarkdown:'不应覆盖源文。'}]}),{code:'source_conflict'});
+ const accepted=await store.submit(f.ctx,packet);assert.equal(accepted.status,'accepted');assert.equal(accepted.workId,workId);
+ assert.deepEqual(await store.submit(f.ctx,packet),accepted);
+ assert.deepEqual(await store.submissionStatus(f.ctx,packet.requestId),accepted);
+ await assert.rejects(store.submit(f.ctx,{...packet,editions:[{...packet.editions[0],title:'Changed replay'}]}),{code:'request_conflict'});
+ const editions=(await store.work(f.ctx,workId)).editions;
+ assert.equal(editions.find(e=>e.locale==='zh-CN').revision,1);
+ assert.equal(editions.find(e=>e.locale==='en').revision,1);
+ const changed=randomUUID();
+ await store.submit(f.owner,{requestId:randomUUID(),workId:changed,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'稍后会改',bodyMarkdown:'完整的中文正文。'}]},{publish:false});
+ const stale=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'旧绑定',requiredLocales:['en'],source:{workId:changed,locale:'zh-CN',revision:1}});
+ const staleClaim=await store.claim(otherCtx,{demandId:stale.id});
+ await store.submit(f.owner,{requestId:randomUUID(),workId:changed,workspaceId:'research',sectionId:'methods',baseRevisions:{'zh-CN':1},editions:[{locale:'zh-CN',title:'源文已改',bodyMarkdown:'更新后的中文正文。'}]},{publish:false});
+ await assert.rejects(store.submit(otherCtx,{requestId:randomUUID(),workId:changed,workspaceId:'research',sectionId:'methods',demandId:staleClaim.id,claimToken:staleClaim.claimToken,baseRevisions:{en:0},editions:[{locale:'en',title:'Stale',bodyMarkdown:'Old translation.',translationOf:{workId:changed,locale:'zh-CN',revision:1}}]}),{code:'source_conflict'});
+});
+
+test('expired claims return to the queue for a later device without letting the old token publish',async()=>{
+ const f=await fixture(),other=await store.createWorker(f.owner,{name:'Successor',workspaceIds:['research']}),otherCtx=await store.authenticate(other.token);
+ await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Handoff'});
+ const claim=await store.claim(f.ctx);assert.ok(claim.payload.claimExpiresAt);
+ await db.$executeRawUnsafe('UPDATE rssd_demands SET payload=payload || $3::jsonb WHERE "orgId"=$1 AND id=$2',f.owner.orgId,claim.id,JSON.stringify({claimExpiresAt:new Date(Date.now()-1000).toISOString()}));
+ assert.equal(await store.activeClaim(f.ctx),null);
+ const next=await store.claim(otherCtx,{demandId:claim.id});assert.ok(next);assert.notEqual(next.claimToken,claim.claimToken);
+ await assert.rejects(store.submit(f.ctx,{...f.packet,demandId:claim.id,claimToken:claim.claimToken}),{code:'claim_revoked'});
+});

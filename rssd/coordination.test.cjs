@@ -1,7 +1,7 @@
 'use strict';
 const {test,before,after}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {Pool,Client}=require('pg'),{randomUUID}=require('node:crypto');
-const {RssdStore}=require('./store.cjs'),{RssdCoordination,windowFor}=require('./coordination.cjs'),{RssdMcp}=require('./mcp.cjs');
+const {RssdStore}=require('./store.cjs'),{RssdCoordination,windowFor,TRANSLATE_CONTINUATION_VERSION,TRANSLATE_CONTINUATION_GUARANTEES,supportsTranslateContinuation}=require('./coordination.cjs'),{RssdMcp}=require('./mcp.cjs');
 const schema='rssd_coord_'+randomUUID().replaceAll('-','');let pool,db,store,coord,control;
 function adapter(client){return {$queryRawUnsafe:async(sql,...a)=>(await client.query(sql,a)).rows,$executeRawUnsafe:async(sql,...a)=>(await client.query(sql,a)).rowCount,$transaction:async fn=>{const c=await pool.connect();try{await c.query('BEGIN');const r=await fn(adapter(c));await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}}};}
 before(async()=>{
@@ -46,11 +46,34 @@ test('unified calendar preserves native posts and scoped channels without leakin
 });
 test('MCP lists role-specific tools, rejects notification mutations and shares scope and audit rules',async()=>{
  const f=await fixture(),mcp=new RssdMcp(store,coord),call=(method,params)=>mcp.handle(f.ctx,{jsonrpc:'2.0',id:1,method,params});
- const names=(await call('tools/list')).result.tools.map(t=>t.name);assert(names.includes('rssd_claim'));assert(!names.includes('rssd_save_goal'));
+ const names=(await call('tools/list')).result.tools.map(t=>t.name);assert(names.includes('rssd_claim'));assert(names.includes('rssd_create_demand'));assert(!names.includes('rssd_save_goal'));assert(!names.includes('rssd_schedule_publication'));assert(!names.includes('rssd_grant_capability'));
  assert.equal((await mcp.handle(f.ctx,{jsonrpc:'2.0',method:'tools/call',params:{name:'rssd_claim'}})).error.code,-32600);
  const read=await call('tools/call',{name:'rssd_overview',arguments:{workspaceIds:'a'}});assert.equal(JSON.parse(read.result.content[0].text).workspaces.length,1);
  const forbidden=await call('tools/call',{name:'rssd_overview',arguments:{workspaceIds:'b'}});assert(forbidden.result.isError);
+ const ownerNames=(await mcp.handle(f.owner,{jsonrpc:'2.0',id:1,method:'tools/list'})).result.tools.map(t=>t.name);assert(ownerNames.includes('rssd_grant_capability'));assert(ownerNames.includes('rssd_schedule_publication'));
  const logs=await db.$queryRawUnsafe('SELECT action FROM rssd_audit WHERE "orgId"=$1',f.owner.orgId);assert(logs.some(r=>r.action==='mcp.rssd_overview'));
+});
+test('overview advertises translateContinuation as a read-only contract, not a grant; tool names are not enough',async()=>{
+ const f=await fixture();
+ const device=await coord.overview(f.ctx,{workspaceIds:'a'});
+ assert.equal(device.capabilities.publicationScheduling,false);assert.equal(device.capabilities.goalManagement,false);
+ assert.equal(device.contracts.translateContinuation.version,TRANSLATE_CONTINUATION_VERSION);
+ assert.deepEqual(device.contracts.translateContinuation.guarantees,[...TRANSLATE_CONTINUATION_GUARANTEES]);
+ assert.equal(supportsTranslateContinuation(device),true);
+ await assert.rejects(coord.overview(f.ctx,{workspaceIds:'b'}),{code:'forbidden'});
+ await assert.rejects(coord.overview({},{workspaceIds:'a'}),{status:401});
+ const mcp=new RssdMcp(store,coord);
+ const listed=(await mcp.handle(f.ctx,{jsonrpc:'2.0',id:1,method:'tools/list'})).result.tools;
+ assert.equal(listed.some(t=>t.name==='rssd_create_demand'),true);
+ assert.equal(supportsTranslateContinuation({tools:listed,capabilities:{mcp:true}}),false);
+ const viaMcp=JSON.parse((await mcp.handle(f.ctx,{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'rssd_overview',arguments:{workspaceIds:'a'}}})).result.content[0].text);
+ assert.equal(supportsTranslateContinuation(viaMcp),true);
+ assert.equal(supportsTranslateContinuation({}),false);
+ assert.equal(supportsTranslateContinuation({capabilities:{translateContinuation:true},contracts:{}}),false);
+ assert.equal(supportsTranslateContinuation({contracts:{translateContinuation:true}}),false);
+ assert.equal(supportsTranslateContinuation({contracts:{translateContinuation:{version:0,guarantees:[...TRANSLATE_CONTINUATION_GUARANTEES]}}}),false);
+ assert.equal(supportsTranslateContinuation({contracts:{translateContinuation:{version:1,guarantees:['receipt']}}}),false);
+ assert.equal(supportsTranslateContinuation({contracts:{translateContinuation:{version:'1',guarantees:[...TRANSLATE_CONTINUATION_GUARANTEES]}}}),false);
 });
 test('scheduling preserves the original publication, replays after a lost response and fences a started delivery',async()=>{
  const f=await fixture(),id=randomUUID(),workId=randomUUID();
@@ -62,6 +85,47 @@ test('scheduling preserves the original publication, replays after a lost respon
  await db.$executeRawUnsafe('UPDATE rssd_publications SET attempts=1 WHERE "orgId"=$1 AND id=$2',f.owner.orgId,id);
  await assert.rejects(coord.schedule(f.owner,id,{...input,requestId:randomUUID(),expectedUpdatedAt:first.updatedAt.toISOString()}),{code:'publication_started'});
  const event=(await coord.calendar(f.owner)).items[0];assert.equal(event.hasSchedule,true);assert.equal(event.workId,workId);
+});
+test('Owner-granted publication scheduling is scoped, revocable and read back; unauthorized devices stay 403',async()=>{
+ const f=await fixture(),id=randomUUID(),other=randomUUID(),workId=randomUUID();
+ await db.$executeRawUnsafe('INSERT INTO rssd_destinations ("orgId",id,name,kind,"workspaceIds",config,enabled) VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,true)',f.owner.orgId,'site-a','Site A','site',JSON.stringify(['a']),'{}');
+ await db.$executeRawUnsafe('INSERT INTO rssd_destinations ("orgId",id,name,kind,"workspaceIds",config,enabled) VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,true)',f.owner.orgId,'site-other','Other','site',JSON.stringify(['a']),'{}');
+ await db.$executeRawUnsafe('INSERT INTO rssd_publications ("orgId",id,"workId","workspaceId",locale,revision,"destinationId",payload) VALUES ($1,$2,$3,\'a\',\'en\',1,\'site-a\',\'{"edition":{"title":"Original"}}\')',f.owner.orgId,id,workId);
+ await db.$executeRawUnsafe('INSERT INTO rssd_publications ("orgId",id,"workId","workspaceId",locale,revision,"destinationId",payload) VALUES ($1,$2,$3,\'a\',\'en\',1,\'site-other\',\'{"edition":{"title":"Out of scope"}}\')',f.owner.orgId,other,workId);
+ const wide=await store.createWorker(f.owner,{name:'Wide',workspaceIds:['a','b']});
+ const grantInput={workerId:wide.id,operation:'publicationScheduling',workspaceIds:['a'],destinationIds:['site-a'],requestId:randomUUID()};
+ await assert.rejects(coord.grantCapability(f.ctx,grantInput),{code:'forbidden'});
+ const grant=await coord.grantCapability(f.owner,grantInput);assert.equal((await coord.grantCapability(f.owner,grantInput)).id,grant.id);
+ await assert.rejects(coord.grantCapability(f.owner,{workerId:f.worker.id,operation:'publicationScheduling',workspaceIds:['b'],destinationIds:['site-a'],requestId:randomUUID()}),{code:'forbidden'});
+ await assert.rejects(coord.grantCapability(f.owner,{...grantInput,requestId:randomUUID(),workspaceIds:['b']}),{code:'invalid_destination'});
+ await assert.rejects(coord.grantCapability(f.owner,{...grantInput,requestId:randomUUID(),destinationIds:['missing']}),{status:404});
+ await assert.rejects(coord.grantCapability(f.owner,{...grantInput,requestId:randomUUID(),operation:'admin'}),/Unsupported capability/);
+ const authed=await store.authenticate(wide.token),stranger=await store.authenticate((await store.createWorker(f.owner,{name:'No grant',workspaceIds:['a']})).token);
+ assert.equal((await coord.overview(authed,{workspaceIds:'a'})).capabilities.publicationScheduling,true);
+ assert.equal((await coord.overview(authed,{workspaceIds:'b'})).capabilities.publicationScheduling,false);
+ assert.equal((await coord.overview(stranger)).capabilities.publicationScheduling,false);
+ const mcp=new RssdMcp(store,coord),call=(ctx,name,args)=>mcp.handle(ctx,{jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}});
+ const listedTools=(ctx)=>mcp.handle(ctx,{jsonrpc:'2.0',id:1,method:'tools/list'});
+ assert((await listedTools(authed)).result.tools.some(t=>t.name==='rssd_schedule_publication'));
+ assert(!(await listedTools(stranger)).result.tools.some(t=>t.name==='rssd_schedule_publication'));
+ const listed=await store.workers(f.owner);assert.equal(listed.find(w=>w.id===wide.id).grants[0].id,grant.id);
+ const row=(await store.publications(f.owner)).find(item=>item.id===id),input={requestId:randomUUID(),expectedUpdatedAt:row.updatedAt.toISOString(),scheduledAt:new Date(Date.now()+86400000).toISOString()};
+ await assert.rejects(coord.schedule(stranger,id,input),{code:'forbidden'});
+ const denied=JSON.parse((await call(stranger,'rssd_schedule_publication',{id,...input})).result.content[0].text);assert.equal(denied.code,'forbidden');
+ const first=await coord.schedule(authed,id,input);assert.equal(first.id,id);assert.equal((await coord.schedule(authed,id,input)).id,id);
+ const replayed=JSON.parse((await call(authed,'rssd_schedule_publication',{id,...input})).result.content[0].text);assert.equal(replayed.id,id);
+ const outside=(await store.publications(f.owner)).find(item=>item.id===other);
+ await assert.rejects(coord.schedule(authed,other,{requestId:randomUUID(),expectedUpdatedAt:outside.updatedAt.toISOString(),scheduledAt:input.scheduledAt}),{code:'forbidden'});
+ const scoped=JSON.parse((await call(authed,'rssd_schedule_publication',{id:other,requestId:randomUUID(),expectedUpdatedAt:outside.updatedAt.toISOString(),scheduledAt:input.scheduledAt})).result.content[0].text);assert.equal(scoped.code,'forbidden');
+ await assert.rejects(coord.revokeCapability(f.ctx,{id:grant.id,requestId:randomUUID()}),{code:'forbidden'});
+ await coord.revokeCapability(f.owner,{id:grant.id,requestId:randomUUID()});
+ const after=await store.authenticate(wide.token);
+ assert.equal((await coord.overview(after)).capabilities.publicationScheduling,false);
+ assert.equal((await store.workers(f.owner)).find(w=>w.id===wide.id).grants[0].revokedAt!=null,true);
+ await assert.rejects(coord.schedule(after,id,{...input,requestId:randomUUID(),expectedUpdatedAt:first.updatedAt.toISOString()}),{code:'forbidden'});
+ await assert.rejects(coord.schedule(authed,id,{...input,requestId:randomUUID(),expectedUpdatedAt:first.updatedAt.toISOString()}),{code:'forbidden'});
+ assert(!(await listedTools(after)).result.tools.some(t=>t.name==='rssd_schedule_publication'));
+ const staleCall=JSON.parse((await call(authed,'rssd_schedule_publication',{id,...input,requestId:randomUUID(),expectedUpdatedAt:first.updatedAt.toISOString()})).result.content[0].text);assert.equal(staleCall.code,'forbidden');
 });
 test('paused and staged goals cannot create new demands and goal updates require current revision',async()=>{
  const f=await fixture(),input={id:'disabled',baseRevision:0,requestId:randomUUID(),goal:{workspaceId:'a',sectionId:'news',period:'day',timezone:'UTC',target:2,title:'Paused goal',requiredLocales:['en'],enabled:false}};
