@@ -78,6 +78,26 @@ test('HTTP schedule and grant writes return 403 from coordination, not from MCP 
  assert.equal(grant.status,403);assert.equal((await grant.json()).code,'forbidden');
 });
 
+test('HTTP existing English site publish forwards identity fields and recovers the receipt',async t=>{
+ const {ProtocolError}=require('../apps/backend/dist/rssd/protocol.cjs');
+ const calls=[];
+ const existingSitePublish={
+  publish:async(ctx,body)=>{calls.push(['publish',body]);if(body.retry)throw new ProtocolError('Unknown field',400,'invalid_request');return {status:'created',requestId:body.requestId,locale:'en',destinationId:body.destinationId,publicationIds:undefined};},
+  receipt:async(ctx,requestId)=>{calls.push(['receipt',requestId]);return {status:'existing',requestId,locale:'en'};},
+ };
+ const module=await Test.createTestingModule({imports:[ThrottlerModule.forRoot([{ttl:60000,limit:100}])],controllers:[RssdController],providers:[{provide:RssdService,useValue:{existingSitePublish}}]}).compile();
+ const app=module.createNestApplication();app.useLogger(false);app.use((req,res,next)=>{req.rssd={orgId:'org',workerId:'device',admin:false,workspaceIds:['enter']};next();});
+ await app.listen(0,'127.0.0.1');t.after(()=>app.close());
+ const origin=await app.getUrl(),headers={'content-type':'application/json'};
+ const body={requestId:'req-site',workId:'work-1',locale:'en',revision:1,hash:'a'.repeat(64),destinationId:'site-enter',articleId:'shared-manuscript'};
+ const created=await fetch(origin+'/rssd/v1/site-publications',{method:'POST',headers,body:JSON.stringify(body)});
+ assert.equal(created.status,201);assert.equal((await created.json()).destinationId,'site-enter');assert.deepEqual(calls[0][1],body);
+ const bad=await fetch(origin+'/rssd/v1/site-publications',{method:'POST',headers,body:JSON.stringify({...body,retry:true})});
+ assert.equal(bad.status,400);assert.equal((await bad.json()).code,'invalid_request');
+ const recovered=await fetch(origin+'/rssd/v1/site-publications/req-site');
+ assert.equal(recovered.status,200);assert.equal((await recovered.json()).requestId,'req-site');assert.deepEqual(calls[2],['receipt','req-site']);
+});
+
 test('HTTP demands, claims, drafts and submissions forward storeOnly and publish flags',async t=>{
  const {ProtocolError}=require('../apps/backend/dist/rssd/protocol.cjs');
  const calls=[];

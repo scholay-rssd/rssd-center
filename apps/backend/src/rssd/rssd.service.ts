@@ -19,6 +19,7 @@ const { RssdCommunity } = require('../../../../rssd/community.cjs');
 const { RssdEditorial } = require('../../../../rssd/editorial.cjs');
 const { RssdEditorialActions } = require('../../../../rssd/editorial-actions.cjs');
 const { RssdMigration } = require('../../../../rssd/migration.cjs');
+const { RssdExistingSitePublish } = require('../../../../rssd/existing-site-publish.cjs');
 
 @Injectable()
 export class RssdService implements OnModuleInit, OnModuleDestroy {
@@ -35,11 +36,13 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   readonly community: any;
   readonly editorial: any;
   readonly migration: any;
+  readonly existingSitePublish: any;
   private timer?: ReturnType<typeof setInterval>;
   constructor(prisma: PrismaService, posts: PostsService, temporal: TemporalService) {
     this.store = new RssdStore(prisma);
     this.coordination = new RssdCoordination(this.store);
-    this.mcp = new RssdMcp(this.store, this.coordination);
+    this.existingSitePublish = new RssdExistingSitePublish(this.store);
+    this.mcp = new RssdMcp(this.store, this.coordination, this.existingSitePublish);
     this.authorization = new DeviceAuthorization(this.store, {verifyOwner: async (orgId: string, userId: string) =>
       (await prisma.$queryRawUnsafe('SELECT id FROM "UserOrganization" WHERE "organizationId"=$1 AND "userId"=$2 AND disabled=false AND role IN (\'ADMIN\',\'SUPERADMIN\')',orgId,userId) as any[]).length>0});
     this.community = new RssdCommunity(this.store);

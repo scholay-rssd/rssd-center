@@ -208,7 +208,12 @@ Companions that cannot read `contracts.storeOnlyTranslate` v1 **must not**
 create, claim, or submit a store-only demand. They must not fall back to
 default translate submit.
 
+Publishing an already stored English revision to the workspace website is a
+separate pack, `contracts.existingEnglishSitePublish`. Store-only success still
+returns `publicationIds:[]` and does not imply that follow-on site publish.
+
 ## Out of scope
 
 Batch translation, outbound/social grants, scheduling grants, owner pairing,
 policy/destination edits, production enqueue from this document, and rssd-private.
+Existing-English website publish is specified in `EXISTING-ENGLISH-SITE-PUBLISH.md`.

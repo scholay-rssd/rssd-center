@@ -2,6 +2,7 @@
 const {randomUUID}=require('node:crypto');
 const p=require('./protocol.cjs');
 const {scope,admin}=require('./store.cjs');
+const {existingEnglishSitePublishContract,supportsExistingEnglishSitePublish,EXISTING_ENGLISH_SITE_PUBLISH_VERSION,EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES}=require('./existing-site-publish.cjs');
 const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args);
 const x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
 const one=async(...args)=>(await q(...args))[0]||null;
@@ -217,8 +218,8 @@ class RssdCoordination {
   const publicationScheduling=Boolean(ctx.admin)||(ctx.grants||[]).some(grant=>grant.operation==='publicationScheduling'&&grant.workspaceIds.some(id=>ids.includes(id)));
   return {contractVersion:1,generatedAt:new Date().toISOString(),workspaces:registry.workspaces.filter(w=>ids.includes(w.id)),counts,works,goals,
    capabilities:{goalManagement:Boolean(ctx.admin),publicationScheduling,demandEditing:true,mcp:true},
-   contracts:{translateContinuation:translateContinuationContract(),storeOnlyTranslate:storeOnlyTranslateContract()},
+   contracts:{translateContinuation:translateContinuationContract(),storeOnlyTranslate:storeOnlyTranslateContract(),existingEnglishSitePublish:existingEnglishSitePublishContract()},
    nativePaths:{calendar:'/launches',media:'/media',analytics:'/analytics',agents:'/agents',settings:'/settings'}};
  }
 }
-module.exports={RssdCoordination,windowFor,page,TRANSLATE_CONTINUATION_VERSION,TRANSLATE_CONTINUATION_GUARANTEES,translateContinuationContract,supportsTranslateContinuation,STORE_ONLY_TRANSLATE_VERSION,STORE_ONLY_TRANSLATE_GUARANTEES,storeOnlyTranslateContract,supportsStoreOnlyTranslate};
+module.exports={RssdCoordination,windowFor,page,TRANSLATE_CONTINUATION_VERSION,TRANSLATE_CONTINUATION_GUARANTEES,translateContinuationContract,supportsTranslateContinuation,STORE_ONLY_TRANSLATE_VERSION,STORE_ONLY_TRANSLATE_GUARANTEES,storeOnlyTranslateContract,supportsStoreOnlyTranslate,EXISTING_ENGLISH_SITE_PUBLISH_VERSION,EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES,existingEnglishSitePublishContract,supportsExistingEnglishSitePublish};
