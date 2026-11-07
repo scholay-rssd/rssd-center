@@ -14,6 +14,10 @@ function admin(ctx) { if (!ctx?.admin || !ctx.orgId) p.fail('Owner access requir
 function safeDemand(row) { if (!row) return null; const {claimToken, ...rest} = row; return rest; }
 const CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
 function localeKey(list) { return [...list].sort().join(','); }
+function uniqueViolation(error) {
+  return error?.code==='23505'||error?.code==='P2002'||error?.meta?.code==='23505'
+    || /duplicate key value|unique constraint/i.test(String(error?.message||''));
+}
 function schedulingGranted(ctx) {
   return Boolean(ctx?.admin) || (ctx.grants || []).some(grant => grant.operation === 'publicationScheduling');
 }
@@ -152,14 +156,18 @@ class RssdStore {
         if((head?.revision||0)!==value.source.revision)p.fail('Translation source has a newer revision',409,'source_conflict');
       }
       const payload={...value,requiredLocales,sourceHash:edition.hash};
-      const open=await rows(db,`SELECT * FROM rssd_demands WHERE "orgId"=$1 AND kind=$2 AND "workspaceId"=$3 AND state IN ('queued','claimed','blocked')
-        AND payload->'source'->>'workId'=$4`,ctx.orgId,value.kind,value.workspaceId,value.source.workId);
-      const sameTarget=open.filter(row=>row.payload.source?.locale===value.source.locale && localeKey(row.payload.requiredLocales||[])===localeKey(requiredLocales));
-      const existing=sameTarget.find(row=>row.payload.source?.revision===value.source.revision && row.payload.sourceHash===edition.hash);
-      if(existing)return {...safeDemand(existing),status:'existing'};
-      if(sameTarget.length)p.fail('An open translation demand already binds a different source revision',409,'source_conflict');
-      const result=await one(db,`INSERT INTO rssd_demands ("orgId",id,"workspaceId","sectionId",kind,title,priority,payload)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT ("orgId",id) DO NOTHING RETURNING *`,ctx.orgId,value.id,value.workspaceId,value.sectionId,value.kind,value.title,value.priority,encoded(payload));
+      const reuse=await this.reuseOpenTranslate(db,ctx.orgId,value,requiredLocales,edition.hash);
+      if(reuse)return reuse;
+      let result;
+      try{
+        result=await one(db,`INSERT INTO rssd_demands ("orgId",id,"workspaceId","sectionId",kind,title,priority,payload)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT ("orgId",id) DO NOTHING RETURNING *`,ctx.orgId,value.id,value.workspaceId,value.sectionId,value.kind,value.title,value.priority,encoded(payload));
+      }catch(error){
+        if(!uniqueViolation(error))throw error;
+        const raced=await this.reuseOpenTranslate(db,ctx.orgId,value,requiredLocales,edition.hash);
+        if(raced)return raced;
+        p.fail('An open translate task already exists for this work; wait for expiry, release or completion before rebinding',409,'open_translate_conflict');
+      }
       if(!result){
         const old=await one(db,'SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2',ctx.orgId,value.id);
         if(old && old.kind===value.kind && old.payload.source?.workId===value.source.workId)return {...safeDemand(old),status:'existing'};
@@ -168,6 +176,16 @@ class RssdStore {
       await audit(db,ctx,'demand.create',{id:result.id,kind:value.kind,workId:value.source.workId});
       return {...safeDemand(result),status:'created'};
     });
+  }
+  async reuseOpenTranslate(db,orgId,value,requiredLocales,sourceHash){
+    if(value.kind!=='translate')return null;
+    const open=await rows(db,`SELECT * FROM rssd_demands WHERE "orgId"=$1 AND kind='translate' AND state IN ('queued','claimed','blocked')
+      AND payload->'source'->>'workId'=$2`,orgId,value.source.workId);
+    const existing=open.find(row=>row.payload.source?.locale===value.source.locale && row.payload.source?.revision===value.source.revision
+      && row.payload.sourceHash===sourceHash && localeKey(row.payload.requiredLocales||[])===localeKey(requiredLocales));
+    if(existing)return {...safeDemand(existing),status:'existing'};
+    if(open.length)p.fail('An open translate task already exists for this work; wait for expiry, release or completion before rebinding',409,'open_translate_conflict');
+    return null;
   }
   async demands(ctx,{workspaceId,state,search='',limit=100,offset=0}={}) {
     if(workspaceId)scope(ctx,p.id(workspaceId));limit=pageNumber(limit,'limit',1,200);offset=pageNumber(offset,'offset',0,1000000);p.text(search,'search',500,true);

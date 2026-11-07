@@ -1152,8 +1152,36 @@ test('translate demands bind source hash, create once, skip existing English and
  const work=await store.work(f.owner,present);assert.equal(work.editions.some(e=>e.locale==='zh-CN'),true);assert.equal(work.editions.some(e=>e.locale==='en'),true);
  await store.submit(f.owner,{requestId:randomUUID(),workId:missing,workspaceId:'research',sectionId:'methods',baseRevisions:{'zh-CN':1},editions:[{locale:'zh-CN',title:'源文已改',bodyMarkdown:'更新后的中文正文。'}]},{publish:false});
  await assert.rejects(store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'过期源',requiredLocales:['en'],source:{workId:missing,locale:'zh-CN',revision:1}}),{code:'source_conflict'});
- await assert.rejects(store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'新源',requiredLocales:['en'],source:{workId:missing,locale:'zh-CN',revision:2}}),{code:'source_conflict'});
- assert.equal((await store.demands(f.owner)).filter(row=>row.payload?.source?.workId===missing).length,1);
+ await assert.rejects(store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'新源',requiredLocales:['en'],source:{workId:missing,locale:'zh-CN',revision:2}}),{code:'open_translate_conflict'});
+ const still=await store.demands(f.owner);assert.equal(still.filter(row=>row.payload?.source?.workId===missing && ['queued','claimed','blocked'].includes(row.state)).length,1);
+ assert.equal(still.find(row=>row.id===created.id).payload.source.revision,1);assert.equal(still.find(row=>row.id===created.id).payload.sourceHash,source.hash);
+});
+
+test('translate enqueue keeps one open task when Chinese moves from rev1 to rev2',async()=>{
+ const f=await fixture(),workId=randomUUID();
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'待补译',bodyMarkdown:'完整的中文正文。'}]},{publish:false});
+ const created=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'补英文',requiredLocales:['en'],source:{workId,locale:'zh-CN',revision:1}});
+ assert.equal(created.status,'created');assert.equal(created.payload.source.revision,1);
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',baseRevisions:{'zh-CN':1},editions:[{locale:'zh-CN',title:'中文已改',bodyMarkdown:'更新后的中文正文。'}]},{publish:false});
+ await assert.rejects(store.createDemand(f.owner,{id:randomUUID(),workspaceId:'research',sectionId:'methods',kind:'translate',title:'新绑定',requiredLocales:['en'],source:{workId,locale:'zh-CN',revision:2}}),{code:'open_translate_conflict'});
+ const open=(await store.demands(f.owner)).filter(row=>row.kind==='translate'&&['queued','claimed','blocked'].includes(row.state)&&row.payload?.source?.workId===workId);
+ assert.equal(open.length,1);assert.equal(open[0].id,created.id);assert.equal(open[0].payload.source.revision,1);assert.equal(open[0].payload.sourceHash,created.payload.sourceHash);
+});
+
+test('concurrent translate enqueue reuses one open task and the unique work constraint',async()=>{
+ const f=await fixture(),workId=randomUUID();
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'并发源',bodyMarkdown:'完整的中文正文。'}]},{publish:false});
+ const results=await Promise.allSettled(Array.from({length:8},()=>store.createDemand(f.owner,{id:randomUUID(),workspaceId:'research',sectionId:'methods',kind:'translate',title:'并发',requiredLocales:['en'],source:{workId,locale:'zh-CN',revision:1}})));
+ const ok=results.filter(row=>row.status==='fulfilled').map(row=>row.value);
+ assert.equal(ok.length,8);assert.equal(new Set(ok.map(row=>row.id)).size,1);
+ assert.equal(ok.filter(row=>row.status==='created').length,1);ok.filter(row=>row.status!=='created').forEach(row=>assert.equal(row.status,'existing'));
+ const first=ok.find(row=>row.status==='created');
+ await db.$executeRawUnsafe('INSERT INTO rssd_demands ("orgId",id,"workspaceId","sectionId",kind,title,payload) VALUES ($1,$2,\'research\',\'methods\',\'translate\',\'dup\',$3::jsonb)',f.owner.orgId,randomUUID(),JSON.stringify({...first.payload,source:{...first.payload.source},requiredLocales:['en']})).then(()=>{throw Error('expected unique violation');},error=>assert.match(String(error.code||error.message),/23505|duplicate key|unique/i));
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',baseRevisions:{'zh-CN':1},editions:[{locale:'zh-CN',title:'并发后改',bodyMarkdown:'第二版中文。'}]},{publish:false});
+ const moved=await Promise.allSettled(Array.from({length:6},()=>store.createDemand(f.owner,{id:randomUUID(),workspaceId:'research',sectionId:'methods',kind:'translate',title:'再绑定',requiredLocales:['en'],source:{workId,locale:'zh-CN',revision:2}})));
+ moved.forEach(row=>{assert.equal(row.status,'rejected');assert.equal(row.reason.code,'open_translate_conflict');});
+ const open=(await store.demands(f.owner)).filter(row=>row.kind==='translate'&&['queued','claimed','blocked'].includes(row.state)&&row.payload?.source?.workId===workId);
+ assert.equal(open.length,1);assert.equal(open[0].id,first.id);assert.equal(open[0].payload.source.revision,1);
 });
 
 test('translate submit is request-idempotent, refuses source change and Chinese rewrite, and does not steal claims',async()=>{

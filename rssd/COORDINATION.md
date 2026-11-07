@@ -10,7 +10,7 @@ All endpoints extend `/api/rssd/v1`; original v1 and Postiz APIs remain compatib
 | PATCH /demands/:id/definition | requestId, baseGeneration, changes; queued only; increments generation |
 | GET /goals | Goal definitions, current local calendar period, completed/pending/published counts and maintenance status |
 | POST /goals | id, requestId, baseRevision, goal; owner only |
-| POST /demands | kind write/translate/update; translate binds source workId+locale+revision and the current edition hash, skips when the target locale already exists, and reuses one open demand |
+| POST /demands | kind write/translate/update; translate binds source workId+locale+revision and the current edition hash, skips when the target locale already exists, and reuses one open demand when that bind still matches. A second open translate for the same work after the Chinese head moves is `open_translate_conflict`; the original source bind is not rewritten |
 | POST /publications/:id/schedule | requestId, expectedUpdatedAt, scheduledAt; owner or an unrevoked publicationScheduling grant covering that workspace and destination; unstarted queued RSSD intents only |
 | POST /workers/:id/grants | requestId, operation=publicationScheduling, workspaceIds, destinationIds; owner only; cannot exceed the device workspace scope |
 | POST /workers/:id/grants/:grantId/revoke | requestId; owner only |
@@ -19,7 +19,7 @@ All endpoints extend `/api/rssd/v1`; original v1 and Postiz APIs remain compatib
 
 Demand edits accept title, brief, priority, requiredLocales and dueAt. Workspace, section, kind and source remain fixed. Claimed rules are frozen. Original request replay returns the original result; changed payloads conflict. Goal definitions contain workspaceId, sectionId, title, brief, target (0–1000), period (day/week/month), IANA timezone, requiredLocales and enabled. Scope is immutable. New goals default to paused. Native Postiz schedules continue through `/launches`; changing an RSSD schedule never creates a replacement post.
 
-Errors retain HTTP status and code: forbidden, not_found, revision_conflict, request_conflict, demand_frozen, migration_staged, publication_started. Clients retain original request IDs after timeout. No synthetic-data fallback is allowed.
+Errors retain HTTP status and code: forbidden, not_found, revision_conflict, request_conflict, demand_frozen, migration_staged, publication_started, source_conflict, open_translate_conflict. Clients retain original request IDs after timeout. No synthetic-data fallback is allowed.
 
 ## Persistent maintenance
 
