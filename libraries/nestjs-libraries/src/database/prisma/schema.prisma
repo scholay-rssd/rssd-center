@@ -70,6 +70,20 @@ model RssdWorker {
   @@id([orgId, id])
   @@map("rssd_workers")
 }
+model RssdWorkerGrant {
+  orgId String
+  id String
+  workerId String
+  operation String
+  workspaceIds Json
+  destinationIds Json
+  grantedBy String
+  revokedAt DateTime? @db.Timestamptz(3)
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  @@id([orgId, id])
+  @@index([orgId, workerId], map: "rssd_worker_grants_worker")
+  @@map("rssd_worker_grants")
+}
 model RssdDemand {
   orgId String
   id String

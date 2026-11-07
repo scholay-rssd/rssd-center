@@ -1,6 +1,6 @@
 # Coordination contract v1
 
-All endpoints extend `/api/rssd/v1`; original v1 and Postiz APIs remain compatible. Device requests use existing workspace-scoped credentials. Goal and scheduling writes require the existing owner browser session. Credentials never enter URLs, frontend persistence or model prompts.
+All endpoints extend `/api/rssd/v1`; original v1 and Postiz APIs remain compatible. Device requests use existing workspace-scoped credentials. Goal writes require the existing owner browser session. Scheduling writes require that session, or an Owner-granted device capability whose workspace and destination both match the publication. Credentials never enter URLs, frontend persistence or model prompts. Devices cannot self-authorize and never receive `admin=true`.
 
 | Endpoint | Contract |
 | --- | --- |
@@ -10,7 +10,10 @@ All endpoints extend `/api/rssd/v1`; original v1 and Postiz APIs remain compatib
 | PATCH /demands/:id/definition | requestId, baseGeneration, changes; queued only; increments generation |
 | GET /goals | Goal definitions, current local calendar period, completed/pending/published counts and maintenance status |
 | POST /goals | id, requestId, baseRevision, goal; owner only |
-| POST /publications/:id/schedule | requestId, expectedUpdatedAt, scheduledAt; owner only, unstarted queued RSSD intents only |
+| POST /demands | kind write/translate/update; translate binds source workId+locale+revision and the current edition hash, skips when the target locale already exists, and reuses one open demand |
+| POST /publications/:id/schedule | requestId, expectedUpdatedAt, scheduledAt; owner or an unrevoked publicationScheduling grant covering that workspace and destination; unstarted queued RSSD intents only |
+| POST /workers/:id/grants | requestId, operation=publicationScheduling, workspaceIds, destinationIds; owner only; cannot exceed the device workspace scope |
+| POST /workers/:id/grants/:grantId/revoke | requestId; owner only |
 
 `workspaceId` or comma-separated `workspaceIds` narrows the authenticated scope. Calendar items retain source, publicationId, workId, locale, revision, destination, state, scheduledAt, hasSchedule, updatedAt, receipt and error. A fallback creation timestamp is not an explicit schedule. Native Postiz posts remain in their original publisher; root posts are counted once and RSSD-linked posts are deduplicated. Devices only see channels mapped to their workspaces; unmapped native channels are owner-only in the all-workspaces view.
 
@@ -28,7 +31,7 @@ This is deterministic goal maintenance, not an LLM choosing topics. Owners suppl
 
 `POST /api/rssd/v1/mcp` provides stateless JSON responses; GET returns 405. It supports the pinned SDK's 2025-03-26, 2025-06-18 and 2025-11-25 versions and follows the [official transport specification](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-11-25/basic/transports.mdx). Supplied origins are validated, and every call reuses HTTP authentication.
 
-Tools cover overview, goals, demands, works, calendar, channels, original receipts and demand edits. Devices also get their own claim/release/submit tools. Owners get goal and schedule management. Tools delegate to the existing business services. Audit records contain actor, tool and argument hash. Postiz native MCP, OAuth and agent routes remain unchanged.
+Tools cover overview, goals, demands, works, calendar, channels, original receipts, demand edits and demand creation. Devices also get their own claim/release/submit tools. Owners get goal management and can grant or revoke a minimal `publicationScheduling` capability. That tool, plus HTTP `POST /publications/:id/schedule`, stays unavailable until the grant exists; unauthorized calls remain 403. Tools delegate to the existing business services. Audit records contain actor, tool and argument hash. Postiz native MCP, OAuth and agent routes remain unchanged.
 
 ## Desktop division
 

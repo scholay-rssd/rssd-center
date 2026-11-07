@@ -12,6 +12,11 @@ function scope(ctx, workspaceId) {
 }
 function admin(ctx) { if (!ctx?.admin || !ctx.orgId) p.fail('Owner access required', 403, 'forbidden'); }
 function safeDemand(row) { if (!row) return null; const {claimToken, ...rest} = row; return rest; }
+const CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
+function localeKey(list) { return [...list].sort().join(','); }
+function schedulingGranted(ctx) {
+  return Boolean(ctx?.admin) || (ctx.grants || []).some(grant => grant.operation === 'publicationScheduling');
+}
 function pageNumber(value,name,min,max) {
   if(typeof value==='string'&&/^(0|[1-9][0-9]*)$/.test(value))value=Number(value);
   return p.integer(value,name,min,max);
@@ -86,10 +91,21 @@ class RssdStore {
     if(typeof token!=='string'||!/^rssd_device_[A-Za-z0-9_-]{48}$/.test(token))p.fail('Invalid device credential',401,'unauthorized');
     const worker=await one(this.db,'SELECT * FROM rssd_workers WHERE "tokenHash"=$1 AND "revokedAt" IS NULL',p.hash(token));
     if(!worker)p.fail('Device credential revoked or unknown',401,'unauthorized');
-    return {orgId:worker.orgId,workerId:worker.id,workspaceIds:worker.workspaceIds,admin:false};
+    const grants=await rows(this.db,'SELECT id,operation,"workspaceIds","destinationIds" FROM rssd_worker_grants WHERE "orgId"=$1 AND "workerId"=$2 AND "revokedAt" IS NULL ORDER BY "createdAt",id',worker.orgId,worker.id);
+    return {orgId:worker.orgId,workerId:worker.id,workspaceIds:worker.workspaceIds,admin:false,grants};
   }
   async workers(ctx) {
-    admin(ctx);return rows(this.db,'SELECT id,name,"workspaceIds",state,details,"heartbeatAt","revokedAt" FROM rssd_workers WHERE "orgId"=$1 ORDER BY "createdAt"',ctx.orgId);
+    admin(ctx);
+    const list=await rows(this.db,'SELECT id,name,"workspaceIds",state,details,"heartbeatAt","revokedAt" FROM rssd_workers WHERE "orgId"=$1 ORDER BY "createdAt"',ctx.orgId);
+    const grants=await rows(this.db,'SELECT id,"workerId",operation,"workspaceIds","destinationIds","grantedBy","revokedAt","createdAt" FROM rssd_worker_grants WHERE "orgId"=$1 ORDER BY "createdAt",id',ctx.orgId);
+    return list.map(worker=>({...worker,grants:grants.filter(grant=>grant.workerId===worker.id)}));
+  }
+  async expireStaleClaims(db,orgId) {
+    const expired=await rows(db,`UPDATE rssd_demands SET state='queued',"workerId"=NULL,"claimToken"=NULL,generation=generation+1,
+      payload=(payload - 'claimExpiresAt') || jsonb_build_object('lastError','claim_expired'),"updatedAt"=CURRENT_TIMESTAMP
+      WHERE "orgId"=$1 AND state IN ('claimed','blocked') AND payload ? 'claimExpiresAt'
+      AND (payload->>'claimExpiresAt')::timestamptz < CURRENT_TIMESTAMP RETURNING id`,orgId);
+    if(expired.length)await audit(db,{orgId,userId:'center'},'demand.expire',{ids:expired.map(row=>row.id)});
   }
   async revokeWorker(ctx,id) {
     admin(ctx);p.id(id);
@@ -108,15 +124,45 @@ class RssdStore {
   async createDemand(ctx,input) {
     const value=p.demand(input);await this.workspace(this.db,ctx,value.workspaceId,value.sectionId);
     await this.writable(this.db,ctx,value.workspaceId);
-    if(value.source) {
-      const source=await this.work(ctx,value.source.workId);
-      if(source.workspaceId!==value.workspaceId)p.fail('Source workspace differs');
-      const edition=await one(this.db,'SELECT revision FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND revision=$4',ctx.orgId,value.source.workId,value.source.locale,value.source.revision);
-      if(!edition)p.fail('Source revision not found',404);
+    if(!value.source){
+      const result=await one(this.db,`INSERT INTO rssd_demands ("orgId",id,"workspaceId","sectionId",kind,title,priority,payload)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT ("orgId",id) DO NOTHING RETURNING *`,ctx.orgId,value.id,value.workspaceId,value.sectionId,value.kind,value.title,value.priority,encoded(value));
+      if(!result)p.fail('Demand identity already exists',409,'identity_conflict');
+      return {...safeDemand(result),status:'created'};
     }
-    const result=await one(this.db,`INSERT INTO rssd_demands ("orgId",id,"workspaceId","sectionId",kind,title,priority,payload)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT ("orgId",id) DO NOTHING RETURNING *`,ctx.orgId,value.id,value.workspaceId,value.sectionId,value.kind,value.title,value.priority,encoded(value));
-    if(!result)p.fail('Demand identity already exists',409,'identity_conflict');return safeDemand(result);
+    return this.transaction(async db=>{
+      await lock(db,ctx.orgId+':work:'+value.source.workId);
+      const source=await one(db,'SELECT * FROM rssd_works WHERE "orgId"=$1 AND id=$2',ctx.orgId,value.source.workId);
+      if(!source)p.fail('Work not found',404,'not_found');scope(ctx,source.workspaceId);
+      if(source.workspaceId!==value.workspaceId)p.fail('Source workspace differs');
+      if(source.sectionId!==value.sectionId)p.fail('Source section differs');
+      const edition=await one(db,'SELECT revision,hash FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND revision=$4',ctx.orgId,value.source.workId,value.source.locale,value.source.revision);
+      if(!edition)p.fail('Source revision not found',404,'not_found');
+      let requiredLocales=value.requiredLocales;
+      if(value.kind==='translate'){
+        requiredLocales=[...new Set(value.requiredLocales.filter(locale=>locale!==value.source.locale))];
+        if(!requiredLocales.length)p.fail('Translation demand needs a target locale');
+      }
+      const present=(await rows(db,'SELECT DISTINCT locale FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2',ctx.orgId,value.source.workId)).map(row=>row.locale);
+      if(value.kind==='translate' && requiredLocales.every(locale=>present.includes(locale))){
+        return {status:'skipped',reason:'locale_present',workId:value.source.workId,workspaceId:value.workspaceId,requiredLocales,existingLocales:present};
+      }
+      const payload={...value,requiredLocales,sourceHash:edition.hash};
+      const open=await rows(db,`SELECT * FROM rssd_demands WHERE "orgId"=$1 AND kind=$2 AND "workspaceId"=$3 AND state IN ('queued','claimed','blocked')
+        AND payload->'source'->>'workId'=$4`,ctx.orgId,value.kind,value.workspaceId,value.source.workId);
+      const existing=open.find(row=>row.payload.source?.locale===value.source.locale && row.payload.source?.revision===value.source.revision
+        && row.payload.sourceHash===edition.hash && localeKey(row.payload.requiredLocales||[])===localeKey(requiredLocales));
+      if(existing)return {...safeDemand(existing),status:'existing'};
+      const result=await one(db,`INSERT INTO rssd_demands ("orgId",id,"workspaceId","sectionId",kind,title,priority,payload)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT ("orgId",id) DO NOTHING RETURNING *`,ctx.orgId,value.id,value.workspaceId,value.sectionId,value.kind,value.title,value.priority,encoded(payload));
+      if(!result){
+        const old=await one(db,'SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2',ctx.orgId,value.id);
+        if(old && old.kind===value.kind && old.payload.source?.workId===value.source.workId)return {...safeDemand(old),status:'existing'};
+        p.fail('Demand identity already exists',409,'identity_conflict');
+      }
+      await audit(db,ctx,'demand.create',{id:result.id,kind:value.kind,workId:value.source.workId});
+      return {...safeDemand(result),status:'created'};
+    });
   }
   async demands(ctx,{workspaceId,state,search='',limit=100,offset=0}={}) {
     if(workspaceId)scope(ctx,p.id(workspaceId));limit=pageNumber(limit,'limit',1,200);offset=pageNumber(offset,'offset',0,1000000);p.text(search,'search',500,true);
@@ -136,6 +182,7 @@ class RssdStore {
       await lock(db,ctx.orgId+':worker:'+ctx.workerId);
       const worker=await one(db,'SELECT id FROM rssd_workers WHERE "orgId"=$1 AND id=$2 AND "revokedAt" IS NULL',ctx.orgId,ctx.workerId);
       if(!worker)p.fail('Device revoked',401);
+      await this.expireStaleClaims(db,ctx.orgId);
       const active=await one(db,`SELECT id FROM rssd_demands WHERE "orgId"=$1 AND "workerId"=$2 AND state IN ('claimed','blocked')`,ctx.orgId,ctx.workerId);
       if(active)p.fail('Finish, resume or release the current demand first',409,'worker_busy');
       const demand=await one(db,`SELECT * FROM rssd_demands d WHERE "orgId"=$1 AND state='queued'
@@ -143,7 +190,13 @@ class RssdStore {
         AND NOT EXISTS (SELECT 1 FROM rssd_migrations m WHERE m."orgId"=d."orgId" AND m."workspaceId"=d."workspaceId" AND m.state<>'active')
         AND ($3::text IS NULL OR id=$3) AND ($4='[]' OR "sectionId" IN (SELECT jsonb_array_elements_text($4::jsonb)))
         ORDER BY priority DESC,"createdAt",id FOR UPDATE SKIP LOCKED LIMIT 1`,ctx.orgId,encoded(workspaceIds),demandId,encoded(sectionIds));
-      if(!demand)return null;
+      if(!demand){
+        if(demandId){
+          const held=await one(db,'SELECT id,state FROM rssd_demands WHERE "orgId"=$1 AND id=$2',ctx.orgId,demandId);
+          if(held && ['claimed','blocked'].includes(held.state))p.fail('Demand is claimed by another device',409,'claim_conflict');
+        }
+        return null;
+      }
       const {row,section}=await this.workspace(db,ctx,demand.workspaceId,demand.sectionId);
       const destinations=[];
       for(const target of section.policy.targets){
@@ -152,7 +205,7 @@ class RssdStore {
         const channel=destination.kind==='postiz'?await one(db,'SELECT "providerIdentifier" FROM "Integration" WHERE "organizationId"=$1 AND id=$2',ctx.orgId,destination.config.integrationId):null;
         destinations.push({...target,name:destination.name,kind:destination.kind,...(channel?{platform:channel.providerIdentifier}:{})});
       }
-      const claimToken=randomUUID(),payload={...demand.payload,policy:section.policy,workspaceRevision:row.revision,destinations,outputContractVersion:1};
+      const claimToken=randomUUID(),payload={...demand.payload,policy:section.policy,workspaceRevision:row.revision,destinations,outputContractVersion:1,claimExpiresAt:new Date(Date.now()+CLAIM_TTL_MS).toISOString()};
       const result=await one(db,`UPDATE rssd_demands SET state='claimed',"workerId"=$3,"claimToken"=$4,generation=generation+1,
         payload=$5::jsonb,"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2 RETURNING *`,ctx.orgId,demand.id,ctx.workerId,claimToken,encoded(payload));
       await audit(db,ctx,'demand.claim',{id:demand.id,generation:result.generation});return result;
@@ -160,7 +213,10 @@ class RssdStore {
   }
   async activeClaim(ctx) {
     if(!ctx.workerId)p.fail('Device authentication required',403);
-    return one(this.db,`SELECT * FROM rssd_demands WHERE "orgId"=$1 AND "workerId"=$2 AND state IN ('claimed','blocked')`,ctx.orgId,ctx.workerId);
+    return this.transaction(async db=>{
+      await this.expireStaleClaims(db,ctx.orgId);
+      return one(db,`SELECT * FROM rssd_demands WHERE "orgId"=$1 AND "workerId"=$2 AND state IN ('claimed','blocked')`,ctx.orgId,ctx.workerId);
+    });
   }
   async changeDemand(ctx,id,input) {
     p.id(id);if(!['release','cancel','blocked','resume'].includes(input.action))p.fail('Invalid demand action');
@@ -172,6 +228,7 @@ class RssdStore {
       const clear=['release','cancel'].includes(input.action),state={release:'queued',cancel:'cancelled',blocked:'blocked',resume:'claimed'}[input.action];
       if(!clear&&!demand.workerId)p.fail('Demand is not claimed',409);
       const payload={...demand.payload,lastError:input.action==='blocked'?p.text(input.message,'message',2000):null};
+      if(input.action==='resume')payload.claimExpiresAt=new Date(Date.now()+CLAIM_TTL_MS).toISOString();
       const result=await one(db,`UPDATE rssd_demands SET state=$3,"workerId"=$4,"claimToken"=$5,payload=$6::jsonb,
         generation=generation+$7,"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2 RETURNING *`,ctx.orgId,id,state,clear?null:demand.workerId,clear?null:demand.claimToken,encoded(payload),clear?1:0);
       await audit(db,ctx,'demand.'+input.action,{id,generation:result.generation});return safeDemand(result);
@@ -208,6 +265,7 @@ class RssdStore {
       if(previous){if(previous.payloadHash!==fingerprint)p.fail('Request identity was reused with different content',409,'request_conflict');return previous.result;}
       // Check revocation inside the transaction, not only at the HTTP boundary.
       if(ctx.workerId){const worker=await one(db,'SELECT id FROM rssd_workers WHERE "orgId"=$1 AND id=$2 AND "revokedAt" IS NULL',ctx.orgId,ctx.workerId);if(!worker)p.fail('Device revoked',401);}
+      await this.expireStaleClaims(db,ctx.orgId);
       const {section}=await this.workSection(db,ctx,value.workspaceId,value.sectionId,value.workId);
       await this.writable(db,ctx,value.workspaceId);
       let policy=section.policy,demand=null;
@@ -218,6 +276,15 @@ class RssdStore {
         if(demand.payload.source && demand.payload.source.workId!==value.workId)p.fail('Update or translation must retain the source work identity',409);
         if(demand.payload.workId && demand.payload.workId!==value.workId)p.fail('Language editions must retain the original submission work identity',409);
         policy=demand.payload.policy;
+        if(demand.kind==='translate'){
+          if(value.editions.some(edition=>edition.locale===demand.payload.source.locale))p.fail('Translation must not rewrite the source edition',409,'source_conflict');
+          const bound=demand.payload.source;
+          const sourceEdition=await one(db,'SELECT revision,hash FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND revision=$4',ctx.orgId,bound.workId,bound.locale,bound.revision);
+          if(!sourceEdition)p.fail('Translation source revision not found',409,'source_conflict');
+          if(demand.payload.sourceHash && sourceEdition.hash!==demand.payload.sourceHash)p.fail('Translation source fingerprint changed',409,'source_conflict');
+          const head=await one(db,'SELECT revision FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 ORDER BY revision DESC LIMIT 1',ctx.orgId,bound.workId,bound.locale);
+          if((head?.revision||0)!==bound.revision)p.fail('Translation source has a newer revision',409,'source_conflict');
+        }
       }
       await lock(db,ctx.orgId+':work:'+value.workId);
       const work=await one(db,'SELECT * FROM rssd_works WHERE "orgId"=$1 AND id=$2',ctx.orgId,value.workId);
@@ -280,4 +347,4 @@ class RssdStore {
       AND ($3::jsonb IS NULL OR "workspaceId" IN (SELECT jsonb_array_elements_text($3::jsonb))) ORDER BY "createdAt" DESC,id LIMIT $4 OFFSET $5`,ctx.orgId,workspaceId||null,ctx.workspaceIds===null?null:encoded(ctx.workspaceIds),limit,offset);
   }
 }
-module.exports={RssdStore,scope,admin};
+module.exports={RssdStore,scope,admin,schedulingGranted,CLAIM_TTL_MS};

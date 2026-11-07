@@ -154,3 +154,10 @@ CREATE TABLE IF NOT EXISTS rssd_coordination_requests (
  "orgId" TEXT NOT NULL,id TEXT NOT NULL,hash TEXT NOT NULL,result JSONB NOT NULL,
  "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY ("orgId",id)
 );
+CREATE TABLE IF NOT EXISTS rssd_worker_grants (
+ "orgId" TEXT NOT NULL,id TEXT NOT NULL,"workerId" TEXT NOT NULL,operation TEXT NOT NULL,
+ "workspaceIds" JSONB NOT NULL,"destinationIds" JSONB NOT NULL,"grantedBy" TEXT NOT NULL,
+ "revokedAt" TIMESTAMPTZ(3),"createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY ("orgId",id)
+);
+CREATE INDEX IF NOT EXISTS rssd_worker_grants_worker ON rssd_worker_grants ("orgId","workerId");

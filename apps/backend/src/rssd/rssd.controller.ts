@@ -65,6 +65,8 @@ export class RssdController {
   @Get('/workers') workers(@Req() req: any) { return this.rssd.store.workers(req.rssd); }
   @Post('/workers') createWorker(@Req() req: any, @Body() body: any) { return this.rssd.store.createWorker(req.rssd, body); }
   @Post('/workers/:id/revoke') revokeWorker(@Req() req: any, @Param('id') id: string) { return this.rssd.store.revokeWorker(req.rssd, id); }
+  @Post('/workers/:id/grants') grantWorker(@Req() req: any, @Param('id') id: string, @Body() body: any) { return this.rssd.coordination.grantCapability(req.rssd, {...body, workerId: id}); }
+  @Post('/workers/:id/grants/:grantId/revoke') revokeGrant(@Req() req: any, @Param('grantId') grantId: string, @Body() body: any) { return this.rssd.coordination.revokeCapability(req.rssd, {...body, id: grantId}); }
   @Post('/heartbeat') heartbeat(@Req() req: any, @Body() body: any) { return this.rssd.store.heartbeat(req.rssd, body); }
   @Get('/demands') demands(@Req() req: any, @Query() query: any) { return this.rssd.store.demands(req.rssd, query); }
   @Post('/demands') createDemand(@Req() req: any, @Body() body: any) { return this.rssd.store.createDemand(req.rssd, body); }

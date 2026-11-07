@@ -1,6 +1,7 @@
 'use strict';
 const p=require('./protocol.cjs');
 const {randomUUID}=require('node:crypto');
+const {schedulingGranted}=require('./store.cjs');
 const string={type:'string'},number={type:'integer'},object={type:'object'};
 const schema=(properties={},required=[])=>({type:'object',properties,required,additionalProperties:false});
 class RssdMcp {
@@ -18,9 +19,14 @@ class RssdMcp {
   };
   const writes={
    rssd_edit_demand:['Edit a queued demand using its generation and a stable requestId; claimed rules are frozen',schema({id:string,baseGeneration:number,requestId:string,changes:object},['id','baseGeneration','requestId','changes']),(a)=>this.coordination.editDemand(ctx,a.id,a)],
+   rssd_create_demand:['Create one queued demand; translation of an existing work binds the source revision and hash, skips locales that already exist, and reuses an open task',schema({workspaceId:string,sectionId:string,kind:string,title:string,brief:string,requiredLocales:{type:'array',items:string},source:object,priority:number,id:string},['workspaceId','sectionId','title']),(a)=>this.store.createDemand(ctx,a)],
   };
   if(ctx.admin){
    writes.rssd_save_goal=['Save a goal; enabling maintenance creates queued demands only, never claims or publishes',schema({id:string,baseRevision:number,requestId:string,goal:object},['id','baseRevision','requestId','goal']),(a)=>this.coordination.saveGoal(ctx,a)];
+   writes.rssd_grant_capability=['Owner-only grant of a minimal device capability; devices cannot self-authorize',schema({workerId:string,operation:string,workspaceIds:{type:'array',items:string},destinationIds:{type:'array',items:string},requestId:string},['workerId','operation','workspaceIds','destinationIds','requestId']),(a)=>this.coordination.grantCapability(ctx,a)];
+   writes.rssd_revoke_capability=['Owner-only revoke of a previously granted device capability',schema({id:string,requestId:string},['id','requestId']),(a)=>this.coordination.revokeCapability(ctx,a)];
+  }
+  if(schedulingGranted(ctx)){
    writes.rssd_schedule_publication=['Reschedule an unstarted RSSD publication using its unchanged identity; native Postiz posts are managed in the original calendar',schema({id:string,expectedUpdatedAt:string,requestId:string,scheduledAt:string},['id','expectedUpdatedAt','requestId','scheduledAt']),(a)=>this.coordination.schedule(ctx,a.id,a)];
   }
   if(ctx.workerId){
@@ -41,7 +47,7 @@ class RssdMcp {
   if(message.method==='initialize')return result({protocolVersion:['2025-03-26','2025-06-18','2025-11-25'].includes(message.params?.protocolVersion)?message.params.protocolVersion:'2025-11-25',capabilities:{tools:{listChanged:false}},serverInfo:{name:'RSSD Center',version:'1.1.0'},instructions:'Use the center as the only authority for claims and publishing. Query original receipts after timeout. Never put credentials in tool arguments.'});
   if(message.method==='ping')return result({});
   const definitions=this.definitions(ctx);
-  if(message.method==='tools/list')return result({tools:Object.entries(definitions).map(([name,d])=>({name,description:d.description,inputSchema:d.inputSchema,annotations:{readOnlyHint:d.readOnly,destructiveHint:!d.readOnly,idempotentHint:d.readOnly||['rssd_edit_demand','rssd_save_goal','rssd_schedule_publication','rssd_submit'].includes(name),openWorldHint:!d.readOnly}}))});
+  if(message.method==='tools/list')return result({tools:Object.entries(definitions).map(([name,d])=>({name,description:d.description,inputSchema:d.inputSchema,annotations:{readOnlyHint:d.readOnly,destructiveHint:!d.readOnly,idempotentHint:d.readOnly||['rssd_edit_demand','rssd_save_goal','rssd_schedule_publication','rssd_submit','rssd_create_demand','rssd_grant_capability','rssd_revoke_capability'].includes(name),openWorldHint:!d.readOnly}}))});
   if(message.method!=='tools/call')return error(-32601,'Method not found',id);
   const name=message.params?.name,d=definitions[name],args=message.params?.arguments||{};
   if(!d)return error(-32602,'Unknown or unavailable tool',id);
