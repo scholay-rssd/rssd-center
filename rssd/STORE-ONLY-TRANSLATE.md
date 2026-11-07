@@ -30,7 +30,9 @@ contracts.storeOnlyTranslate = {
     "leaseRecovery",
     "englishOnly",
     "sourceBind",
-    "receipt"
+    "receipt",
+    "receiptIsolation",
+    "openWorkFence"
   ]
 }
 ```
@@ -46,6 +48,8 @@ contracts.storeOnlyTranslate = {
 | `englishOnly` | Required locale is `en` only. Submit cannot rewrite `zh-CN` |
 | `sourceBind` | Create binds current `zh-CN` revision + hash + current head. Later Chinese movement is `source_conflict` on submit; a second open translate is `open_translate_conflict` |
 | `receipt` | `requestId` replay returns the original result. Store-only fingerprint ignores the HTTP publish flag |
+| `receiptIsolation` | Store-only replay and `rssd_receipt` are only for the creating device (or Owner). Other devices get `404 not_found` and never another device's result, including `request_conflict` bodies |
+| `openWorkFence` | While a store-only demand is queued/claimed/blocked for a work, other `/submissions`, `/drafts`, and editorial writes to that work are `409 store_only_conflict` |
 
 This is **not** a grant. Devices still have `publicationScheduling=false` by default.
 
@@ -89,8 +93,9 @@ Frozen payload fields: `storeOnly: true`, `storeOnlyWorkerId: <creating worker>`
 `source`, `sourceHash`, `requiredLocales`.
 
 Results: `status: created | existing | skipped` (`locale_present`).
-Same creating device + same bind → `existing`.
-Another device seeing that open store-only bind → `409 open_translate_conflict`.
+Same creating device + same bind + same `storeOnly:true` → `existing`.
+`storeOnly:false`, omitted `storeOnly`, or another device against an open store-only bind → `409 open_translate_conflict` (never `existing` of the other intent).
+Reusing a demand `id` that already belongs to the other intent is `409 identity_conflict` or `409 open_translate_conflict`; it is never `existing`.
 
 Errors: `store_only_unsupported`, `forbidden`, `source_conflict`,
 `open_translate_conflict`, `identity_conflict`, `not_found`.
@@ -162,9 +167,12 @@ Receipt:
   "editions": [{"locale": "en", "revision": <int>, "hash": "<hex>"}],
   "publicationIds": [],
   "storeOnly": true,
+  "storeOnlyWorkerId": "<creating worker>",
   "demandState": "completed"
 }
 ```
+
+`POST /drafts` and `POST /submissions` of the **same** store-only packet share one fingerprint and both complete the demand (`status: accepted`, never `draft_saved`). Ordinary `/drafts` still save without publications and do **not** complete a normal demand.
 
 Chinese `revision` / `hash` / current head are unchanged. `publicationIds` is
 always `[]`. No calendar schedule row is created. Publisher `tick` has nothing
@@ -174,7 +182,8 @@ Same `requestId` + same packet → original receipt. Changed packet → `409 req
 Query `GET /api/rssd/v1/submissions/:requestId` or MCP `rssd_receipt`.
 
 Submit errors (unchanged codes where applicable): `claim_revoked`, `source_conflict`,
-`revision_conflict`, `forbidden`.
+`revision_conflict`, `forbidden`, `store_only_conflict`.
+A mismatched `requestId` replay by another device is `404 not_found`, not the original result.
 
 ## Recovery
 

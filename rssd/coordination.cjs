@@ -15,7 +15,7 @@ function supportsTranslateContinuation(overview){
  return TRANSLATE_CONTINUATION_GUARANTEES.every(token=>row.guarantees.includes(token));
 }
 const STORE_ONLY_TRANSLATE_VERSION=1;
-const STORE_ONLY_TRANSLATE_GUARANTEES=Object.freeze(['storeOnlyFrozen','zeroPublications','exclusiveWorkerClaim','intentRequired','noClaimSteal','leaseRecovery','englishOnly','sourceBind','receipt']);
+const STORE_ONLY_TRANSLATE_GUARANTEES=Object.freeze(['storeOnlyFrozen','zeroPublications','exclusiveWorkerClaim','intentRequired','noClaimSteal','leaseRecovery','englishOnly','sourceBind','receipt','receiptIsolation','openWorkFence']);
 function storeOnlyTranslateContract(){return {version:STORE_ONLY_TRANSLATE_VERSION,guarantees:[...STORE_ONLY_TRANSLATE_GUARANTEES]};}
 function supportsStoreOnlyTranslate(overview){
  const row=overview?.contracts?.storeOnlyTranslate;
@@ -59,8 +59,10 @@ class RssdCoordination {
    const old=await one(db,'SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2 FOR UPDATE',ctx.orgId,id);
    if(old.generation!==input.baseGeneration)p.fail('需求已变化，请保留修改并重新加载',409,'revision_conflict');
    if(old.state!=='queued')p.fail('认领后写作规则已冻结',409,'demand_frozen');
-   if(Object.prototype.hasOwnProperty.call(input.changes||{},'storeOnly')||Object.prototype.hasOwnProperty.call(input.changes||{},'storeOnlyWorkerId'))
+   if(['storeOnly','storeOnlyWorkerId'].some(key=>Object.prototype.hasOwnProperty.call(input.changes||{},key)))
     p.fail('Store-only intent is frozen',409,'identity_conflict');
+   if(old.payload.storeOnly===true && ['source','kind','workspaceId','sectionId'].some(key=>Object.prototype.hasOwnProperty.call(input.changes||{},key)))
+    p.fail('Store-only source identity is frozen',409,'identity_conflict');
    await this.store.writable(db,ctx,old.workspaceId);
    const value=p.demand({...old.payload,...input.changes,id,workspaceId:old.workspaceId,sectionId:old.sectionId,kind:old.kind,source:old.payload.source});
    if(old.kind==='translate' && value.source){

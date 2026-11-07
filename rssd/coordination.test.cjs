@@ -94,6 +94,21 @@ test('overview advertises storeOnlyTranslate separately; tools and translateCont
  assert.equal(supportsStoreOnlyTranslate({contracts:{storeOnlyTranslate:{version:1,guarantees:['receipt']}}}),false);
  assert.equal(supportsStoreOnlyTranslate({contracts:{storeOnlyTranslate:{version:'1',guarantees:[...STORE_ONLY_TRANSLATE_GUARANTEES]}}}),false);
 });
+test('MCP create_demand and claim forward storeOnly and reject unknown write fields',async()=>{
+ const f=await fixture(),workId=randomUUID();
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'a',sectionId:'news',editions:[{locale:'zh-CN',title:'源',bodyMarkdown:'完整的中文正文。'}]},{publish:false});
+ const mcp=new RssdMcp(store,coord),call=(id,name,args)=>mcp.handle(f.ctx,{jsonrpc:'2.0',id,method:'tools/call',params:{name,arguments:args}});
+ const extra=await call(1,'rssd_create_demand',{workspaceId:'a',sectionId:'news',title:'x',publish:false});
+ assert.equal(extra.error.code,-32602);
+ const created=JSON.parse((await call(2,'rssd_create_demand',{workspaceId:'a',sectionId:'news',kind:'translate',title:'en',requiredLocales:['en'],source:{workId,locale:'zh-CN',revision:1},storeOnly:true})).result.content[0].text);
+ assert.equal(created.status,'created');assert.equal(created.payload.storeOnly,true);assert.equal(created.payload.storeOnlyWorkerId,f.ctx.workerId);
+ const bad=JSON.parse((await call(3,'rssd_create_demand',{workspaceId:'a',sectionId:'news',kind:'translate',title:'bad',requiredLocales:['en'],source:{workId,locale:'zh-CN',revision:1},storeOnly:'true'})).result.content[0].text);
+ assert.equal(bad.code,'invalid_request');
+ const omitted=JSON.parse((await call(4,'rssd_claim',{demandId:created.id})).result.content[0].text);
+ assert.equal(omitted.code,'store_only_required');
+ const claimed=JSON.parse((await call(5,'rssd_claim',{demandId:created.id,storeOnly:true})).result.content[0].text);
+ assert.equal(claimed.payload.storeOnly,true);
+});
 test('scheduling preserves the original publication, replays after a lost response and fences a started delivery',async()=>{
  const f=await fixture(),id=randomUUID(),workId=randomUUID();
  await db.$executeRawUnsafe('INSERT INTO rssd_publications ("orgId",id,"workId","workspaceId",locale,revision,"destinationId",payload) VALUES ($1,$2,$3,\'a\',\'en\',1,\'site-a\',\'{"edition":{"title":"Original"}}\')',f.owner.orgId,id,workId);

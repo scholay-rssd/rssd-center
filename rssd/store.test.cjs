@@ -1245,7 +1245,7 @@ test('store-only translate stays on the original work with zero publications whe
  assert.equal(claim.payload.storeOnly,true);assert.equal(claim.payload.policy.targets.some(t=>t.locale==='en'),true);
  const packet={requestId:randomUUID(),workId:f.workId,workspaceId:'research',sectionId:'methods',demandId:claim.id,claimToken:claim.claimToken,baseRevisions:{en:0},editions:[{locale:'en',title:'English only',bodyMarkdown:'Stored English.',translationOf:{workId:f.workId,locale:'zh-CN',revision:1}}]};
  await assert.rejects(store.submit(f.ctx,{...packet,requestId:randomUUID(),editions:[{locale:'zh-CN',title:'改中文',bodyMarkdown:'不应覆盖。'}]}),{code:'source_conflict'});
- const accepted=await store.submit(f.ctx,packet);assert.equal(accepted.status,'accepted');assert.equal(accepted.storeOnly,true);assert.deepEqual(accepted.publicationIds,[]);assert.equal(accepted.demandState,'completed');assert.equal(accepted.workId,f.workId);
+ const accepted=await store.submit(f.ctx,packet);assert.equal(accepted.status,'accepted');assert.equal(accepted.storeOnly,true);assert.equal(accepted.storeOnlyWorkerId,f.ctx.workerId);assert.deepEqual(accepted.publicationIds,[]);assert.equal(accepted.demandState,'completed');assert.equal(accepted.workId,f.workId);
  assert.deepEqual(await store.submit(f.ctx,packet,{publish:false}),accepted);
  assert.deepEqual(await store.submissionStatus(f.ctx,packet.requestId),accepted);
  const work=await store.work(f.ctx,f.workId);
@@ -1292,4 +1292,54 @@ test('store-only lease expiry restores only the creating device and rejects the 
  const accepted=await store.submit(f.ctx,{...packet,demandId:recovered.id,claimToken:recovered.claimToken,requestId:randomUUID()});
  assert.equal(accepted.storeOnly,true);assert.deepEqual(accepted.publicationIds,[]);
 });
+
+test('store-only existing reuse cannot mix omitted or false intent; side-channel writes are fenced',async()=>{
+ const f=await storeOnlyEnglishFixture();
+ const created=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'仅存英文',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
+ await assert.rejects(store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'omit',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1}}),{code:'open_translate_conflict'});
+ await assert.rejects(store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'false',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:false}),{code:'open_translate_conflict'});
+ const ordinaryWork=randomUUID();
+ await store.submit(f.owner,{requestId:randomUUID(),workId:ordinaryWork,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'普通译',bodyMarkdown:'完整的中文正文。'}]},{publish:false});
+ const ordinary=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'普通',requiredLocales:['en'],source:{workId:ordinaryWork,locale:'zh-CN',revision:1}});
+ await assert.rejects(store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'upgrade',requiredLocales:['en'],source:{workId:ordinaryWork,locale:'zh-CN',revision:1},storeOnly:true}),{code:'open_translate_conflict'});
+ await assert.rejects(store.createDemand(f.ctx,{id:ordinary.id,workspaceId:'research',sectionId:'methods',kind:'translate',title:'same id',requiredLocales:['en'],source:{workId:ordinaryWork,locale:'zh-CN',revision:1},storeOnly:true}),{code:'open_translate_conflict'});
+ const {RssdCoordination}=require('./coordination.cjs');
+ await assert.rejects(new RssdCoordination(store).editDemand(f.ctx,created.id,{baseGeneration:created.generation,requestId:randomUUID(),changes:{source:{workId:ordinaryWork,locale:'zh-CN',revision:1}}}),{code:'identity_conflict'});
+ await assert.rejects(store.submit(f.ctx,{requestId:randomUUID(),workId:f.workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'en',title:'Bypass',bodyMarkdown:'Should not publish.'}]}),{code:'store_only_conflict'});
+ await assert.rejects(store.submit(f.ctx,{requestId:randomUUID(),workId:f.workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'en',title:'Bypass draft',bodyMarkdown:'Should not draft.'}]},{publish:false}),{code:'store_only_conflict'});
+ assert.equal((await store.publications(f.owner)).length,0);
+});
+
+test('store-only receipt replay is device-bound; ordinary drafts still do not complete',async()=>{
+ const f=await storeOnlyEnglishFixture();
+ const created=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'仅存英文',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
+ const claim=await store.claim(f.ctx,{demandId:created.id,storeOnly:true});
+ const packet={requestId:randomUUID(),workId:f.workId,workspaceId:'research',sectionId:'methods',demandId:claim.id,claimToken:claim.claimToken,baseRevisions:{en:0},editions:[{locale:'en',title:'English only',bodyMarkdown:'Stored English.',translationOf:{workId:f.workId,locale:'zh-CN',revision:1}}]};
+ const accepted=await store.submit(f.ctx,packet,{publish:false});
+ assert.equal(accepted.status,'accepted');assert.equal(accepted.demandState,'completed');assert.equal(accepted.storeOnlyWorkerId,f.ctx.workerId);
+ await assert.rejects(store.submit(f.otherCtx,packet),{code:'not_found'});
+ await assert.rejects(store.submit(f.otherCtx,{...packet,editions:[{...packet.editions[0],title:'Tamper'}]}),{code:'not_found'});
+ await assert.rejects(store.submissionStatus(f.otherCtx,packet.requestId),{code:'not_found'});
+ assert.deepEqual(await store.submissionStatus(f.ctx,packet.requestId),accepted);
+ const ordinary=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Draft path'});
+ const ordinaryClaim=await store.claim(f.otherCtx,{demandId:ordinary.id});
+ const draft=await store.submit(f.otherCtx,{requestId:randomUUID(),workId:randomUUID(),workspaceId:'research',sectionId:'methods',demandId:ordinaryClaim.id,claimToken:ordinaryClaim.claimToken,editions:[{locale:'en',title:'Draft',bodyMarkdown:'Not published.'}]},{publish:false});
+ assert.equal(draft.status,'draft_saved');assert.deepEqual(draft.publicationIds,[]);assert.equal(draft.demandState,undefined);
+ assert.equal((await store.demands(f.owner)).find(row=>row.id===ordinary.id).state,'claimed');
+});
+
+test('mixed queues claim ordinary and store-only in parallel without stealing a live lease',async()=>{
+ const f=await storeOnlyEnglishFixture();
+ const decoy=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Ordinary write',priority:0});
+ const storeOnly=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'仅存英文',priority:50,requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
+ const [ordinary,mine]=await Promise.all([store.claim(f.otherCtx),store.claim(f.ctx,{storeOnly:true})]);
+ assert.equal(ordinary.id,decoy.id);assert.equal(mine.id,storeOnly.id);
+ const idle=await store.createWorker(f.owner,{name:'Idle other',workspaceIds:['research']}),idleCtx=await store.authenticate(idle.token);
+ await assert.rejects(store.claim(idleCtx,{demandId:storeOnly.id,storeOnly:true}),{code:'forbidden'});
+ await assert.rejects(store.claim(f.otherCtx,{demandId:storeOnly.id,storeOnly:true}),{code:'worker_busy'});
+ await assert.rejects(store.claim(f.ctx,{demandId:decoy.id}),{code:'worker_busy'});
+ assert.equal((await store.activeClaim(f.otherCtx)).id,decoy.id);
+ assert.equal((await store.activeClaim(f.ctx)).id,storeOnly.id);
+});
+
 

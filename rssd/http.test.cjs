@@ -78,6 +78,31 @@ test('HTTP schedule and grant writes return 403 from coordination, not from MCP 
  assert.equal(grant.status,403);assert.equal((await grant.json()).code,'forbidden');
 });
 
+test('HTTP demands, claims, drafts and submissions forward storeOnly and publish flags',async t=>{
+ const {ProtocolError}=require('../apps/backend/dist/rssd/protocol.cjs');
+ const calls=[];
+ const store={
+  createDemand:async(ctx,body)=>{calls.push(['create',body]);if(body.storeOnly!==undefined&&typeof body.storeOnly!=='boolean')throw new ProtocolError('storeOnly must be a boolean',400,'invalid_request');return {status:'created',storeOnly:body.storeOnly===true};},
+  claim:async(ctx,body)=>{calls.push(['claim',body]);return {id:'demand-1',payload:{storeOnly:body.storeOnly===true}};},
+  submit:async(ctx,body,opts={})=>{calls.push(['submit',opts.publish===false?'draft':'publish',body.requestId]);return {status:opts.publish===false?'draft_saved':'accepted',publicationIds:[],demandState:opts.publish===false?undefined:'completed'};},
+ };
+ const module=await Test.createTestingModule({imports:[ThrottlerModule.forRoot([{ttl:60000,limit:100}])],controllers:[RssdController],providers:[{provide:RssdService,useValue:{store}}]}).compile();
+ const app=module.createNestApplication();app.useLogger(false);app.use((req,res,next)=>{req.rssd={orgId:'org',workerId:'device',admin:false,workspaceIds:['research']};next();});
+ await app.listen(0,'127.0.0.1');t.after(()=>app.close());
+ const origin=await app.getUrl(),headers={'content-type':'application/json'};
+ const created=await fetch(origin+'/rssd/v1/demands',{method:'POST',headers,body:JSON.stringify({workspaceId:'research',sectionId:'methods',kind:'translate',title:'en',storeOnly:true})});
+ assert.equal(created.status,201);assert.equal((await created.json()).storeOnly,true);assert.equal(calls.find(c=>c[0]==='create')[1].storeOnly,true);
+ const invalid=await fetch(origin+'/rssd/v1/demands',{method:'POST',headers,body:JSON.stringify({workspaceId:'research',sectionId:'methods',title:'bad',storeOnly:'true'})});
+ assert.equal(invalid.status,400);assert.equal((await invalid.json()).code,'invalid_request');
+ const claimed=await fetch(origin+'/rssd/v1/claims',{method:'POST',headers,body:JSON.stringify({demandId:'demand-1',storeOnly:true})});
+ assert.equal(claimed.status,201);assert.equal(calls.find(c=>c[0]==='claim')[1].storeOnly,true);
+ const draft=await fetch(origin+'/rssd/v1/drafts',{method:'POST',headers,body:JSON.stringify({requestId:'req-draft'})});
+ assert.equal(draft.status,201);assert.equal((await draft.json()).status,'draft_saved');
+ const submitted=await fetch(origin+'/rssd/v1/submissions',{method:'POST',headers,body:JSON.stringify({requestId:'req-sub'})});
+ assert.equal(submitted.status,201);assert.equal((await submitted.json()).status,'accepted');
+ assert.deepEqual(calls.filter(c=>c[0]==='submit').map(c=>c[1]),['draft','publish']);
+});
+
 test('idle and active claims are valid JSON over the production HTTP controller',async t=>{
  let current=null;
  const module=await Test.createTestingModule({imports:[ThrottlerModule.forRoot([{ttl:60000,limit:100}])],controllers:[RssdController],providers:[{provide:RssdService,useValue:{store:{claim:async()=>current,activeClaim:async()=>current}}}]}).compile();

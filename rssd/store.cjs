@@ -30,6 +30,11 @@ function storeOnlyAsserted(input) {
 function isStoreOnlyPayload(payload) {
   return payload?.storeOnly === true;
 }
+function canReadStoreOnlyReceipt(ctx, result) {
+  if (result?.storeOnly !== true) return true;
+  if (ctx?.admin) return true;
+  return Boolean(ctx?.workerId && ctx.workerId === result.storeOnlyWorkerId);
+}
 function pageNumber(value,name,min,max) {
   if(typeof value==='string'&&/^(0|[1-9][0-9]*)$/.test(value))value=Number(value);
   return p.integer(value,name,min,max);
@@ -175,7 +180,7 @@ class RssdStore {
       }
       const payload={...value,requiredLocales,sourceHash:edition.hash};
       if(storeOnly){payload.storeOnly=true;payload.storeOnlyWorkerId=ctx.workerId;}
-      const reuse=await this.reuseOpenTranslate(db,ctx.orgId,value,requiredLocales,edition.hash,ctx);
+      const reuse=await this.reuseOpenTranslate(db,ctx.orgId,value,requiredLocales,edition.hash,ctx,storeOnly);
       if(reuse)return reuse;
       let result;
       try{
@@ -183,26 +188,33 @@ class RssdStore {
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT ("orgId",id) DO NOTHING RETURNING *`,ctx.orgId,value.id,value.workspaceId,value.sectionId,value.kind,value.title,value.priority,encoded(payload));
       }catch(error){
         if(!uniqueViolation(error))throw error;
-        const raced=await this.reuseOpenTranslate(db,ctx.orgId,value,requiredLocales,edition.hash,ctx);
+        const raced=await this.reuseOpenTranslate(db,ctx.orgId,value,requiredLocales,edition.hash,ctx,storeOnly);
         if(raced)return raced;
         p.fail('An open translate task already exists for this work; wait for expiry, release or completion before rebinding',409,'open_translate_conflict');
       }
       if(!result){
         const old=await one(db,'SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2',ctx.orgId,value.id);
-        if(old && old.kind===value.kind && old.payload.source?.workId===value.source.workId)return {...safeDemand(old),status:'existing'};
+        if(old && old.kind===value.kind && old.payload.source?.workId===value.source.workId){
+          if(isStoreOnlyPayload(old.payload)!==storeOnly)p.fail('Demand identity already exists',409,'identity_conflict');
+          if(isStoreOnlyPayload(old.payload) && old.payload.storeOnlyWorkerId!==ctx.workerId)
+            p.fail('An open store-only translate already exists for this work; wait for expiry, release or completion before rebinding',409,'open_translate_conflict');
+          return {...safeDemand(old),status:'existing'};
+        }
         p.fail('Demand identity already exists',409,'identity_conflict');
       }
       await audit(db,ctx,'demand.create',{id:result.id,kind:value.kind,workId:value.source.workId});
       return {...safeDemand(result),status:'created'};
     });
   }
-  async reuseOpenTranslate(db,orgId,value,requiredLocales,sourceHash,ctx={}){
+  async reuseOpenTranslate(db,orgId,value,requiredLocales,sourceHash,ctx={},storeOnly=false){
     if(value.kind!=='translate')return null;
     const open=await rows(db,`SELECT * FROM rssd_demands WHERE "orgId"=$1 AND kind='translate' AND state IN ('queued','claimed','blocked')
       AND payload->'source'->>'workId'=$2`,orgId,value.source.workId);
     const existing=open.find(row=>row.payload.source?.locale===value.source.locale && row.payload.source?.revision===value.source.revision
       && row.payload.sourceHash===sourceHash && localeKey(row.payload.requiredLocales||[])===localeKey(requiredLocales));
     if(existing){
+      if(isStoreOnlyPayload(existing.payload)!==storeOnly)
+        p.fail('An open translate task already exists for this work; wait for expiry, release or completion before rebinding',409,'open_translate_conflict');
       if(isStoreOnlyPayload(existing.payload) && existing.payload.storeOnlyWorkerId!==ctx.workerId)
         p.fail('An open store-only translate already exists for this work; wait for expiry, release or completion before rebinding',409,'open_translate_conflict');
       return {...safeDemand(existing),status:'existing'};
@@ -327,7 +339,11 @@ class RssdStore {
       }
       const fingerprint=p.hash(storeOnlyDemand?{storeOnly:true,value}:{publish,value});
       const previous=await one(db,'SELECT * FROM rssd_submissions WHERE "orgId"=$1 AND "requestId"=$2',ctx.orgId,value.requestId);
-      if(previous){if(previous.payloadHash!==fingerprint)p.fail('Request identity was reused with different content',409,'request_conflict');return previous.result;}
+      if(previous){
+        if(!canReadStoreOnlyReceipt(ctx,previous.result))p.fail('Submission not found',404,'not_found');
+        if(previous.payloadHash!==fingerprint)p.fail('Request identity was reused with different content',409,'request_conflict');
+        return previous.result;
+      }
       // Check revocation inside the transaction, not only at the HTTP boundary.
       if(ctx.workerId){const worker=await one(db,'SELECT id FROM rssd_workers WHERE "orgId"=$1 AND id=$2 AND "revokedAt" IS NULL',ctx.orgId,ctx.workerId);if(!worker)p.fail('Device revoked',401);}
       await this.expireStaleClaims(db,ctx.orgId);
@@ -358,10 +374,15 @@ class RssdStore {
       }
       const writePublications=publish && !storeOnlyDemand;
       const completeDemand=Boolean(demand) && (publish || storeOnlyDemand);
+      if(!storeOnlyDemand){
+        const openStoreOnly=await one(db,`SELECT id FROM rssd_demands WHERE "orgId"=$1 AND kind='translate' AND state IN ('queued','claimed','blocked')
+          AND payload->>'storeOnly'='true' AND payload->'source'->>'workId'=$2 LIMIT 1`,ctx.orgId,value.workId);
+        if(openStoreOnly)p.fail('An open store-only translate forbids other writes to this work',409,'store_only_conflict');
+      }
       await lock(db,ctx.orgId+':work:'+value.workId);
       const work=await one(db,'SELECT * FROM rssd_works WHERE "orgId"=$1 AND id=$2',ctx.orgId,value.workId);
       if(work&&(work.workspaceId!==value.workspaceId||work.sectionId!==value.sectionId))p.fail('Work belongs to a different workspace or section',409,'identity_conflict');
-      const result={requestId:value.requestId,workId:value.workId,workspaceId:value.workspaceId,status:(writePublications||storeOnlyDemand)?'accepted':'draft_saved',editions:[],publicationIds:[],...(storeOnlyDemand?{storeOnly:true}:{})};
+      const result={requestId:value.requestId,workId:value.workId,workspaceId:value.workspaceId,status:(writePublications||storeOnlyDemand)?'accepted':'draft_saved',editions:[],publicationIds:[],...(storeOnlyDemand?{storeOnly:true,storeOnlyWorkerId:ctx.workerId}:{})};
       for(const edition of value.editions){
         const action=await one(db,`SELECT id FROM rssd_editorial_actions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND state IN ('queued','dispatching') LIMIT 1`,ctx.orgId,value.workId,edition.locale);
         if(action)p.fail('A website visibility action is in progress; retain the local result until its receipt settles',409,'publication_pending');
@@ -410,7 +431,9 @@ class RssdStore {
   }
   async submissionStatus(ctx,requestId) {
     p.id(requestId);const row=await one(this.db,'SELECT "workspaceId",result FROM rssd_submissions WHERE "orgId"=$1 AND "requestId"=$2',ctx.orgId,requestId);
-    if(!row)p.fail('Submission not found',404,'not_found');scope(ctx,row.workspaceId);return row.result;
+    if(!row)p.fail('Submission not found',404,'not_found');scope(ctx,row.workspaceId);
+    if(!canReadStoreOnlyReceipt(ctx,row.result))p.fail('Submission not found',404,'not_found');
+    return row.result;
   }
   async publications(ctx,{workspaceId,limit=100,offset=0}={}) {
     if(workspaceId)scope(ctx,p.id(workspaceId));limit=pageNumber(limit,'limit',1,200);offset=pageNumber(offset,'offset',0,1000000);
