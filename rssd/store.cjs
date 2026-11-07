@@ -147,12 +147,17 @@ class RssdStore {
       if(value.kind==='translate' && requiredLocales.every(locale=>present.includes(locale))){
         return {status:'skipped',reason:'locale_present',workId:value.source.workId,workspaceId:value.workspaceId,requiredLocales,existingLocales:present};
       }
+      if(value.kind==='translate'){
+        const head=await one(db,'SELECT revision FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 ORDER BY revision DESC LIMIT 1',ctx.orgId,value.source.workId,value.source.locale);
+        if((head?.revision||0)!==value.source.revision)p.fail('Translation source has a newer revision',409,'source_conflict');
+      }
       const payload={...value,requiredLocales,sourceHash:edition.hash};
       const open=await rows(db,`SELECT * FROM rssd_demands WHERE "orgId"=$1 AND kind=$2 AND "workspaceId"=$3 AND state IN ('queued','claimed','blocked')
         AND payload->'source'->>'workId'=$4`,ctx.orgId,value.kind,value.workspaceId,value.source.workId);
-      const existing=open.find(row=>row.payload.source?.locale===value.source.locale && row.payload.source?.revision===value.source.revision
-        && row.payload.sourceHash===edition.hash && localeKey(row.payload.requiredLocales||[])===localeKey(requiredLocales));
+      const sameTarget=open.filter(row=>row.payload.source?.locale===value.source.locale && localeKey(row.payload.requiredLocales||[])===localeKey(requiredLocales));
+      const existing=sameTarget.find(row=>row.payload.source?.revision===value.source.revision && row.payload.sourceHash===edition.hash);
       if(existing)return {...safeDemand(existing),status:'existing'};
+      if(sameTarget.length)p.fail('An open translation demand already binds a different source revision',409,'source_conflict');
       const result=await one(db,`INSERT INTO rssd_demands ("orgId",id,"workspaceId","sectionId",kind,title,priority,payload)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT ("orgId",id) DO NOTHING RETURNING *`,ctx.orgId,value.id,value.workspaceId,value.sectionId,value.kind,value.title,value.priority,encoded(payload));
       if(!result){

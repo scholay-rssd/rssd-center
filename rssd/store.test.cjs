@@ -1150,6 +1150,10 @@ test('translate demands bind source hash, create once, skip existing English and
  const skipped=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'跳过',requiredLocales:['en'],source:{workId:present,locale:'zh-CN',revision:1}});
  assert.equal(skipped.status,'skipped');assert.equal(skipped.reason,'locale_present');assert.equal(skipped.workId,present);
  const work=await store.work(f.owner,present);assert.equal(work.editions.some(e=>e.locale==='zh-CN'),true);assert.equal(work.editions.some(e=>e.locale==='en'),true);
+ await store.submit(f.owner,{requestId:randomUUID(),workId:missing,workspaceId:'research',sectionId:'methods',baseRevisions:{'zh-CN':1},editions:[{locale:'zh-CN',title:'源文已改',bodyMarkdown:'更新后的中文正文。'}]},{publish:false});
+ await assert.rejects(store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'过期源',requiredLocales:['en'],source:{workId:missing,locale:'zh-CN',revision:1}}),{code:'source_conflict'});
+ await assert.rejects(store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'新源',requiredLocales:['en'],source:{workId:missing,locale:'zh-CN',revision:2}}),{code:'source_conflict'});
+ assert.equal((await store.demands(f.owner)).filter(row=>row.payload?.source?.workId===missing).length,1);
 });
 
 test('translate submit is request-idempotent, refuses source change and Chinese rewrite, and does not steal claims',async()=>{
@@ -1163,6 +1167,7 @@ test('translate submit is request-idempotent, refuses source change and Chinese 
  const accepted=await store.submit(f.ctx,packet);assert.equal(accepted.status,'accepted');assert.equal(accepted.workId,workId);
  assert.deepEqual(await store.submit(f.ctx,packet),accepted);
  assert.deepEqual(await store.submissionStatus(f.ctx,packet.requestId),accepted);
+ await assert.rejects(store.submit(f.ctx,{...packet,editions:[{...packet.editions[0],title:'Changed replay'}]}),{code:'request_conflict'});
  const editions=(await store.work(f.ctx,workId)).editions;
  assert.equal(editions.find(e=>e.locale==='zh-CN').revision,1);
  assert.equal(editions.find(e=>e.locale==='en').revision,1);
