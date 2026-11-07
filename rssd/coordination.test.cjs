@@ -1,7 +1,7 @@
 'use strict';
 const {test,before,after}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {Pool,Client}=require('pg'),{randomUUID}=require('node:crypto');
-const {RssdStore}=require('./store.cjs'),{RssdCoordination,windowFor,TRANSLATE_CONTINUATION_VERSION,TRANSLATE_CONTINUATION_GUARANTEES,supportsTranslateContinuation}=require('./coordination.cjs'),{RssdMcp}=require('./mcp.cjs');
+const {RssdStore}=require('./store.cjs'),{RssdCoordination,windowFor,TRANSLATE_CONTINUATION_VERSION,TRANSLATE_CONTINUATION_GUARANTEES,supportsTranslateContinuation,STORE_ONLY_TRANSLATE_VERSION,STORE_ONLY_TRANSLATE_GUARANTEES,supportsStoreOnlyTranslate}=require('./coordination.cjs'),{RssdMcp}=require('./mcp.cjs');
 const schema='rssd_coord_'+randomUUID().replaceAll('-','');let pool,db,store,coord,control;
 function adapter(client){return {$queryRawUnsafe:async(sql,...a)=>(await client.query(sql,a)).rows,$executeRawUnsafe:async(sql,...a)=>(await client.query(sql,a)).rowCount,$transaction:async fn=>{const c=await pool.connect();try{await c.query('BEGIN');const r=await fn(adapter(c));await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}}};}
 before(async()=>{
@@ -74,6 +74,25 @@ test('overview advertises translateContinuation as a read-only contract, not a g
  assert.equal(supportsTranslateContinuation({contracts:{translateContinuation:{version:0,guarantees:[...TRANSLATE_CONTINUATION_GUARANTEES]}}}),false);
  assert.equal(supportsTranslateContinuation({contracts:{translateContinuation:{version:1,guarantees:['receipt']}}}),false);
  assert.equal(supportsTranslateContinuation({contracts:{translateContinuation:{version:'1',guarantees:[...TRANSLATE_CONTINUATION_GUARANTEES]}}}),false);
+});
+test('overview advertises storeOnlyTranslate separately; tools and translateContinuation are not enough',async()=>{
+ const f=await fixture();
+ const device=await coord.overview(f.ctx,{workspaceIds:'a'});
+ assert.equal(device.contracts.storeOnlyTranslate.version,STORE_ONLY_TRANSLATE_VERSION);
+ assert.deepEqual(device.contracts.storeOnlyTranslate.guarantees,[...STORE_ONLY_TRANSLATE_GUARANTEES]);
+ assert.equal(supportsStoreOnlyTranslate(device),true);
+ assert.equal(supportsStoreOnlyTranslate({contracts:{translateContinuation:device.contracts.translateContinuation}}),false);
+ const mcp=new RssdMcp(store,coord);
+ const listed=(await mcp.handle(f.ctx,{jsonrpc:'2.0',id:1,method:'tools/list'})).result.tools;
+ const create=listed.find(t=>t.name==='rssd_create_demand'),claim=listed.find(t=>t.name==='rssd_claim');
+ assert.equal(create.inputSchema.properties.storeOnly.type,'boolean');
+ assert.equal(claim.inputSchema.properties.storeOnly.type,'boolean');
+ assert.equal(supportsStoreOnlyTranslate({tools:listed,capabilities:{mcp:true}}),false);
+ const viaMcp=JSON.parse((await mcp.handle(f.ctx,{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'rssd_overview',arguments:{workspaceIds:'a'}}})).result.content[0].text);
+ assert.equal(supportsStoreOnlyTranslate(viaMcp),true);
+ assert.equal(supportsStoreOnlyTranslate({contracts:{storeOnlyTranslate:true}}),false);
+ assert.equal(supportsStoreOnlyTranslate({contracts:{storeOnlyTranslate:{version:1,guarantees:['receipt']}}}),false);
+ assert.equal(supportsStoreOnlyTranslate({contracts:{storeOnlyTranslate:{version:'1',guarantees:[...STORE_ONLY_TRANSLATE_GUARANTEES]}}}),false);
 });
 test('scheduling preserves the original publication, replays after a lost response and fences a started delivery',async()=>{
  const f=await fixture(),id=randomUUID(),workId=randomUUID();

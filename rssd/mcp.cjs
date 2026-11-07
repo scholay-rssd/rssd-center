@@ -19,7 +19,7 @@ class RssdMcp {
   };
   const writes={
    rssd_edit_demand:['Edit a queued demand using its generation and a stable requestId; claimed rules are frozen',schema({id:string,baseGeneration:number,requestId:string,changes:object},['id','baseGeneration','requestId','changes']),(a)=>this.coordination.editDemand(ctx,a.id,a)],
-   rssd_create_demand:['Create one queued demand; translation of an existing work binds the source revision and hash, skips locales that already exist, and reuses an open task',schema({workspaceId:string,sectionId:string,kind:string,title:string,brief:string,requiredLocales:{type:'array',items:string},source:object,priority:number,id:string},['workspaceId','sectionId','title']),(a)=>this.store.createDemand(ctx,a)],
+   rssd_create_demand:['Create one queued demand; translation of an existing work binds the source revision and hash, skips locales that already exist, and reuses an open task. storeOnly=true freezes a center-only English continuation that cannot be claimed or published by default consumers',schema({workspaceId:string,sectionId:string,kind:string,title:string,brief:string,requiredLocales:{type:'array',items:string},source:object,priority:number,id:string,storeOnly:{type:'boolean'}},['workspaceId','sectionId','title']),(a)=>this.store.createDemand(ctx,a)],
   };
   if(ctx.admin){
    writes.rssd_save_goal=['Save a goal; enabling maintenance creates queued demands only, never claims or publishes',schema({id:string,baseRevision:number,requestId:string,goal:object},['id','baseRevision','requestId','goal']),(a)=>this.coordination.saveGoal(ctx,a)];
@@ -31,7 +31,7 @@ class RssdMcp {
   }
   if(ctx.workerId){
    reads.rssd_current_claim=['Read this device claim for explicit recovery',schema(),()=>this.store.activeClaim(ctx)];
-   writes.rssd_claim=['Claim one demand for this device; exclusive center claim rules apply',schema({demandId:string,workspaceIds:{type:'array',items:string},sectionIds:{type:'array',items:string}}),(a)=>this.store.claim(ctx,a)];
+   writes.rssd_claim=['Claim one demand for this device; exclusive center claim rules apply. Store-only translates require storeOnly=true and belong to the creating device',schema({demandId:string,workspaceIds:{type:'array',items:string},sectionIds:{type:'array',items:string},storeOnly:{type:'boolean'}}),(a)=>this.store.claim(ctx,a)];
    writes.rssd_release=['Explicitly release this device claim; preserve local work before releasing',schema({id:string,claimToken:string},['id','claimToken']),(a)=>this.store.changeDemand(ctx,a.id,{action:'release',claimToken:a.claimToken})];
    writes.rssd_submit=['Submit a claimed work with original requestId, claimToken and base revisions; query receipt after timeout',schema({packet:object},['packet']),(a)=>this.store.submit(ctx,a.packet)];
   }

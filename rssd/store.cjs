@@ -21,6 +21,15 @@ function uniqueViolation(error) {
 function schedulingGranted(ctx) {
   return Boolean(ctx?.admin) || (ctx.grants || []).some(grant => grant.operation === 'publicationScheduling');
 }
+function storeOnlyAsserted(input) {
+  if (input == null || !Object.prototype.hasOwnProperty.call(input, 'storeOnly')) return false;
+  if (input.storeOnly === true) return true;
+  if (input.storeOnly === false) return false;
+  p.fail('storeOnly must be a boolean', 400, 'invalid_request');
+}
+function isStoreOnlyPayload(payload) {
+  return payload?.storeOnly === true;
+}
 function pageNumber(value,name,min,max) {
   if(typeof value==='string'&&/^(0|[1-9][0-9]*)$/.test(value))value=Number(value);
   return p.integer(value,name,min,max);
@@ -126,7 +135,12 @@ class RssdStore {
     return {ok:true};
   }
   async createDemand(ctx,input) {
-    const value=p.demand(input);await this.workspace(this.db,ctx,value.workspaceId,value.sectionId);
+    const value=p.demand(input);const storeOnly=storeOnlyAsserted(input);
+    if(storeOnly){
+      if(!ctx.workerId)p.fail('Store-only translate requires a device credential',403,'forbidden');
+      if(value.kind!=='translate')p.fail('storeOnly is only valid on translate demands',400,'store_only_unsupported');
+    }
+    await this.workspace(this.db,ctx,value.workspaceId,value.sectionId);
     await this.writable(this.db,ctx,value.workspaceId);
     if(!value.source){
       const result=await one(this.db,`INSERT INTO rssd_demands ("orgId",id,"workspaceId","sectionId",kind,title,priority,payload)
@@ -155,8 +169,13 @@ class RssdStore {
         const head=await one(db,'SELECT revision FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 ORDER BY revision DESC LIMIT 1',ctx.orgId,value.source.workId,value.source.locale);
         if((head?.revision||0)!==value.source.revision)p.fail('Translation source has a newer revision',409,'source_conflict');
       }
+      if(storeOnly){
+        if(value.source.locale!=='zh-CN')p.fail('Store-only translate must bind the Chinese source edition',400,'store_only_unsupported');
+        if(requiredLocales.length!==1||requiredLocales[0]!=='en')p.fail('Store-only translate must target English only',400,'store_only_unsupported');
+      }
       const payload={...value,requiredLocales,sourceHash:edition.hash};
-      const reuse=await this.reuseOpenTranslate(db,ctx.orgId,value,requiredLocales,edition.hash);
+      if(storeOnly){payload.storeOnly=true;payload.storeOnlyWorkerId=ctx.workerId;}
+      const reuse=await this.reuseOpenTranslate(db,ctx.orgId,value,requiredLocales,edition.hash,ctx);
       if(reuse)return reuse;
       let result;
       try{
@@ -164,7 +183,7 @@ class RssdStore {
           VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT ("orgId",id) DO NOTHING RETURNING *`,ctx.orgId,value.id,value.workspaceId,value.sectionId,value.kind,value.title,value.priority,encoded(payload));
       }catch(error){
         if(!uniqueViolation(error))throw error;
-        const raced=await this.reuseOpenTranslate(db,ctx.orgId,value,requiredLocales,edition.hash);
+        const raced=await this.reuseOpenTranslate(db,ctx.orgId,value,requiredLocales,edition.hash,ctx);
         if(raced)return raced;
         p.fail('An open translate task already exists for this work; wait for expiry, release or completion before rebinding',409,'open_translate_conflict');
       }
@@ -177,13 +196,17 @@ class RssdStore {
       return {...safeDemand(result),status:'created'};
     });
   }
-  async reuseOpenTranslate(db,orgId,value,requiredLocales,sourceHash){
+  async reuseOpenTranslate(db,orgId,value,requiredLocales,sourceHash,ctx={}){
     if(value.kind!=='translate')return null;
     const open=await rows(db,`SELECT * FROM rssd_demands WHERE "orgId"=$1 AND kind='translate' AND state IN ('queued','claimed','blocked')
       AND payload->'source'->>'workId'=$2`,orgId,value.source.workId);
     const existing=open.find(row=>row.payload.source?.locale===value.source.locale && row.payload.source?.revision===value.source.revision
       && row.payload.sourceHash===sourceHash && localeKey(row.payload.requiredLocales||[])===localeKey(requiredLocales));
-    if(existing)return {...safeDemand(existing),status:'existing'};
+    if(existing){
+      if(isStoreOnlyPayload(existing.payload) && existing.payload.storeOnlyWorkerId!==ctx.workerId)
+        p.fail('An open store-only translate already exists for this work; wait for expiry, release or completion before rebinding',409,'open_translate_conflict');
+      return {...safeDemand(existing),status:'existing'};
+    }
     if(open.length)p.fail('An open translate task already exists for this work; wait for expiry, release or completion before rebinding',409,'open_translate_conflict');
     return null;
   }
@@ -201,6 +224,7 @@ class RssdStore {
     workspaceIds.forEach(id=>scope(ctx,id));
     const sectionIds=p.array(input.sectionIds || [],'sectionIds').map(x=>p.id(x));
     const demandId=input.demandId?p.id(input.demandId):null;
+    const storeOnly=storeOnlyAsserted(input);
     return this.transaction(async db=>{
       await lock(db,ctx.orgId+':worker:'+ctx.workerId);
       const worker=await one(db,'SELECT id FROM rssd_workers WHERE "orgId"=$1 AND id=$2 AND "revokedAt" IS NULL',ctx.orgId,ctx.workerId);
@@ -208,11 +232,24 @@ class RssdStore {
       await this.expireStaleClaims(db,ctx.orgId);
       const active=await one(db,`SELECT id FROM rssd_demands WHERE "orgId"=$1 AND "workerId"=$2 AND state IN ('claimed','blocked')`,ctx.orgId,ctx.workerId);
       if(active)p.fail('Finish, resume or release the current demand first',409,'worker_busy');
+      if(demandId){
+        const targeted=await one(db,'SELECT id,state,payload FROM rssd_demands WHERE "orgId"=$1 AND id=$2',ctx.orgId,demandId);
+        if(targeted){
+          const targetedStoreOnly=isStoreOnlyPayload(targeted.payload);
+          if(targetedStoreOnly && !storeOnly)p.fail('Store-only demand requires storeOnly=true on claim',403,'store_only_required');
+          if(!targetedStoreOnly && storeOnly)p.fail('Demand is not a store-only translate',409,'not_store_only');
+          if(targetedStoreOnly && targeted.payload.storeOnlyWorkerId!==ctx.workerId)p.fail('Store-only demand belongs to another device',403,'forbidden');
+        }
+      }
       const demand=await one(db,`SELECT * FROM rssd_demands d WHERE "orgId"=$1 AND state='queued'
         AND "workspaceId" IN (SELECT jsonb_array_elements_text($2::jsonb))
         AND NOT EXISTS (SELECT 1 FROM rssd_migrations m WHERE m."orgId"=d."orgId" AND m."workspaceId"=d."workspaceId" AND m.state<>'active')
         AND ($3::text IS NULL OR id=$3) AND ($4='[]' OR "sectionId" IN (SELECT jsonb_array_elements_text($4::jsonb)))
-        ORDER BY priority DESC,"createdAt",id FOR UPDATE SKIP LOCKED LIMIT 1`,ctx.orgId,encoded(workspaceIds),demandId,encoded(sectionIds));
+        AND (
+          ($5::boolean AND payload->>'storeOnly'='true' AND payload->>'storeOnlyWorkerId'=$6)
+          OR (NOT $5::boolean AND coalesce(payload->>'storeOnly','')<>'true')
+        )
+        ORDER BY priority DESC,"createdAt",id FOR UPDATE SKIP LOCKED LIMIT 1`,ctx.orgId,encoded(workspaceIds),demandId,encoded(sectionIds),storeOnly,ctx.workerId);
       if(!demand){
         if(demandId){
           const held=await one(db,'SELECT id,state FROM rssd_demands WHERE "orgId"=$1 AND id=$2',ctx.orgId,demandId);
@@ -281,9 +318,14 @@ class RssdStore {
   }
   async submit(ctx,input,{publish=true}={}) {
     const value=p.submission(input);scope(ctx,value.workspaceId);
-    const fingerprint=p.hash({publish,value});
     return this.transaction(async db=>{
       await lock(db,ctx.orgId+':request:'+value.requestId);
+      let storeOnlyDemand=false;
+      if(value.demandId){
+        const peek=await one(db,'SELECT payload FROM rssd_demands WHERE "orgId"=$1 AND id=$2',ctx.orgId,value.demandId);
+        storeOnlyDemand=isStoreOnlyPayload(peek?.payload);
+      }
+      const fingerprint=p.hash(storeOnlyDemand?{storeOnly:true,value}:{publish,value});
       const previous=await one(db,'SELECT * FROM rssd_submissions WHERE "orgId"=$1 AND "requestId"=$2',ctx.orgId,value.requestId);
       if(previous){if(previous.payloadHash!==fingerprint)p.fail('Request identity was reused with different content',409,'request_conflict');return previous.result;}
       // Check revocation inside the transaction, not only at the HTTP boundary.
@@ -299,6 +341,11 @@ class RssdStore {
         if(demand.payload.source && demand.payload.source.workId!==value.workId)p.fail('Update or translation must retain the source work identity',409);
         if(demand.payload.workId && demand.payload.workId!==value.workId)p.fail('Language editions must retain the original submission work identity',409);
         policy=demand.payload.policy;
+        storeOnlyDemand=isStoreOnlyPayload(demand.payload);
+        if(storeOnlyDemand){
+          if(demand.payload.storeOnlyWorkerId!==ctx.workerId)p.fail('Store-only demand belongs to another device',403,'forbidden');
+          if(value.editions.some(edition=>edition.locale!=='en'))p.fail('Store-only translate must submit English only',409,'source_conflict');
+        }
         if(demand.kind==='translate'){
           if(value.editions.some(edition=>edition.locale===demand.payload.source.locale))p.fail('Translation must not rewrite the source edition',409,'source_conflict');
           const bound=demand.payload.source;
@@ -309,16 +356,18 @@ class RssdStore {
           if((head?.revision||0)!==bound.revision)p.fail('Translation source has a newer revision',409,'source_conflict');
         }
       }
+      const writePublications=publish && !storeOnlyDemand;
+      const completeDemand=Boolean(demand) && (publish || storeOnlyDemand);
       await lock(db,ctx.orgId+':work:'+value.workId);
       const work=await one(db,'SELECT * FROM rssd_works WHERE "orgId"=$1 AND id=$2',ctx.orgId,value.workId);
       if(work&&(work.workspaceId!==value.workspaceId||work.sectionId!==value.sectionId))p.fail('Work belongs to a different workspace or section',409,'identity_conflict');
-      const result={requestId:value.requestId,workId:value.workId,workspaceId:value.workspaceId,status:publish?'accepted':'draft_saved',editions:[],publicationIds:[]};
+      const result={requestId:value.requestId,workId:value.workId,workspaceId:value.workspaceId,status:(writePublications||storeOnlyDemand)?'accepted':'draft_saved',editions:[],publicationIds:[],...(storeOnlyDemand?{storeOnly:true}:{})};
       for(const edition of value.editions){
         const action=await one(db,`SELECT id FROM rssd_editorial_actions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND state IN ('queued','dispatching') LIMIT 1`,ctx.orgId,value.workId,edition.locale);
         if(action)p.fail('A website visibility action is in progress; retain the local result until its receipt settles',409,'publication_pending');
         const visibility=await one(db,'SELECT visibility FROM rssd_editorial_states WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3',ctx.orgId,value.workId,edition.locale);
         if(visibility?.visibility==='deleted')p.fail('This edition was deleted; restore it explicitly before editing',409,'edition_deleted');
-        if(publish&&visibility?.visibility==='withdrawn')p.fail('This website edition is withdrawn; explicitly publish or restore it through a visibility action',409,'edition_withdrawn');
+        if(writePublications&&visibility?.visibility==='withdrawn')p.fail('This website edition is withdrawn; explicitly publish or restore it through a visibility action',409,'edition_withdrawn');
         const deleted=await one(db,'SELECT "documentId" FROM rssd_legacy_documents WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "deletedAt" IS NOT NULL',ctx.orgId,value.workId,edition.locale);
         if(deleted&&!visibility)p.fail('This historical edition was deleted; restore it explicitly before editing',409,'edition_deleted');
         if(demand?.kind==='translate' && (!edition.translationOf || p.hash(edition.translationOf)!==p.hash(demand.payload.source)))p.fail('Translation must identify the requested source revision',409,'source_conflict');
@@ -339,7 +388,7 @@ class RssdStore {
         const revision=(head?.revision||0)+1,hash=p.hash(edition);
         await execute(db,'INSERT INTO rssd_editions ("orgId","workId",locale,revision,payload,hash) VALUES ($1,$2,$3,$4,$5::jsonb,$6)',ctx.orgId,value.workId,edition.locale,revision,encoded(edition),hash);
         result.editions.push({locale:edition.locale,revision,hash});
-        if(publish)for(const target of policy.targets.filter(t=>t.locale===edition.locale)){
+        if(writePublications)for(const target of policy.targets.filter(t=>t.locale===edition.locale)){
           const publicationId=randomUUID();
           await execute(db,`INSERT INTO rssd_publications ("orgId",id,"workId","workspaceId",locale,revision,"destinationId",payload)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,ctx.orgId,publicationId,value.workId,value.workspaceId,edition.locale,revision,target.destinationId,encoded({edition,sectionId:value.sectionId,policyVersion:policy.version,hash}));
@@ -348,14 +397,14 @@ class RssdStore {
       }
       await execute(db,`INSERT INTO rssd_works ("orgId",id,"workspaceId","sectionId") VALUES ($1,$2,$3,$4)
         ON CONFLICT ("orgId",id) DO UPDATE SET "updatedAt"=CURRENT_TIMESTAMP`,ctx.orgId,value.workId,value.workspaceId,value.sectionId);
-      if(demand&&publish){
+      if(completeDemand){
         const submittedLocales=new Set([...(demand.payload.submittedLocales||[]),...value.editions.map(e=>e.locale)]);
         const completed=demand.payload.requiredLocales.every(l=>submittedLocales.has(l));
         await execute(db,`UPDATE rssd_demands SET state=$3,payload=$4::jsonb,"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2`,ctx.orgId,demand.id,completed?'completed':'claimed',encoded({...demand.payload,submittedLocales:[...submittedLocales],workId:value.workId}));
         result.demandState=completed?'completed':'claimed';
       }
       await execute(db,'INSERT INTO rssd_submissions ("orgId","requestId","payloadHash","workspaceId","workId",result) VALUES ($1,$2,$3,$4,$5,$6::jsonb)',ctx.orgId,value.requestId,fingerprint,value.workspaceId,value.workId,encoded(result));
-      await audit(db,ctx,publish?'work.submit':'work.save',{workId:value.workId,requestId:value.requestId,editions:result.editions});
+      await audit(db,ctx,(writePublications||storeOnlyDemand)?'work.submit':'work.save',{workId:value.workId,requestId:value.requestId,editions:result.editions,storeOnly:storeOnlyDemand||undefined});
       return result;
     });
   }

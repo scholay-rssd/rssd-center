@@ -14,6 +14,14 @@ function supportsTranslateContinuation(overview){
  if(!row||typeof row!=='object'||Array.isArray(row)||!Number.isInteger(row.version)||row.version<TRANSLATE_CONTINUATION_VERSION||!Array.isArray(row.guarantees))return false;
  return TRANSLATE_CONTINUATION_GUARANTEES.every(token=>row.guarantees.includes(token));
 }
+const STORE_ONLY_TRANSLATE_VERSION=1;
+const STORE_ONLY_TRANSLATE_GUARANTEES=Object.freeze(['storeOnlyFrozen','zeroPublications','exclusiveWorkerClaim','intentRequired','noClaimSteal','leaseRecovery','englishOnly','sourceBind','receipt']);
+function storeOnlyTranslateContract(){return {version:STORE_ONLY_TRANSLATE_VERSION,guarantees:[...STORE_ONLY_TRANSLATE_GUARANTEES]};}
+function supportsStoreOnlyTranslate(overview){
+ const row=overview?.contracts?.storeOnlyTranslate;
+ if(!row||typeof row!=='object'||Array.isArray(row)||!Number.isInteger(row.version)||row.version<STORE_ONLY_TRANSLATE_VERSION||!Array.isArray(row.guarantees))return false;
+ return STORE_ONLY_TRANSLATE_GUARANTEES.every(token=>row.guarantees.includes(token));
+}
 function date(value,name){if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T/.test(value)||!Number.isFinite(Date.parse(value)))p.fail('Invalid '+name);return new Date(value).toISOString();}
 function page(input={}){const limit=p.integer(Number(input.limit??50),'limit',1,200),offset=p.integer(Number(input.offset??0),'offset',0,1000000);return {limit,offset};}
 function windowFor(timezone,period,now=new Date()){
@@ -51,6 +59,8 @@ class RssdCoordination {
    const old=await one(db,'SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2 FOR UPDATE',ctx.orgId,id);
    if(old.generation!==input.baseGeneration)p.fail('需求已变化，请保留修改并重新加载',409,'revision_conflict');
    if(old.state!=='queued')p.fail('认领后写作规则已冻结',409,'demand_frozen');
+   if(Object.prototype.hasOwnProperty.call(input.changes||{},'storeOnly')||Object.prototype.hasOwnProperty.call(input.changes||{},'storeOnlyWorkerId'))
+    p.fail('Store-only intent is frozen',409,'identity_conflict');
    await this.store.writable(db,ctx,old.workspaceId);
    const value=p.demand({...old.payload,...input.changes,id,workspaceId:old.workspaceId,sectionId:old.sectionId,kind:old.kind,source:old.payload.source});
    if(old.kind==='translate' && value.source){
@@ -59,6 +69,8 @@ class RssdCoordination {
    }
    const dueAt=input.changes?.dueAt===null?null:input.changes?.dueAt?date(input.changes.dueAt,'dueAt'):old.payload.dueAt||null;
    const payload={...old.payload,...value,dueAt};
+   if(old.payload.storeOnly===true){payload.storeOnly=true;payload.storeOnlyWorkerId=old.payload.storeOnlyWorkerId;}
+   else {delete payload.storeOnly;delete payload.storeOnlyWorkerId;}
    const result=await one(db,'UPDATE rssd_demands SET title=$3,priority=$4,payload=$5::jsonb,generation=generation+1,"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2 RETURNING *',ctx.orgId,id,value.title,value.priority,json(payload));
    delete result.claimToken;await audit(db,ctx,'demand.edit',{id,generation:result.generation,requestId:input.requestId});return result;
   });
@@ -203,8 +215,8 @@ class RssdCoordination {
   const publicationScheduling=Boolean(ctx.admin)||(ctx.grants||[]).some(grant=>grant.operation==='publicationScheduling'&&grant.workspaceIds.some(id=>ids.includes(id)));
   return {contractVersion:1,generatedAt:new Date().toISOString(),workspaces:registry.workspaces.filter(w=>ids.includes(w.id)),counts,works,goals,
    capabilities:{goalManagement:Boolean(ctx.admin),publicationScheduling,demandEditing:true,mcp:true},
-   contracts:{translateContinuation:translateContinuationContract()},
+   contracts:{translateContinuation:translateContinuationContract(),storeOnlyTranslate:storeOnlyTranslateContract()},
    nativePaths:{calendar:'/launches',media:'/media',analytics:'/analytics',agents:'/agents',settings:'/settings'}};
  }
 }
-module.exports={RssdCoordination,windowFor,page,TRANSLATE_CONTINUATION_VERSION,TRANSLATE_CONTINUATION_GUARANTEES,translateContinuationContract,supportsTranslateContinuation};
+module.exports={RssdCoordination,windowFor,page,TRANSLATE_CONTINUATION_VERSION,TRANSLATE_CONTINUATION_GUARANTEES,translateContinuationContract,supportsTranslateContinuation,STORE_ONLY_TRANSLATE_VERSION,STORE_ONLY_TRANSLATE_GUARANTEES,storeOnlyTranslateContract,supportsStoreOnlyTranslate};
