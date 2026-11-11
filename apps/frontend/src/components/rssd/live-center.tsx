@@ -104,14 +104,14 @@ export function RssdCenter({ initialTab, initialView, initialWorkspace, initialM
     {overlay?.kind === 'accounts' && <AccountsDrawer focusId={overlay.focusId} onClose={close} onChanged={refresh} />}
   </>;
   return <div className="rssd-desktop" data-mode={mode}>
-    <CenterPreview initialTab={view} live={{
+    <CenterPreview initialTab={view} initialWorkspace={initialWorkspace} live={{
       data: mapped.data, loading: busy > 0, error: error || mapped.error, refresh: () => void refresh(), updateDemand, manage, schedule, retry, overlays,
       tools: <button onClick={toggleMode}>{mode === 'dark' ? '浅色' : '深色'}</button>,
       newDemand: base ? () => setOverlay({ kind: 'demand' }) : undefined, releaseDemand,
       channelTools: <><button onClick={() => setOverlay({ kind: 'accounts' })}>社交账号</button><button className="cp-primary" onClick={() => setOverlay({ kind: 'destination' })}>添加发布渠道</button></>,
       manageChannel,
       // Each is mounted on first visit, then kept so an open manuscript or form survives a look at another tab.
-      works: shown => { if (shown) opened.current.works = true; return opened.current.works ? <WorksPanel api={api} registry={registry} onDeriveDemand={source => setOverlay({ kind: 'demand', source })} /> : null; },
+      works: shown => { if (shown) opened.current.works = true; return opened.current.works ? <WorksPanel api={api} registry={registry} initialWorkspace={initialWorkspace} onDeriveDemand={source => setOverlay({ kind: 'demand', source })} /> : null; },
       settings: shown => { if (shown) opened.current.settings = true; return opened.current.settings ? <SettingsPanel api={api} registry={registry} reloadRegistry={loadRegistry} initialSection={moved?.section} workspaceId={initialWorkspace} /> : null; },
       search: setSearch, appliedSearch: applied, loadMore: more ? () => setLimit(n => n + PAGE) : undefined, calendarTruncated: Boolean(calendar.hasNext),
       calendarRange: (from, to) => setRange(old => { const next = { from: new Date(from + 'T00:00:00').toISOString(), to: new Date(to + 'T00:00:00').toISOString() }; return old.from === next.from && old.to === next.to ? old : next; }),

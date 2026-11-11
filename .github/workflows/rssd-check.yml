@@ -2,7 +2,7 @@ name: RSSD center checks
 on:
   pull_request:
   push:
-    branches: [rssd, 'codex/rssd-*']
+    branches: [main, rssd, 'codex/rssd-*']
   workflow_dispatch:
 permissions:
   contents: read

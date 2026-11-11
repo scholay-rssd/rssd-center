@@ -141,3 +141,31 @@ test('a channel shows its platform logo from the identifier the Center reports, 
   expect(await logo('Unknown network')).toBeUndefined();
   expect(document.querySelector('.cp-side-brand svg.cp-brand-mark')).toBeTruthy();
 });
+
+test('legacy works links retain the requested workspace filter',async()=>{
+  mockFetch.mockImplementation(async(path:string)=>center(path));
+  render(<RssdCenter initialTab="works" initialWorkspace="one"/>);
+  await screen.findByRole('option',{name:'One'});
+  expect((screen.getByLabelText('工作空间') as HTMLSelectElement).value).toBe('one');
+});
+
+test('legacy demand links retain the requested workspace filter',async()=>{
+  const other={...workspace,id:'two',name:'Two'};
+  mockFetch.mockImplementation(async(path:string)=>{
+    if(path.startsWith('/rssd/v1/coordination/overview'))return response({workspaces:[workspace,other],goals:[],counts:[],works:[],capabilities:{publicationScheduling:true}});
+    if(path.startsWith('/rssd/v1/demands?'))return response([demand,{...demand,id:'d2',workspaceId:'two',title:'Other workspace demand'}]);
+    return center(path);
+  });
+  render(<RssdCenter initialTab="demands" initialWorkspace="one"/>);
+  await screen.findByRole('button',{name:'Fixture demand'});
+  expect(screen.queryByRole('button',{name:'Other workspace demand'})).toBeNull();
+});
+
+
+test('an unavailable workspace in a legacy link falls back to authorized workspaces',async()=>{
+  mockFetch.mockImplementation(async(path:string)=>center(path));
+  render(<RssdCenter initialTab="works" initialWorkspace="unavailable"/>);
+  await screen.findByRole('option',{name:'One'});
+  await waitFor(()=>expect((screen.getByLabelText('工作空间') as HTMLSelectElement).value).toBe(''));
+  expect(screen.queryByRole('option',{name:'unavailable'})).toBeNull();
+});
