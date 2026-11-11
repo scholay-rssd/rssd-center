@@ -40,7 +40,7 @@ export default function ChannelsPreview({
           <h2>{tr("发布渠道")}</h2>
           <p>{tr("自家站点、社交账号与论坛，都是作品的发布目的地。")}</p>
         </div>
-        <span className="cp-muted">{tr(liveMode?"中心实时连接状态":"账号与授权状态均为示例")}</span>
+        {!liveMode && <span className="cp-muted">{tr("账号与授权状态均为示例")}</span>}
       </div>
       <div className="cp-filter-row">
         <div className="cp-state-filters" aria-label={tr("按渠道类型筛选")}>

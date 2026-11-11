@@ -4,7 +4,6 @@ import {
   addDays,
   createPreviewData,
   dayKey,
-  demandLabels,
   monthDays,
   type PreviewTab,
   type PreviewDestination,
@@ -93,8 +92,8 @@ export default function CenterPreview({
     ...(live?.settings ? [["settings", "设置"] as [PreviewTab, string]] : []),
     ...(live?.legacy ? [[legacyTab[0], live.legacyLabel || legacyTab[1]] as [PreviewTab, string]] : []),
   ];
-  // Task counts belong to the scheduling tabs, not to the library or settings.
-  const ownPanel = tab === "works" || tab === "settings";
+  // The tabs that list work across workspaces; the library and settings choose their own.
+  const scoped = tab !== "works" && tab !== "settings" && tab !== "legacy";
   const scopeName =
     scope.length === data.spaces.length
       ? tr("全部工作空间")
@@ -187,27 +186,28 @@ export default function CenterPreview({
     setNotice(tr("示例数据已重置。"));
   };
   return (
-    <main className="center-preview">
-      <div className="cp-preview-bar">
-        <span>
-          <b>{tr(live?"线上中心":"界面预览")}</b>
-          {tr(live?"真实数据 · 操作由中心校验":"示例数据 · 操作仅在本页生效")}
-        </span>
-        <div>
-          {live?.tools}
-          <button disabled={live?.loading} onClick={reset}>{tr(live?"刷新":"重置预览")}</button>
+    <main className="center-preview cp-shell">
+      <aside className="cp-side">
+        <div className="cp-side-brand">
+          {tr("RSSD 中心")}
+          {!live && <small>{tr("示例数据 · 操作仅在本页生效")}</small>}
         </div>
-      </div>
-      {live?.error&&<p role="alert" className="cp-notice">{live.error}</p>}
-      {live?.loading&&<p role="status" className="cp-notice">{tr("正在读取中心…")}</p>}
-      <header className="cp-header">
-        <div>
-          <div className="cp-eyebrow">{tr("RSSD / 内容生产")}</div>
-          <h1>{tr("工作中心")}</h1>
-          <p>{tr("目标、生产与发布，在同一个视图中查看。")}</p>
-        </div>
-        <div className="cp-header-actions">
-          <details ref={scopeRef} className="cp-scope">
+        <nav className="cp-side-nav" aria-label={tr("中心功能")}>
+          {shownTabs.map(([id, label]) => (
+            <button
+              key={id}
+              aria-current={tab === id ? "page" : undefined}
+              onClick={() => changeTab(id)}
+            >
+              <NavigationIcon tab={id} />
+              {tr(label)}
+              {id === "demands" && <span>{demandCount("queued")}</span>}
+            </button>
+          ))}
+        </nav>
+        <div className="cp-side-foot">
+          {/* Narrowing by workspace is offered only on the tabs it changes. */}
+          <details ref={scopeRef} className="cp-scope" hidden={!scoped}>
             <summary>
               {scopeName}
               <span aria-hidden="true">⌄</span>
@@ -250,45 +250,16 @@ export default function CenterPreview({
               {live.execution.notes.length > 0 && <b>{live.execution.notes.length}</b>}
             </button>
           )}
-          {hasAssistant && (
-            <button className="cp-primary" onClick={() => changeTab("assistant")}>
-              <NavigationIcon tab="assistant" />
-              {tr("向助手下指令")}
+          <div className="cp-side-tools">
+            {live?.tools}
+            <button disabled={live?.loading} onClick={reset}>
+              {tr(live ? (live.loading ? "读取中…" : "刷新") : "重置预览")}
             </button>
-          )}
+          </div>
         </div>
-      </header>
-      <nav className="cp-tabs" aria-label={tr("中心功能")}>
-        {shownTabs.map(([id, label]) => (
-          <button
-            key={id}
-            aria-current={tab === id ? "page" : undefined}
-            onClick={() => changeTab(id)}
-          >
-            <NavigationIcon tab={id} />
-            {tr(label)}
-            {id === "demands" && (
-              <span>{demandCount("queued")}</span>
-            )}
-          </button>
-        ))}
-        <span className="cp-tab-context">{scopeName}</span>
-      </nav>
-      {/* The overview's own tiles carry the same numbers. */}
-      {tab !== "overview" && !ownPanel && (
-      <div className="cp-counts" role="group" aria-label={tr("任务数量")}>
-        {(["queued", "claimed", "blocked", "completed"] as const).map((id) => (
-          <button key={id} onClick={() => taskView(id)}>
-            {tr(demandLabels[id])}
-            <strong>{demandCount(id)}</strong>
-          </button>
-        ))}
-        <button onClick={() => taskView("all")}>
-          {tr("全部任务")}
-          <strong>{demandCount("all")}</strong>
-        </button>
-      </div>
-      )}
+      </aside>
+      <div className="cp-main">
+      {live?.error&&<p role="alert" className="cp-notice">{live.error}</p>}
       {live?.execution && live.execution.notes.length > 0 && tab !== "legacy" && (
         <p className="cp-notice cp-held" role="status">
           <span>{live.execution.notes.join(" ")}</span>
@@ -547,6 +518,7 @@ export default function CenterPreview({
           </form>
         </Drawer>
       )}
+      </div>
     </main>
   );
 }
