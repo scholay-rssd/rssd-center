@@ -52,7 +52,9 @@ synchronized.
 ## Style
 
 A quiet paper palette in light and dark, Inter Tight for interface text, thin
-separators and one muted green accent. Tokens are scoped to `.rssd-desktop`.
+separators and one muted green accent. The sidebar opens with the RSSD mark
+(`BrandMark`, the desktop client's letterforms, drawn in the text colour) beside
+the name, and the browser tab uses the app icon at `/rssd-ui/rssd-icon.svg`. Tokens are scoped to `.rssd-desktop`.
 The view's classes are `cp-*`; forms, lists and the editor of the Center's own
 screens use `ca-*` in `center-admin.css`. Light/dark is the `mode` cookie and a
 class on `<body>` (`mode.ts`), toggled from the top bar.

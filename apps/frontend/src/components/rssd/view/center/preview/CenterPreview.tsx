@@ -16,7 +16,7 @@ import type { LiveCenterActions } from "./live";
 import OverviewTab from "./OverviewTab";
 import { Drawer, Icon } from "./parts";
 import SampleAssistant, { type SampleTurn } from "./SampleAssistant";
-import { NavigationIcon, WorkspaceIcon } from "./PreviewIcons";
+import { BrandMark, NavigationIcon, WorkspaceIcon } from "./PreviewIcons";
 import "./preview.css";
 
 const tabs: Array<[PreviewTab, string]> = [
@@ -189,8 +189,11 @@ export default function CenterPreview({
     <main className="center-preview cp-shell">
       <aside className="cp-side">
         <div className="cp-side-brand">
-          {tr("RSSD 中心")}
-          {!live && <small>{tr("示例数据 · 操作仅在本页生效")}</small>}
+          <BrandMark />
+          <span>
+            {tr("RSSD 中心")}
+            {!live && <small>{tr("示例数据 · 操作仅在本页生效")}</small>}
+          </span>
         </div>
         <nav className="cp-side-nav" aria-label={tr("中心功能")}>
           {shownTabs.map(([id, label]) => (

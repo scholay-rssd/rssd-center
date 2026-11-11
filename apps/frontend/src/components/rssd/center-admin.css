@@ -67,3 +67,5 @@
 .rssd-desktop .center-preview-drawer .ca-actions{margin-top:16px}
 .rssd-desktop .center-preview-drawer .ca-providers{margin:10px 0 12px}
 .rssd-desktop .center-preview-drawer textarea{border:1px solid var(--cp-line);border-radius:6px;padding:8px 10px;background:var(--cp-surface);color:var(--ink);font:inherit;font-size:13px}
+/* Platform logos beside account names and on the connect buttons. */
+.rssd-desktop .ca-item strong img,.rssd-desktop .ca-providers button img{width:18px;height:18px;border-radius:4px;vertical-align:-4px;margin-right:7px;display:inline-block}

@@ -1546,10 +1546,17 @@
   background: var(--paper, #f6f3ec);
 }
 .cp-side-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
   padding: 2px 10px;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.cp-brand-mark {
+  flex: none;
 }
 .cp-side-brand small {
   display: block;
@@ -1650,6 +1657,10 @@
   }
   .cp-side-brand {
     padding: 0;
+  }
+  /* The mark already spells the name; the bar has no room for both. */
+  .cp-side-brand > span {
+    display: none;
   }
   .cp-side-foot {
     margin: 0 0 0 auto;

@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react';
 import { useFetch } from '@gitroom/helpers/utils/custom.fetch';
 import { Drawer } from './view/center/preview/parts';
+import { platformImage } from './view/center/preview/assets';
 import type { RssdApi } from './api';
 import './center-admin.css';
 
@@ -80,7 +81,7 @@ export function AccountsDrawer({ focusId, onClose, onChanged }: { focusId?: stri
       <p className="cp-muted">授权在各平台自己的登录页完成，完成后回到这里。账号连接后，还要添加为发布渠道才会接收作品。</p>
       {error && <p role="alert" className="cp-notice ca-error">{error}</p>}
       {!accounts ? <p className="cp-muted">正在读取…</p> : !accounts.length ? <p className="cp-muted">还没有连接任何社交账号。</p> : accounts.map(a => <article className={'ca-item' + (a.id === focusId ? ' ca-focus' : '')} key={a.id}>
-        <div><strong>{a.name}</strong><small>{a.identifier}{a.disabled ? ' · 已停用' : a.refreshNeeded ? ' · 需要重新授权' : a.inBetweenSteps ? ' · 授权未完成' : ' · 已连接'}</small></div>
+        <div><strong>{platformImage(a.identifier) && <img src={platformImage(a.identifier)} alt="" draggable={false} />}{a.name}</strong><small>{a.identifier}{a.disabled ? ' · 已停用' : a.refreshNeeded ? ' · 需要重新授权' : a.inBetweenSteps ? ' · 授权未完成' : ' · 已连接'}</small></div>
         <button disabled={busy} onClick={() => authorize(a.identifier, '?refresh=' + encodeURIComponent(a.internalId))}>重新授权</button>
         <button disabled={busy} onClick={() => toggle(a)}>{a.disabled ? '启用' : '停用'}</button>
       </article>)}
@@ -90,7 +91,7 @@ export function AccountsDrawer({ focusId, onClose, onChanged }: { focusId?: stri
         {fields.customFields.map((f: Row) => <label key={f.key}>{f.label}<input name={f.key} type={f.type === 'password' ? 'password' : 'text'} required defaultValue={f.defaultValue || ''} autoComplete="off" />{f.hint && <small>{f.hint}</small>}</label>)}
         <footer><button type="button" disabled={busy} onClick={() => setFields(null)}>返回</button><button className="cp-primary" disabled={busy}>连接</button></footer>
       </form> : !providers ? <p className="cp-muted">正在读取…</p> : <div className="ca-providers">
-        {providers.filter(simple).map(p => <button key={p.identifier} disabled={busy} title={p.toolTip || undefined} onClick={() => p.customFields ? setFields(p) : authorize(p.identifier)}>{p.name}</button>)}
+        {providers.filter(simple).map(p => <button key={p.identifier} disabled={busy} title={p.toolTip || undefined} onClick={() => p.customFields ? setFields(p) : authorize(p.identifier)}>{platformImage(p.identifier) && <img src={platformImage(p.identifier)} alt="" draggable={false} />}{p.name}</button>)}
       </div>}
       {providers && providers.some(p => !simple(p)) && <p className="ca-note">未列出：{providers.filter(p => !simple(p)).map(p => p.name).join('、')}。这些平台需要浏览器扩展或钱包签名，暂不能在这里连接。</p>}
     </div>

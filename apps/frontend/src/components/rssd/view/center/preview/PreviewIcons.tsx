@@ -87,3 +87,23 @@ export function NavigationIcon({ tab }: { tab: PreviewTab }) {
     />
   );
 }
+
+/** The RSSD mark, as the desktop client draws it: orthogonal letterforms in the text colour. */
+export function BrandMark({ size = 24 }: { size?: number }) {
+  return (
+    <svg
+      className="cp-brand-mark"
+      width={size}
+      height={size}
+      viewBox="8 12 112 104"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="7"
+      strokeLinecap="square"
+      strokeLinejoin="miter"
+      aria-hidden="true"
+    >
+      <path d="M16.5 108V20H30.5V108M16.5 64H30.5 M57.5 20H43.5V64H57.5V108H43.5 M84.5 20H70.5V64H84.5V108H70.5 M97.5 20H111.5V108H97.5Z" />
+    </svg>
+  );
+}
