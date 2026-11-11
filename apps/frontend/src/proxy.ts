@@ -176,10 +176,8 @@ export async function proxy(request: NextRequest) {
     }
     if (nextUrl.pathname === '/') {
       return NextResponse.redirect(
-        new URL(
-          !!process.env.IS_GENERAL ? '/launches' : `/analytics`,
-          nextUrl.href
-        )
+        // The work centre is this Center's home; the publishing tools are reached from it.
+        new URL('/rssd', nextUrl.href)
       );
     }
 

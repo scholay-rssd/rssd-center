@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { PreviewData, PreviewDemand } from "./model";
+import type { PreviewData, PreviewDemand, PreviewPublication } from "./model";
 
 /** What the scheduling view needs from a real Center; without it the view runs on sample data. */
 export interface LiveCenterActions {
@@ -11,7 +11,14 @@ export interface LiveCenterActions {
   /** Start this task on this machine. Absent where there is no local worker (the online Center). */
   claim?: (task: PreviewDemand) => Promise<void>;
   manage: (tab: string, workspaceId?: string) => void;
-  assistant: (workspaceIds:string[])=>ReactNode;
+  /** The assistant tab; absent where no assistant can run (the browser). */
+  assistant?: (workspaceIds:string[])=>ReactNode;
+  /** Shell controls shown at the right of the top bar. */
+  tools?: ReactNode;
+  /** Change when a queued publication goes out. */
+  schedule?: (item: PreviewPublication, scheduledAt: string) => Promise<void>;
+  /** Send a stopped publication again under its original identity. */
+  retry?: (item: PreviewPublication) => Promise<void>;
   calendarRange: (from:string,to:string)=>void;
   /** Works library and local execution, shown as a last tab; receives whether that tab is open. */
   legacy?: (shown:boolean)=>ReactNode;

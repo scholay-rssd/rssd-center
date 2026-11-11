@@ -16,6 +16,7 @@ export default function DemandsTab({
   changeTab,
   setMessage,
   setSelectedTask,
+  hasAssistant,
 }: {
   live?: LiveCenterActions;
   /** The rows to list: already narrowed by workspace, state and search. */
@@ -27,6 +28,7 @@ export default function DemandsTab({
   setSearch: (text: string) => void;
   term: string;
   demandCount: (state: string) => number;
+  hasAssistant: boolean;
   changeTab: (tab: PreviewTab) => void;
   setMessage: (text: string) => void;
   setSelectedTask: (id: string) => void;
@@ -38,16 +40,18 @@ export default function DemandsTab({
           <h2>{tr("需求池")}</h2>
           <p>{tr("每条需求包含初始写法，认领后按原要求执行。")}</p>
         </div>
-        <button
-          className="cp-primary"
-          onClick={() => {
-            changeTab("assistant");
-            setMessage(tr("根据当前目标，检查需求缺口并准备新的选题。"));
-          }}
-        >
-          {tr("让助手补充选题")}
-          <Icon kind="plus" />
-        </button>
+        {hasAssistant && (
+          <button
+            className="cp-primary"
+            onClick={() => {
+              changeTab("assistant");
+              setMessage(tr("根据当前目标，检查需求缺口并准备新的选题。"));
+            }}
+          >
+            {tr("让助手补充选题")}
+            <Icon kind="plus" />
+          </button>
+        )}
       </div>
       <div className="cp-filter-row">
         <div
