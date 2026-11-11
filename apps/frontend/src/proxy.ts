@@ -174,6 +174,17 @@ export async function proxy(request: NextRequest) {
       }
       return redirect;
     }
+    // After a platform's sign-in the application returns to its own calendar;
+    // the work centre is the interface, so the return lands on its channels.
+    if (nextUrl.pathname === '/launches' && nextUrl.searchParams.has('added')) {
+      const target = new URL('/rssd', nextUrl.href);
+      target.searchParams.set('view', 'channels');
+      for (const key of ['added', 'continue', 'msg']) {
+        const value = nextUrl.searchParams.get(key);
+        if (value) target.searchParams.set(key, value);
+      }
+      return NextResponse.redirect(target);
+    }
     if (nextUrl.pathname === '/') {
       return NextResponse.redirect(
         // The work centre is this Center's home; the publishing tools are reached from it.

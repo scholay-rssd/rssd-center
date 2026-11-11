@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { PreviewData, PreviewDemand, PreviewPublication } from "./model";
+import type { PreviewData, PreviewDemand, PreviewDestination, PreviewPublication } from "./model";
 
 /** What the scheduling view needs from a real Center; without it the view runs on sample data. */
 export interface LiveCenterActions {
@@ -15,6 +15,20 @@ export interface LiveCenterActions {
   assistant?: (workspaceIds:string[])=>ReactNode;
   /** Shell controls shown at the right of the top bar. */
   tools?: ReactNode;
+  /** The works library and editor tab; receives whether it is open and stays mounted. */
+  works?: (shown:boolean)=>ReactNode;
+  /** The settings tab; receives whether it is open and stays mounted. */
+  settings?: (shown:boolean)=>ReactNode;
+  /** Drawers the Center opens itself; drawn inside the view so they share its palette. */
+  overlays?: ReactNode;
+  /** Open the form that adds a task to the pool. */
+  newDemand?: () => void;
+  /** Give a claimed or stopped task back to the pool. */
+  releaseDemand?: (task: PreviewDemand) => Promise<void>;
+  /** Actions shown beside the channel filters. */
+  channelTools?: ReactNode;
+  /** Open the configuration of one channel. */
+  manageChannel?: (destination: PreviewDestination) => void;
   /** Change when a queued publication goes out. */
   schedule?: (item: PreviewPublication, scheduledAt: string) => Promise<void>;
   /** Send a stopped publication again under its original identity. */
