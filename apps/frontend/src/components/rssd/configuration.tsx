@@ -8,7 +8,7 @@ export function WorkspacePolicy({workspace,api,onSaved}:{workspace:Row;api:Api;o
   useEffect(()=>{setDraft(structuredClone(workspace));},[workspace]);
   useEffect(()=>{api('/destinations').then(setDestinations).catch(e=>setError(e.message));},[api]);
   const update=(index:number,key:string,value:unknown)=>setDraft(old=>({...old,sections:old.sections.map((s:Row,i:number)=>i===index?{...s,policy:{...s.policy,[key]:value}}:s)}));
-  return <form className="rssd-form" onSubmit={event=>{event.preventDefault();setBusy(true);setError('');setNotice('');
+  return <form className="ca-form ca-wide" onSubmit={event=>{event.preventDefault();setBusy(true);setError('');setNotice('');
     const next={...draft,sections:draft.sections.map((s:Row)=>({...s,policy:{...s.policy,version:s.policy.version+1}}))};
     api('/workspaces','POST',{workspace:next,baseRevision:workspace.revision}).then(async()=>{await onSaved();setNotice('栏目规则已保存，已认领的任务继续使用认领时的规则。');}).catch(e=>setError(e.message)).finally(()=>setBusy(false));}}>
     <h2>{workspace.name} · 栏目规则</h2><p>只选择本栏目需要发布的渠道。中文和英文分别配置。</p>
@@ -18,7 +18,7 @@ export function WorkspacePolicy({workspace,api,onSaved}:{workspace:Row;api:Api;o
       <label>品牌网址<input type="url" value={section.policy.brand?.url||''} onChange={e=>update(index,'brand',{...section.policy.brand,url:e.target.value})}/></label>
       {destinations.filter(d=>d.workspaceIds.includes(workspace.id)).map(d=><div key={d.id}><strong>{d.name}{!d.enabled?'（已停用）':''}</strong>{['zh-CN','en'].map(locale=>{
         const checked=section.policy.targets.some((t:Row)=>t.destinationId===d.id&&t.locale===locale);
-        return <label className="rssd-checkbox" key={locale}><input type="checkbox" checked={checked} onChange={e=>update(index,'targets',e.target.checked?[...section.policy.targets,{destinationId:d.id,locale}]:section.policy.targets.filter((t:Row)=>!(t.destinationId===d.id&&t.locale===locale)))}/>{locale==='en'?'英文':'中文'}</label>;
+        return <label className="ca-check" key={locale}><input type="checkbox" checked={checked} onChange={e=>update(index,'targets',e.target.checked?[...section.policy.targets,{destinationId:d.id,locale}]:section.policy.targets.filter((t:Row)=>!(t.destinationId===d.id&&t.locale===locale)))}/>{locale==='en'?'英文':'中文'}</label>;
       })}</div>)}
     </fieldset>)}
     <fieldset><legend>添加栏目</legend><label>栏目名称<input name="newSectionName"/></label><label>栏目标识<input name="newSectionId" pattern="[a-zA-Z0-9][a-zA-Z0-9._:-]*"/></label>
@@ -27,31 +27,6 @@ export function WorkspacePolicy({workspace,api,onSaved}:{workspace:Row;api:Api;o
         setDraft(old=>({...old,sections:[...old.sections,{id,name,policy:{version:0,instructions:'',brand:{},targets:[]}}]}));
         (form.elements.namedItem('newSectionId') as HTMLInputElement).value='';(form.elements.namedItem('newSectionName') as HTMLInputElement).value='';}}>加入栏目</button>
     </fieldset>
-    {error&&<p role="alert" className="rssd-error">{error}</p>}{notice&&<p role="status">{notice}</p>}<button className="rssd-primary" disabled={busy}>保存栏目规则</button>
+    {error&&<p role="alert" className="cp-notice ca-error">{error}</p>}{notice&&<p role="status">{notice}</p>}<button className="cp-primary" disabled={busy}>保存栏目规则</button>
   </form>;
-}
-
-export function DestinationSettings({workspaces,api}:{workspaces:Row[];api:Api}){
-  const [rows,setRows]=useState<Row[]>([]),[channels,setChannels]=useState<Row[]>([]),[selected,setSelected]=useState<Row|null>(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[notice,setNotice]=useState('');
-  const refresh=()=>api('/destinations').then(setRows);
-  useEffect(()=>{refresh().catch(e=>setError(e.message));api('/channels').then(setChannels).catch(e=>setError(e.message));},[api]);
-  return <div><div className="rssd-toolbar"><p>每个渠道接收的内容范围由栏目规则决定。</p><button onClick={()=>{setSelected({id:'',kind:'site',workspaceIds:[],config:{}});setNotice('');}}>添加发布渠道</button></div>
-    {error&&<p role="alert" className="rssd-error">{error}</p>}{notice&&<p role="status" className="rssd-message">{notice}</p>}
-    {selected&&<form className="rssd-form" key={selected.id||selected.kind} autoComplete="off" onSubmit={event=>{event.preventDefault();const v=new FormData(event.currentTarget);setBusy(true);setError('');
-      api('/destinations','POST',{id:v.get('id'),name:v.get('name'),kind:selected.kind,workspaceIds:v.getAll('workspaces'),config:selected.kind==='postiz'?{integrationId:selected.config.integrationId||v.get('integrationId')}:{origin:v.get('origin'),...(selected.kind==='discourse'?{username:v.get('username'),categoryId:Number(v.get('categoryId'))}:{siteId:v.get('siteId')})},token:v.get('token')||undefined,enabled:v.get('enabled')==='on'})
-        .then(async()=>{await refresh();setSelected(null);setNotice('渠道连接已保存。请在工作空间的栏目规则中选择发布语言与目的地。');}).catch(e=>setError(e.message)).finally(()=>setBusy(false));}}>
-      <h2>{selected.id?'编辑发布渠道':'添加发布渠道'}</h2>
-      <label>渠道类型<select disabled={Boolean(selected.id)} value={selected.kind} onChange={e=>setSelected({...selected,kind:e.target.value,config:{}})}><option value="site">自家站点</option><option value="discourse">Discourse 论坛</option><option value="postiz">已授权的社交平台</option></select></label>
-      <label>连接名称<input name="name" required defaultValue={selected.name}/></label>
-      <label>连接标识<input name="id" required readOnly={Boolean(selected.id)} defaultValue={selected.id}/></label>
-      {selected.kind==='postiz'?<label>已授权账号<select name="integrationId" required disabled={Boolean(selected.id)} defaultValue={selected.config.integrationId||''}><option value="">选择账号</option>{channels.map(c=><option key={c.id} value={c.id}>{c.name} · {c.providerIdentifier}{c.disabled?'（停用）':c.refreshNeeded?'（需要重新授权）':''}</option>)}</select></label>:<><label>站点网址<input type="url" name="origin" required readOnly={Boolean(selected.id)} defaultValue={selected.config.origin}/></label>
-      {selected.kind==='site'?<label>站点标识<input name="siteId" required readOnly={Boolean(selected.id)} defaultValue={selected.config.siteId}/></label>:<><label>论坛发布用户名<input name="username" required readOnly={Boolean(selected.id)} defaultValue={selected.config.username}/></label><label>论坛分类编号<input type="number" min="1" name="categoryId" required readOnly={Boolean(selected.id)} defaultValue={selected.config.categoryId}/></label></>}
-      <label>{selected.kind==='discourse'?'论坛 API Key':'站点接收凭据'}<input type="password" name="token" required={!selected.hasCredential} placeholder={selected.hasCredential?'留空保留已有凭据':''} autoComplete="new-password"/></label></>}
-      <fieldset><legend>允许发布的工作空间</legend>{workspaces.map(w=><label className="rssd-checkbox" key={w.id}><input type="checkbox" name="workspaces" value={w.id} defaultChecked={selected.workspaceIds.includes(w.id)}/>{w.name}</label>)}</fieldset>
-      <label className="rssd-checkbox"><input type="checkbox" name="enabled" defaultChecked={selected.enabled}/>启用此渠道的内容发布</label>
-      <div className="rssd-form-actions"><button type="button" onClick={()=>setSelected(null)}>取消</button><button className="rssd-primary" disabled={busy}>保存连接</button></div>
-    </form>}
-    <div className="rssd-list">{rows.map(row=><article className="rssd-row" key={row.id}><div><h2>{row.name}</h2><p>{row.kind==='postiz'?channels.find(c=>c.id===row.config.integrationId)?.name||'原授权账号':row.config.origin}</p></div><span>{row.enabled?'已启用':'已停用'}</span><button onClick={()=>setSelected(row)}>编辑</button></article>)}</div>
-    <p className="rssd-footer">社交平台继续使用渠道页面的现有授权。此处选择账号后，还需在栏目规则中指定发布范围。</p>
-  </div>;
 }

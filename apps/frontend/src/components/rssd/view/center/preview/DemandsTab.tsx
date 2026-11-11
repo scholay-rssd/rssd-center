@@ -17,7 +17,10 @@ export default function DemandsTab({
   setMessage,
   setSelectedTask,
   hasAssistant,
+  onNew,
 }: {
+  /** Opens the form that adds a task; absent in the sample preview. */
+  onNew?: () => void;
   live?: LiveCenterActions;
   /** The rows to list: already narrowed by workspace, state and search. */
   filteredDemands: PreviewDemand[];
@@ -40,6 +43,12 @@ export default function DemandsTab({
           <h2>{tr("需求池")}</h2>
           <p>{tr("每条需求包含初始写法，认领后按原要求执行。")}</p>
         </div>
+        {onNew && (
+          <button className="cp-primary" onClick={onNew}>
+            {tr("新建需求")}
+            <Icon kind="plus" />
+          </button>
+        )}
         {hasAssistant && (
           <button
             className="cp-primary"

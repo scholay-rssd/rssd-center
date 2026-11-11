@@ -16,6 +16,7 @@ export function TaskDetail({
   onClose,
   onUpdate,
   onClaim,
+  onRelease,
   liveMode=false,
 }: {
   liveMode?: boolean;
@@ -25,6 +26,8 @@ export function TaskDetail({
   onUpdate: (task: PreviewDemand) => void;
   /** Absent where tasks cannot be started from this screen. */
   onClaim?: () => void;
+  /** Present for a claimed or stopped task that can be returned to the pool. */
+  onRelease?: () => void;
 }) {
   const [priority, setPriority] = useState(task.priority),
     [due, setDue] = useState(task.due);
@@ -114,6 +117,11 @@ export function TaskDetail({
             </label>
           </div>
           <footer>
+            {onRelease && (
+              <button type="button" onClick={onRelease}>
+                {tr("释放认领")}
+              </button>
+            )}
             {onClaim && (
               <button type="button" disabled={!editable} onClick={onClaim}>
                 {tr(liveMode?"本机认领并执行":"模拟认领")}
@@ -192,7 +200,7 @@ export function PublicationDetail({
         <p className="cp-muted">
           {record
             ? record.source === "postiz"
-              ? tr("这是发布工具中的原生帖子，内容和时间在其编辑器中修改。")
+              ? tr("这条帖子不是由作品生成的，这里只显示它的时间和状态。")
               : record.canSchedule
                 ? tr("成品已在中心排队。调整时间不会创建新的发布请求。")
                 : item.state === "blocked"
@@ -256,7 +264,7 @@ export function PublicationDetail({
             </footer>
           </form>
         )}
-        {record && (record.url || record.source === "postiz" || (record.canRetry && onRetry)) && (
+        {record && (record.url || (record.canRetry && onRetry)) && (
           <div className="cp-detail-actions">
             {record.canRetry && onRetry && (
               <button disabled={busy} onClick={() => run(onRetry)}>
@@ -267,9 +275,6 @@ export function PublicationDetail({
               <a href={record.url} target="_blank" rel="noreferrer">
                 {tr("查看成品")} ↗
               </a>
-            )}
-            {record.source === "postiz" && (
-              <a href="/launches">{tr("在发布工具中打开")} ↗</a>
             )}
           </div>
         )}

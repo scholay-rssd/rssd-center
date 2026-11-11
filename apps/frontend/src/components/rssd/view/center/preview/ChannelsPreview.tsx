@@ -1,5 +1,5 @@
 import { tr } from "../../uiText";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { DestinationIcon } from "./PreviewIcons";
 import AppIcon from "../../components/Icon";
 import type {
@@ -15,8 +15,11 @@ export default function ChannelsPreview({
   publications,
   onManage,
   onCalendar,
+  tools,
 }: {
   liveMode?:boolean;
+  /** Channel actions of a real Center; replaces the note that management happens elsewhere. */
+  tools?: ReactNode;
   spaces: PreviewSpace[];
   destinations: PreviewDestination[];
   publications: PreviewPublication[];
@@ -64,9 +67,13 @@ export default function ChannelsPreview({
             </button>
           ))}
         </div>
-        <span className="cp-muted">
-          {tr("管理操作在浏览器中的线上中心完成")}
-        </span>
+        {tools ? (
+          <div className="cp-channel-tools">{tools}</div>
+        ) : (
+          <span className="cp-muted">
+            {tr("管理操作在浏览器中的线上中心完成")}
+          </span>
+        )}
       </div>
       <div className="cp-table-wrap">
         <table className="cp-channels-table">
@@ -147,7 +154,7 @@ export default function ChannelsPreview({
                     onClick={() => onManage(d)}
                   >
                     <AppIcon name="settings" size={14} />
-                    {tr("管理入口 ↗")}
+                    {tr(tools ? "管理" : "管理入口 ↗")}
                   </button>
                 </td>
               </tr>

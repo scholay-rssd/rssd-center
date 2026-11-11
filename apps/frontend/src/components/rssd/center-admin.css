@@ -1,0 +1,69 @@
+/* Forms, lists and the editor of the work centre's own screens (works, settings,
+   channel and planning drawers). Colours and type come from the view's tokens. */
+.rssd-desktop .ca-panel{padding-top:26px}
+.rssd-desktop .ca-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:0 0 18px}
+.rssd-desktop .ca-grow{flex:1;min-width:0}
+.rssd-desktop .ca-inline{display:inline-flex;align-items:center;gap:10px;font-size:12px;color:var(--muted)}
+.rssd-desktop .ca-form{display:grid;gap:16px}
+.rssd-desktop .ca-wide{max-width:760px;padding-bottom:28px}
+.rssd-desktop .ca-form h2{font-size:18px;font-weight:600;margin:0}
+.rssd-desktop .ca-form h3{font-size:14px;font-weight:600;margin:0}
+.rssd-desktop .ca-form label:not(.ca-check){display:flex;flex-direction:column;gap:7px;font-size:12px;color:var(--muted)}
+.rssd-desktop .ca-form :is(input,select,textarea){font-size:13px;color:var(--ink);border:1px solid var(--cp-line);border-radius:6px;padding:8px 10px;background:var(--cp-surface)}
+.rssd-desktop .ca-form textarea{resize:vertical;line-height:1.6}
+.rssd-desktop .ca-form :is(input,select,textarea):disabled{opacity:.6}
+.rssd-desktop .ca-form fieldset{display:grid;gap:12px;border:1px solid var(--cp-line);border-radius:8px;padding:14px 16px;margin:0}
+.rssd-desktop .ca-form legend{font-size:12px;color:var(--muted);padding:0 6px}
+.rssd-desktop .ca-form p{font-size:12.5px;line-height:1.7;color:var(--ink-2,var(--ink));margin:0}
+.rssd-desktop .ca-form small{font-size:11.5px;color:var(--muted)}
+.rssd-desktop .ca-check{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink)}
+.rssd-desktop .ca-check input{width:15px;height:15px;padding:0;accent-color:var(--cp-accent)}
+.rssd-desktop .ca-actions{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:10px}
+.rssd-desktop .ca-pager{margin-top:16px;font-size:12px;color:var(--muted)}
+.rssd-desktop .ca-card{border:1px solid var(--cp-line);border-radius:8px;padding:16px 18px;margin:0 0 18px;max-width:560px;font-size:13px}
+.rssd-desktop .ca-card summary{cursor:pointer;color:var(--muted)}
+.rssd-desktop .ca-note{font-size:12px;line-height:1.7;color:var(--muted)}
+.rssd-desktop .ca-error{color:var(--danger)}
+.rssd-desktop .ca-stack{display:grid;gap:8px;align-items:start;justify-items:start}
+.rssd-desktop .ca-stack textarea{width:100%}
+.rssd-desktop .ca-list{display:grid}
+.rssd-desktop .ca-item{display:flex;align-items:center;gap:12px;padding:13px 0;border-bottom:1px solid var(--cp-line);font-size:13px}
+.rssd-desktop .ca-item>div:first-child{flex:1;min-width:0;display:grid;gap:4px}
+.rssd-desktop .ca-item :is(h2,h3){font-size:13.5px;font-weight:600;margin:0}
+.rssd-desktop .ca-item :is(small,p,time){font-size:12px;color:var(--muted);line-height:1.6;margin:0;overflow-wrap:anywhere}
+.rssd-desktop .ca-item.ca-focus{background:var(--cp-soft)}
+.rssd-desktop .ca-row-actions{display:inline-flex;gap:12px}
+.rssd-desktop .cp-demands-table td>strong{display:block;font-weight:600}
+.rssd-desktop .ca-facts{max-width:520px;margin:0 0 20px}
+.rssd-desktop .ca-providers{display:flex;flex-wrap:wrap;gap:8px}
+.rssd-desktop .cp-channel-tools{display:flex;gap:8px}
+/* The language editor. */
+.rssd-desktop .ca-editor{display:grid;gap:14px;padding-bottom:30px}
+.rssd-desktop .ca-editor .ca-toolbar{margin:0}
+.rssd-desktop .ca-title{width:100%;border:0!important;border-bottom:1px solid var(--cp-line)!important;border-radius:0!important;background:transparent!important;font-size:24px;font-weight:600;padding:12px 0!important;color:var(--ink)}
+.rssd-desktop .ca-editor .w-md-editor{box-shadow:none;border:1px solid var(--cp-line);background:var(--cp-surface);color:var(--ink)}
+.rssd-desktop .ca-editor .w-md-editor-toolbar{background:transparent;border-bottom:1px solid var(--cp-line)}
+.rssd-desktop details.ca-form>summary{cursor:pointer;font-size:13px;color:var(--muted)}
+@media(max-width:760px){.rssd-desktop .ca-item{flex-wrap:wrap}.rssd-desktop .ca-title{font-size:20px}}
+/* The device authorization page. */
+.rssd-desktop .ca-authorize{max-width:820px}
+.rssd-desktop .ca-authorize .ca-card{max-width:760px}
+.rssd-desktop .ca-scopes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media(max-width:600px){.rssd-desktop .ca-scopes{grid-template-columns:1fr}}
+/* A result reported after a drawer has closed. */
+.rssd-desktop .ca-toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:5;margin:0;background:var(--panel-2);box-shadow:var(--shadow-pop);max-width:min(560px,92vw)}
+/* The Markdown editor draws its text on a layer beneath a transparent textarea,
+   so the view's input styling must not reach that textarea. Its palette follows the page. */
+.rssd-desktop .w-md-editor,.rssd-desktop .wmde-markdown{--color-fg-default:var(--ink);--color-fg-muted:var(--muted);--color-canvas-default:var(--cp-surface);--color-canvas-subtle:var(--panel);--color-border-default:var(--cp-line);--color-border-muted:var(--cp-line);--color-accent-fg:var(--cp-accent);--color-neutral-muted:var(--cp-soft)}
+.rssd-desktop .w-md-editor .w-md-editor-text-input{border:0;border-radius:0;padding:inherit;background:transparent}
+.rssd-desktop .w-md-editor-toolbar button{border:0;padding:4px 5px}
+.rssd-desktop .wmde-markdown{background:transparent;font-size:14px}
+.rssd-desktop .ca-form article{display:grid;gap:6px;padding-top:14px;border-top:1px solid var(--cp-line)}
+.rssd-desktop .ca-form article time{font-size:11.5px;color:var(--muted)}
+/* Inside drawers the view stacks every label; a checkbox row stays a row. */
+.rssd-desktop .cp-detail-form label.ca-check{flex-direction:row;align-items:center;justify-content:flex-start;gap:8px;font-size:13px;color:var(--ink)}
+.rssd-desktop .cp-detail-form label.ca-check input{width:15px;height:15px;flex:none;padding:0}
+.rssd-desktop .center-preview-drawer .cp-detail-body>h3{margin-top:24px}
+.rssd-desktop .center-preview-drawer .ca-actions{margin-top:16px}
+.rssd-desktop .center-preview-drawer .ca-providers{margin:10px 0 12px}
+.rssd-desktop .center-preview-drawer textarea{border:1px solid var(--cp-line);border-radius:6px;padding:8px 10px;background:var(--cp-surface);color:var(--ink);font:inherit;font-size:13px}

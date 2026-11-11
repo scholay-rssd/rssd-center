@@ -3,12 +3,11 @@ import {randomUUID} from 'node:crypto';
 import {render,screen,fireEvent,waitFor,cleanup} from '@testing-library/react';
 import {RssdCenter} from '../apps/frontend/src/components/rssd/live-center';
 
-const mockFetch=jest.fn(),mockPush=jest.fn();
+const mockFetch=jest.fn();
 jest.mock('@gitroom/helpers/utils/custom.fetch',()=>({useFetch:()=>mockFetch}));
 jest.mock('@gitroom/frontend/components/layout/user.context',()=>({useUser:()=>({orgId:'fixture'})}));
-jest.mock('next/navigation',()=>({useRouter:()=>({push:mockPush})}));
 jest.mock('next/dynamic',()=>()=>()=>null);
-jest.mock('../apps/frontend/src/components/rssd/configuration',()=>({WorkspacePolicy:()=>null,DestinationSettings:()=>null}));
+jest.mock('../apps/frontend/src/components/rssd/configuration',()=>({WorkspacePolicy:()=>null}));
 jest.mock('../apps/frontend/src/components/rssd/platform-content',()=>({PlatformContent:()=>null}));
 
 const response=(value:unknown,ok=true)=>({ok,status:ok?200:500,json:async()=>value});
@@ -23,7 +22,7 @@ const center=(path:string)=>{
   if(path.endsWith('/registry'))return response({workspaces:[workspace]});
   return response([]);
 };
-beforeEach(()=>{mockFetch.mockReset();mockPush.mockReset();localStorage.clear();sessionStorage.clear();Object.defineProperty(crypto,'randomUUID',{value:randomUUID,configurable:true});});
+beforeEach(()=>{mockFetch.mockReset();localStorage.clear();sessionStorage.clear();Object.defineProperty(crypto,'randomUUID',{value:randomUUID,configurable:true});});
 afterEach(cleanup);
 
 test('the work-centre view shows Center data and saves a task edit once across a lost response',async()=>{
@@ -47,28 +46,61 @@ test('the work-centre view shows Center data and saves a task edit once across a
   expect(edits[0].path).toBe('/rssd/v1/demands/d1/definition');
   expect(edits[0].body.baseGeneration).toBe(3);expect(edits[0].body.changes.priority).toBe(10);
   expect(edits[0].body.changes.dueAt).toBe(demand.payload.dueAt);
-  // The management screens are not loaded until they are opened.
-  expect(mockFetch.mock.calls.some(([path])=>String(path).endsWith('/registry'))).toBe(false);
+  // The works library and settings are not loaded until they are opened.
+  expect(mockFetch.mock.calls.some(([path])=>/\/works\?|\/workers$/.test(String(path)))).toBe(false);
 });
 
-test('an existing management link opens that screen inside the new page',async()=>{
+test('earlier links open their screen in the one interface',async()=>{
   mockFetch.mockImplementation(async(path:string)=>path==='/rssd/v1/workers'?response([{id:'w1',name:'Fixture device',workspaceIds:['one'],state:'idle'}]):center(path));
   render(<RssdCenter initialTab="workers" initialWorkspace="one"/>);
   await screen.findByText('Fixture device');
-  expect(screen.getByRole('button',{name:'作品与管理'}).getAttribute('aria-current')).toBe('page');
-  expect(screen.getByRole('button',{name:'执行设备'}).getAttribute('aria-current')).toBe('page');
-  // What the view already shows is not repeated among the embedded screens.
-  for(const name of ['总览','统一日历','发布记录'])expect(screen.queryByRole('button',{name})).toBeNull();
+  expect(screen.getByRole('button',{name:'设置'}).getAttribute('aria-current')).toBe('page');
+  expect(screen.getByRole('button',{name:'执行设备'}).getAttribute('aria-pressed')).toBe('true');
+  // One set of tabs, one title, and nothing that leads to another interface.
+  expect(screen.getAllByRole('navigation')).toHaveLength(1);
   expect(screen.getAllByRole('heading',{name:'工作中心'})).toHaveLength(1);
+  for(const name of ['作品与管理','中心助手','统一日历','发布记录'])expect(screen.queryByRole('button',{name:new RegExp(name)})).toBeNull();
+  expect(document.querySelector('a[href="/launches"],a[href="/media"],a[href="/analytics"],a[href="/settings"]')).toBeNull();
+  cleanup();
+  render(<RssdCenter initialTab="works"/>);
+  expect(screen.getByRole('button',{name:'作品库'}).getAttribute('aria-current')).toBe('page');
 });
 
-test('goals are reached from the overview, and no assistant is offered in the browser',async()=>{
-  mockFetch.mockImplementation(async(path:string)=>center(path));
+test('a goal is saved from the overview once across a lost response',async()=>{
+  const writes:any[]=[];
+  mockFetch.mockImplementation(async(path:string,options:any)=>{
+    if(options?.method==='POST'){writes.push({path,body:JSON.parse(options.body)});return writes.length===1?response({message:'Response lost'},false):response({});}
+    return center(path);
+  });
   render(<RssdCenter/>);
-  expect(screen.queryByRole('button',{name:/中心助手/})).toBeNull();
-  expect(screen.queryByRole('button',{name:/向助手下指令/})).toBeNull();
   fireEvent.click(await screen.findByRole('button',{name:/维护生产目标/}));
-  await waitFor(()=>expect(mockPush).toHaveBeenCalledWith('/rssd?tab=goals'));
+  await screen.findByRole('dialog',{name:'生产目标'});
+  fireEvent.click(screen.getByRole('button',{name:'新增生产目标'}));
+  fireEvent.change(screen.getByLabelText('栏目标识'),{target:{value:'methods'}});
+  fireEvent.change(screen.getByLabelText('选题方向'),{target:{value:'Weekly methods'}});
+  fireEvent.change(screen.getByLabelText('交稿目标'),{target:{value:'3'}});
+  fireEvent.click(screen.getByRole('button',{name:'保存目标'}));
+  expect((await screen.findByRole('alert')).textContent).toContain('Response lost');
+  fireEvent.click(screen.getByRole('button',{name:'保存目标'}));
+  await screen.findByText(/目标已保存/);
+  expect(writes).toHaveLength(2);expect(writes[0]).toEqual(writes[1]);
+  expect(writes[0].path).toBe('/rssd/v1/goals');
+  expect(writes[0].body.id).toBe('goal:one:methods');expect(writes[0].body.goal.target).toBe(3);expect(writes[0].body.goal.enabled).toBe(false);
+});
+
+test('a task is added to the pool from the task list',async()=>{
+  const writes:any[]=[];
+  mockFetch.mockImplementation(async(path:string,options:any)=>{
+    if(options?.method==='POST'){writes.push({path,body:JSON.parse(options.body)});return response({status:'created'});}
+    return center(path);
+  });
+  render(<RssdCenter initialView="demands"/>);
+  fireEvent.click(await screen.findByRole('button',{name:/新建需求/}));
+  await screen.findByRole('dialog',{name:'新建需求'});
+  fireEvent.change(screen.getByLabelText('选题'),{target:{value:'A new topic'}});
+  fireEvent.click(screen.getByRole('button',{name:'加入需求池'}));
+  await screen.findByText('需求已加入需求池');
+  expect(writes).toEqual([{path:'/rssd/v1/demands',body:{workspaceId:'one',sectionId:'methods',kind:'write',title:'A new topic',brief:'',requiredLocales:['zh-CN','en']}}]);
 });
 
 test('a schedule is changed in the calendar drawer once across a lost response, and the old calendar link opens it',async()=>{
@@ -77,7 +109,7 @@ test('a schedule is changed in the calendar drawer once across a lost response, 
     if(options?.method==='POST'){writes.push({path,body:JSON.parse(options.body)});return writes.length===1?response({message:'Response lost'},false):response({id:'p1'});}
     return center(path);
   });
-  render(<RssdCenter initialTab="calendar"/>);
+  render(<RssdCenter initialTab="publications"/>);
   expect(screen.getByRole('button',{name:/发布日历/}).getAttribute('aria-current')).toBe('page');
   fireEvent.click(await screen.findByRole('button',{name:/Fixture publication/}));
   fireEvent.change(screen.getByLabelText('日期'),{target:{value:'2026-12-01'}});

@@ -2,9 +2,11 @@
 export type PreviewTab =
   | "overview"
   | "demands"
+  | "works"
   | "calendar"
   | "channels"
   | "assistant"
+  | "settings"
   | "legacy";
 export type DemandState = "queued" | "claimed" | "completed" | "blocked";
 export interface PreviewSpace {
@@ -72,6 +74,8 @@ export interface PreviewDestination {
   auth: string;
   state: "connected" | "needs_attention" | "not_connected";
   workspaceIds: string[];
+  /** What a real entry stands for at the Center: a configured destination, or an authorized account not yet used by one. */
+  record?: { destinationId?: string; integrationId?: string };
 }
 export const demandLabels: Record<DemandState, string> = {
   queued: "待领取",

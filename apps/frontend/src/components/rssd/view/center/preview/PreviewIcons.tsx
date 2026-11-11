@@ -79,7 +79,9 @@ export function NavigationIcon({ tab }: { tab: PreviewTab }) {
           channels: "send",
           assistant: "sparkle",
           legacy: "folder",
-        }[tab] as "grid" | "inbox" | "send" | "sparkle" | "folder"
+          works: "file",
+          settings: "settings",
+        }[tab] as "grid" | "inbox" | "send" | "sparkle" | "folder" | "file" | "settings"
       }
       size={18}
     />

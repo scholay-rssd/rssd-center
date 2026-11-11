@@ -83,6 +83,18 @@ export default function CenterPreview({
   useEffect(()=>{if(!live)return;setData(live.data);setScope(old=>{const ids=live.data.spaces.map(s=>s.id);if(!liveLoaded.current&&ids.length){liveLoaded.current=true;return ids;}return old.filter(id=>ids.includes(id));});},[live?.data]);
   useEffect(()=>{if(live&&targetSpace){live.manage('goals',targetSpace);setTargetSpace(null);}},[targetSpace,live]);
   const hasAssistant = !live || Boolean(live.assistant);
+  const shownTabs: Array<[PreviewTab, string]> = [
+    tabs[0],
+    tabs[1],
+    ...(live?.works ? [["works", "作品库"] as [PreviewTab, string]] : []),
+    tabs[2],
+    tabs[3],
+    ...(hasAssistant ? [tabs[4]] : []),
+    ...(live?.settings ? [["settings", "设置"] as [PreviewTab, string]] : []),
+    ...(live?.legacy ? [[legacyTab[0], live.legacyLabel || legacyTab[1]] as [PreviewTab, string]] : []),
+  ];
+  // Task counts belong to the scheduling tabs, not to the library or settings.
+  const ownPanel = tab === "works" || tab === "settings";
   const scopeName =
     scope.length === data.spaces.length
       ? tr("全部工作空间")
@@ -247,7 +259,7 @@ export default function CenterPreview({
         </div>
       </header>
       <nav className="cp-tabs" aria-label={tr("中心功能")}>
-        {(live?.legacy ? [...tabs, [legacyTab[0], live.legacyLabel || legacyTab[1]] as [PreviewTab, string]] : tabs).filter(([id]) => id !== "assistant" || hasAssistant).map(([id, label]) => (
+        {shownTabs.map(([id, label]) => (
           <button
             key={id}
             aria-current={tab === id ? "page" : undefined}
@@ -263,7 +275,7 @@ export default function CenterPreview({
         <span className="cp-tab-context">{scopeName}</span>
       </nav>
       {/* The overview's own tiles carry the same numbers. */}
-      {tab !== "overview" && (
+      {tab !== "overview" && !ownPanel && (
       <div className="cp-counts" role="group" aria-label={tr("任务数量")}>
         {(["queued", "claimed", "blocked", "completed"] as const).map((id) => (
           <button key={id} onClick={() => taskView(id)}>
@@ -295,6 +307,12 @@ export default function CenterPreview({
         // Stays mounted so an open manuscript survives a visit to another tab.
         <div hidden={tab !== "legacy"}>{live.legacy(tab === "legacy")}</div>
       )}
+      {live?.works && (
+        <div hidden={tab !== "works"}>{live.works(tab === "works")}</div>
+      )}
+      {live?.settings && (
+        <div hidden={tab !== "settings"}>{live.settings(tab === "settings")}</div>
+      )}
       <div className="cp-content" key={tab}>
         {tab === "overview" && (
           <OverviewTab
@@ -318,6 +336,7 @@ export default function CenterPreview({
           <DemandsTab
             live={live}
             hasAssistant={hasAssistant}
+            onNew={live?.newDemand}
             filteredDemands={filteredDemands}
             spaceById={spaceById}
             state={state}
@@ -350,10 +369,11 @@ export default function CenterPreview({
         {tab === "channels" && (
           <ChannelsPreview
             liveMode={Boolean(live)}
+            tools={live?.channelTools}
             spaces={spaces}
             destinations={data.destinations}
             publications={publications}
-            onManage={setSelectedDestination}
+            onManage={live?.manageChannel || setSelectedDestination}
             onCalendar={(name) => {
               changeTab("calendar");
               setDestination(name);
@@ -394,6 +414,9 @@ export default function CenterPreview({
             setSelectedTask(null);
             setNotice(tr("任务调整已应用到预览，未提交中心。"));
           }}
+          onRelease={live?.releaseDemand && (task.state === "claimed" || task.state === "blocked") ? () => {
+            void live.releaseDemand!(task).then(()=>{setSelectedTask(null);setNotice(tr("认领已释放，任务回到待领取。"));}).catch(e=>setNotice(e instanceof Error ? e.message : String(e)));
+          } : undefined}
           onClaim={live && !live.claim ? undefined : () => {
             if(live){void live.claim!(task).then(()=>{setSelectedTask(null);setNotice(tr("已请求本机执行，请查看实际认领状态。"));}).catch(e=>setNotice(String(e)));return;}
             setData((old) => ({
@@ -431,6 +454,7 @@ export default function CenterPreview({
           }}
         />
       )}
+      {live?.overlays}
       {selectedDestination && (
         <Drawer
           title={tr(live?"渠道详情":"渠道详情 · 示例")}
