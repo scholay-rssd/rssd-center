@@ -9,7 +9,14 @@ product; they open only by typing their address.
 
 ## Structure
 
-One row of tabs, drawn by the view in
+One vertical sidebar on the left holds the brand, the navigation and the view
+controls; the current tab fills the rest and starts with its own heading.
+Nothing sits above it: there is no page title, top bar or row of counts. The
+sidebar's controls appear only where they do something: the workspace filter
+on the tabs that list work across workspaces (overview, tasks, calendar,
+channels), and theme and refresh always. Loading shows on the refresh button,
+not as a banner. Below 860px the sidebar becomes a compact bar with the
+navigation scrolling sideways. The tabs, drawn by the view in
 `apps/frontend/src/components/rssd/view/`:
 
 | Tab | What it holds | Source |

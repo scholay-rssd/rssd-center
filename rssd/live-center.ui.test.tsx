@@ -32,7 +32,10 @@ test('the work-centre view shows Center data and saves a task edit once across a
     return center(path);
   });
   render(<RssdCenter/>);
-  expect(screen.getByRole('heading',{name:'工作中心'})).toBeTruthy();
+  // Navigation is one sidebar; the page starts with the tab's own heading, with no title or bars above it.
+  expect(screen.getByRole('navigation',{name:'中心功能'}).closest('aside')).toBeTruthy();
+  expect(screen.queryByRole('heading',{level:1})).toBeNull();
+  expect(screen.queryByRole('group',{name:'任务数量'})).toBeNull();
   fireEvent.click(screen.getByRole('button',{name:/需求池/}));
   fireEvent.click(await screen.findByRole('button',{name:'Fixture demand'}));
   // A browser has no local worker, so the task can be edited but not started here.
@@ -58,7 +61,8 @@ test('earlier links open their screen in the one interface',async()=>{
   expect(screen.getByRole('button',{name:'执行设备'}).getAttribute('aria-pressed')).toBe('true');
   // One set of tabs, one title, and nothing that leads to another interface.
   expect(screen.getAllByRole('navigation')).toHaveLength(1);
-  expect(screen.getAllByRole('heading',{name:'工作中心'})).toHaveLength(1);
+  // Narrowing by workspace is not offered where it changes nothing.
+  expect((document.querySelector('.cp-scope') as HTMLElement).hidden).toBe(true);
   for(const name of ['作品与管理','中心助手','统一日历','发布记录'])expect(screen.queryByRole('button',{name:new RegExp(name)})).toBeNull();
   expect(document.querySelector('a[href="/launches"],a[href="/media"],a[href="/analytics"],a[href="/settings"]')).toBeNull();
   cleanup();
