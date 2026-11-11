@@ -1,7 +1,9 @@
 import { Metadata } from 'next';
-import { RssdWorkspace } from '@gitroom/frontend/components/rssd/workspace';
+import { cookies } from 'next/headers';
+import { RssdCenter } from '@gitroom/frontend/components/rssd/live-center';
 export const metadata: Metadata = { title: 'RSSD 中心' };
 export default async function RssdPage({searchParams}: {searchParams: Promise<Record<string,string|string[]|undefined>>}) {
-  const query = await searchParams;
-  return <RssdWorkspace key={JSON.stringify([query.tab,query.workspaceId])} initialTab={typeof query.tab === 'string' ? query.tab : undefined} initialWorkspace={typeof query.workspaceId === 'string' ? query.workspaceId : undefined}/>;
+  const query = await searchParams, text = (value: unknown) => typeof value === 'string' ? value : undefined;
+  const mode = (await cookies()).get('mode')?.value === 'light' ? 'light' : 'dark';
+  return <RssdCenter key={JSON.stringify([query.tab,query.view,query.workspaceId])} initialTab={text(query.tab)} initialView={text(query.view)} initialWorkspace={text(query.workspaceId)} initialMode={mode}/>;
 }

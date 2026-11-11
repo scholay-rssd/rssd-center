@@ -1,0 +1,149 @@
+{
+  "version": 2,
+  "source": "https://github.com/scholay-rssd/rssd/tree/main/desktop/src",
+  "license": "MIT",
+  "files": [
+    {
+      "path": "center/preview/CalendarTab.tsx",
+      "sha256": "b910eab12816637b67e6e08a5779220abe84290f59965ff0a3b650ac8e526f71"
+    },
+    {
+      "path": "center/preview/CenterPreview.tsx",
+      "sha256": "3312b09e15e4b2f2cc8eb2556b7b41f7d3baeac5ff5d5f29b55d71798be54da8"
+    },
+    {
+      "path": "center/preview/ChannelsPreview.tsx",
+      "sha256": "21467f0869d881efad1403fcc7350fc1fd56d7c35de369fca5b241e741e63347"
+    },
+    {
+      "path": "center/preview/DemandsTab.tsx",
+      "sha256": "fef33345fc3cddc02011d4147984adb5488bb083a15905a66bcd11c90c6b3344"
+    },
+    {
+      "path": "center/preview/OverviewTab.tsx",
+      "sha256": "4c351637154a41de8db0f1daaeb36874ed94dcb7686b09e2ee87f8d0beba4a9a"
+    },
+    {
+      "path": "center/preview/PreviewIcons.tsx",
+      "sha256": "0fc484688eac37f74f1b24866582b0741ad78ff6c1a4751dfda6677a1e09c60c"
+    },
+    {
+      "path": "center/preview/SampleAssistant.tsx",
+      "sha256": "06f81c6ac9ec04beb240057040af66595ea02f6ae8586b90e83f892621521c1d"
+    },
+    {
+      "path": "center/preview/details.tsx",
+      "sha256": "90e9e9d4e8fc957668a8e89855b4ff3fc1d2a8d8d252733e1ab6ee55b3c63c85"
+    },
+    {
+      "path": "center/preview/live.ts",
+      "sha256": "bd35c0ba31c41de37fe681eb507802e78e84a1682491b40f2182e0752d4cf0a0"
+    },
+    {
+      "path": "center/preview/mapLive.ts",
+      "sha256": "cc6545731d746b368e64c88683a6d24aabe3fe4c23dd5e25b34b68f325c37c89"
+    },
+    {
+      "path": "center/preview/model.ts",
+      "sha256": "26f8dccaf898bef9a5990888a55151b7f4b05c8e5ce06c18fe8ac2a481991b1c"
+    },
+    {
+      "path": "center/preview/parts.tsx",
+      "sha256": "6a7a90b8ab135f9ecd7e623fe44fbd78db1d4b6842d96ac631e1a88774e3485c"
+    },
+    {
+      "path": "center/preview/preview.css",
+      "sha256": "fe43fcc3e4d9e9515f6d9cb0ced8574580a0f882c79faa4b0ce1774fb73c46fd"
+    },
+    {
+      "path": "components/Icon.tsx",
+      "sha256": "c83a4bcefc79ad8ca89d8ce317820178f49d566da3aceba23e3cad142c4c4dde"
+    },
+    {
+      "path": "uiText.ts",
+      "sha256": "cb50a503788d2de94e4634ec9fd91815837f4f1377f349327b59fcb04183439f"
+    },
+    {
+      "path": "center/preview/assets.ts",
+      "sha256": "20a8fcc190e4ac2d65e4c4aa7c8844e2ef0dfd9f81837a81018b99cfb3468d67"
+    },
+    {
+      "path": "tokens.css",
+      "sha256": "7dc76cdb92b9ae27a38ac2d099600c2240967660e1de2b8870ca88cf1ad7d2c6"
+    },
+    {
+      "path": "fonts.css",
+      "sha256": "2a88319d334b257450b127eac933f63579840ad9b3958ece88953274b7432a14"
+    }
+  ],
+  "assets": [
+    {
+      "path": "fonts/inter-tight-latin-ext-wght-normal.woff2",
+      "sha256": "fd9beddaaec644945809da574cf1caf342073c7e4b46a2ea5bd136c8cf1a9eca"
+    },
+    {
+      "path": "fonts/inter-tight-latin-wght-normal.woff2",
+      "sha256": "77fefe8ca19b9f69b5284832c519e0493127c1f091f0a8936884be7721c4e618"
+    },
+    {
+      "path": "sites/academic.png",
+      "sha256": "aa551dfb28a6ff9c895ef4a688c0e7b86fb8478571753f04f9471b5c107705df"
+    },
+    {
+      "path": "sites/enter-bw-v8.webp",
+      "sha256": "ad5bc2351a95b2c74fec1b6a5166b4150a210872b5e4112d57dd4841359b935d"
+    },
+    {
+      "path": "sites/legis-bw-v8.webp",
+      "sha256": "cbe455021be62ab28721591b45cb1f9111e04dc4349f6e617afa67bb0fb98bcd"
+    },
+    {
+      "path": "sites/lingxi-bw-v8.webp",
+      "sha256": "ca1ee201ab9d3d141a41d325b671c5664d12e860e625da44e32b1a92198f147f"
+    },
+    {
+      "path": "sites/metho-bw-v8.webp",
+      "sha256": "3f9946211a233e63a641968318d433a1df5a9c62c20f2b2a3941d959ab687fcd"
+    },
+    {
+      "path": "sites/personal-bw-v8.webp",
+      "sha256": "4d6fac2c925a1cfb811caed3cbd65ed97da5ce6fcdce79fbe195cc10fc708327"
+    },
+    {
+      "path": "sites/pets-bw-v8.webp",
+      "sha256": "69e4044c5baf3f727c47ee4056fc5748bbaa0133f5510fdba0fd9bfeae33d3c9"
+    },
+    {
+      "path": "sites/piggytuck-bw-v8.webp",
+      "sha256": "dd506c6691cd06fbfd92c0d95a313a52cfcd153b1fdf89355e3bb0dd7098e7e9"
+    },
+    {
+      "path": "sites/study-bw-v8.webp",
+      "sha256": "3a715ab949ca17212ec8ba6100301fb42bcd645422d1a6f13fa5cf48b4b7ac63"
+    },
+    {
+      "path": "sites/xsiching-bw-v8.webp",
+      "sha256": "27ed23ed68d125e3a3262d181cc8052ecc4b1bf890050426ceb05c7b5f99a43a"
+    },
+    {
+      "path": "platforms/discourse.svg",
+      "sha256": "e42cb79426c33c5d247f706fefe862793bd4828bad4f1e2f2d449ac4dab700e3"
+    },
+    {
+      "path": "platforms/facebook.svg",
+      "sha256": "f7129f819f03a69d159ee823c88366f21bd460588d16c6fa8ca16642fe66a64d"
+    },
+    {
+      "path": "platforms/linkedin.svg",
+      "sha256": "f7630f13335d84f2647099415db19dbfe119db985c9af2061f4b24c4f184e90e"
+    },
+    {
+      "path": "platforms/telegram.svg",
+      "sha256": "55c827242458e3b0e6b088d034be55c8d05c4ba183dd6b2194e3bb20bb15cc2e"
+    },
+    {
+      "path": "platforms/x.svg",
+      "sha256": "a24e75619322ac90c3964151ecda5cebe393d9e3015f725666a5c4ed41ed2254"
+    }
+  ]
+}
