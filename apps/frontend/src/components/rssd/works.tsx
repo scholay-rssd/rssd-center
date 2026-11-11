@@ -13,9 +13,9 @@ type Row = Record<string, any>;
 export type DemandSource = { workspaceId: string; sectionId: string; title: string; kind: 'translate' | 'update'; source: { workId: string; locale: string; revision: number } };
 const when = (value?: string) => value ? new Date(value).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
 
-export function WorksPanel({ api, registry, onDeriveDemand }: { api: RssdApi; registry: Row[]; onDeriveDemand: (source: DemandSource) => void }) {
+export function WorksPanel({ api, registry, initialWorkspace, onDeriveDemand }: { api: RssdApi; registry: Row[]; initialWorkspace?: string; onDeriveDemand: (source: DemandSource) => void }) {
   const user = useUser(), [mode] = useShellMode();
-  const [space, setSpace] = useState(''), [search, setSearch] = useState(''), [offset, setOffset] = useState(0);
+  const [space, setSpace] = useState(initialWorkspace || ''), [search, setSearch] = useState(''), [offset, setOffset] = useState(0);
   const [listing, setListing] = useState<{ key: string; rows: Row[] }>({ key: '', rows: [] }), [loading, setLoading] = useState(false);
   const [error, setError] = useState(''), [notice, setNotice] = useState(''), [busy, setBusy] = useState(false), [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<Row | null>(null), [language, setLanguage] = useState('zh-CN'), [title, setTitle] = useState(''), [body, setBody] = useState('');
@@ -23,6 +23,12 @@ export function WorksPanel({ api, registry, onDeriveDemand }: { api: RssdApi; re
   const [pending, setPending] = useState<Row | null>(null), [conflict, setConflict] = useState<Row | null>(null);
   const [drafts, setDrafts] = useState<Record<string, Row>>({}), [draftsLoaded, setDraftsLoaded] = useState(false);
   const generation = useRef(0);
+  // Keep a legacy link's workspace when it is available to this account.
+  useEffect(() => {
+    if (space && registry.length && !registry.some(workspace => workspace.id === space)) {
+      setSpace(''); setOffset(0); setNotice('指定工作空间不可用，已显示当前账号的授权范围。');
+    }
+  }, [registry, space]);
   const listKey = JSON.stringify([space, search, offset]);
   // A filter changes before its request finishes. Never show another filter's rows.
   const rows = listing.key === listKey ? listing.rows : [], listLoading = loading || listing.key !== listKey;

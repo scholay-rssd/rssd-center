@@ -31,9 +31,11 @@ const legacyTab: [PreviewTab, string] = ["legacy", "作品与本机执行"];
 export default function CenterPreview({
   live,
   initialTab = "overview",
+  initialWorkspace,
 }: {
   live?: LiveCenterActions;
   initialTab?: PreviewTab;
+  initialWorkspace?: string;
 }) {
   const [data, setData] = useState(() => live?.data || createPreviewData()),
     [tab, setTab] = useState<PreviewTab>(initialTab);
@@ -79,7 +81,7 @@ export default function CenterPreview({
     if (messages) messages.scrollTop = messages.scrollHeight;
   }, [conversation]);
   const liveLoaded=useRef(false);
-  useEffect(()=>{if(!live)return;setData(live.data);setScope(old=>{const ids=live.data.spaces.map(s=>s.id);if(!liveLoaded.current&&ids.length){liveLoaded.current=true;return ids;}return old.filter(id=>ids.includes(id));});},[live?.data]);
+  useEffect(()=>{if(!live)return;setData(live.data);setScope(old=>{const ids=live.data.spaces.map(s=>s.id);if(!liveLoaded.current&&ids.length){liveLoaded.current=true;return initialWorkspace&&ids.includes(initialWorkspace)?[initialWorkspace]:ids;}return old.filter(id=>ids.includes(id));});},[live?.data]);
   useEffect(()=>{if(live&&targetSpace){live.manage('goals',targetSpace);setTargetSpace(null);}},[targetSpace,live]);
   const hasAssistant = !live || Boolean(live.assistant);
   const shownTabs: Array<[PreviewTab, string]> = [

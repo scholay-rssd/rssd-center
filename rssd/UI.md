@@ -67,6 +67,10 @@ overview; `demands`, `works` and `calendar` open their tabs; `publications`
 opens the calendar; `destinations` opens the channels; `workers`, `settings`,
 `health`, `guestbooks` and `labels` open the matching settings section.
 
+`workspaceId` in an earlier link selects that workspace in the library or the
+shared overview, tasks, calendar and channels filter. Unknown workspaces fall
+back to the signed-in account's available workspaces; the link grants no access.
+
 ## Interaction
 
 Active navigation is underlined, rows enter with a short fade, and controls
