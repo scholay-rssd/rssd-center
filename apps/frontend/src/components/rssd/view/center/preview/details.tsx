@@ -135,16 +135,34 @@ export function PublicationDetail({
   space,
   onClose,
   onUpdate,
+  onSchedule,
+  onRetry,
 }: {
   liveMode?: boolean;
   item: PreviewPublication;
   space: PreviewSpace;
   onClose: () => void;
   onUpdate: (item: PreviewPublication) => void;
+  /** Saves a new time at the Center; rejects with the Center's reason. */
+  onSchedule?: (scheduledAt: string) => Promise<void>;
+  onRetry?: () => Promise<void>;
 }) {
   const [date, setDate] = useState(item.date),
     [time, setTime] = useState(item.time);
-  const editable = item.state === "scheduled" || item.state === "planned";
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  const record = item.record;
+  const editable = record
+    ? record.canSchedule && Boolean(onSchedule)
+    : item.state === "scheduled" || item.state === "planned";
+  // The drawer stays open on a refusal so the chosen time is not lost.
+  const run = (work: () => Promise<void>) => {
+    setBusy(true);
+    setError("");
+    work()
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false));
+  };
   return (
     <Drawer title={tr(liveMode?"发布详情":"发布详情 · 示例")} onClose={onClose}>
       <div className="cp-detail-body">
@@ -160,13 +178,29 @@ export function PublicationDetail({
           <dd>{item.destination}</dd>
           <dt>{tr("作品身份")}</dt>
           <dd>{item.workId}</dd>
-          <dt>{tr("计划发布时间")}</dt>
+          <dt>{tr(record && !record.hasSchedule ? "进入队列时间" : "计划发布时间")}</dt>
           <dd>
             {item.date} {item.time}
           </dd>
+          {record?.error && (
+            <>
+              <dt>{tr("待处理原因")}</dt>
+              <dd>{record.error}</dd>
+            </>
+          )}
         </dl>
         <p className="cp-muted">
-          {liveMode?tr("状态来自中心。请在原发布入口查看完整回执与调整排期。"):item.state === "planned"
+          {record
+            ? record.source === "postiz"
+              ? tr("这是发布工具中的原生帖子，内容和时间在其编辑器中修改。")
+              : record.canSchedule
+                ? tr("成品已在中心排队。调整时间不会创建新的发布请求。")
+                : item.state === "blocked"
+                  ? tr("发布在目的地停止，原发布身份保持不变。")
+                  : item.state === "published"
+                    ? tr("已发布，回执来自目的地。")
+                    : tr("此发布已开始发送，时间不可再调整。")
+            : item.state === "planned"
             ? tr("这是一项待生产计划，尚未具备可发布成品。")
             : item.state === "blocked"
               ? tr("示例异常：目的地暂不可用，原发布身份保持不变。")
@@ -174,42 +208,71 @@ export function PublicationDetail({
                 ? tr("此处展示已发布记录的详情样式，数据为示例。")
                 : tr("成品已准备好，等待计划时间。此状态为界面示例。")}
         </p>
-        <form
-          className="cp-detail-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (editable || liveMode) onUpdate({ ...item, date, time });
-          }}
-        >
-          <h3>{tr("调整排期")}</h3>
-          <div>
-            <label>
-              {tr("日期")}
-              <input
-                type="date"
-                value={date}
-                required
-                disabled={!editable || liveMode}
-                onChange={(e) => setDate(e.target.value)}
-              />
-            </label>
-            <label>
-              {tr("时间")}
-              <input
-                type="time"
-                value={time}
-                required
-                disabled={!editable || liveMode}
-                onChange={(e) => setTime(e.target.value)}
-              />
-            </label>
+        {error && (
+          <p role="alert" className="cp-notice">
+            {error}
+          </p>
+        )}
+        {(!record || record.canSchedule) && (
+          <form
+            className="cp-detail-form"
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (!editable) return;
+              if (!record) return onUpdate({ ...item, date, time });
+              const instant = new Date(date + "T" + time);
+              if (!Number.isFinite(instant.getTime()))
+                return setError(tr("请选择有效的发布时间"));
+              run(() => onSchedule!(instant.toISOString()));
+            }}
+          >
+            <h3>{tr("调整排期")}</h3>
+            <div>
+              <label>
+                {tr("日期")}
+                <input
+                  type="date"
+                  value={date}
+                  required
+                  disabled={!editable || busy}
+                  onChange={(e) => setDate(e.target.value)}
+                />
+              </label>
+              <label>
+                {tr("时间")}
+                <input
+                  type="time"
+                  value={time}
+                  required
+                  disabled={!editable || busy}
+                  onChange={(e) => setTime(e.target.value)}
+                />
+              </label>
+            </div>
+            <footer>
+              <button className="cp-primary" disabled={!editable || busy}>
+                {tr(record ? "保存排期" : "应用到预览")}
+              </button>
+            </footer>
+          </form>
+        )}
+        {record && (record.url || record.source === "postiz" || (record.canRetry && onRetry)) && (
+          <div className="cp-detail-actions">
+            {record.canRetry && onRetry && (
+              <button disabled={busy} onClick={() => run(onRetry)}>
+                {tr("恢复原发布")}
+              </button>
+            )}
+            {record.url && (
+              <a href={record.url} target="_blank" rel="noreferrer">
+                {tr("查看成品")} ↗
+              </a>
+            )}
+            {record.source === "postiz" && (
+              <a href="/launches">{tr("在发布工具中打开")} ↗</a>
+            )}
           </div>
-          <footer>
-            <button className="cp-primary" disabled={!editable && !liveMode}>
-              {tr(liveMode?"在中心处理原发布":"应用到预览")}
-            </button>
-          </footer>
-        </form>
+        )}
       </div>
     </Drawer>
   );

@@ -82,6 +82,7 @@ export default function CenterPreview({
   const liveLoaded=useRef(false);
   useEffect(()=>{if(!live)return;setData(live.data);setScope(old=>{const ids=live.data.spaces.map(s=>s.id);if(!liveLoaded.current&&ids.length){liveLoaded.current=true;return ids;}return old.filter(id=>ids.includes(id));});},[live?.data]);
   useEffect(()=>{if(live&&targetSpace){live.manage('goals',targetSpace);setTargetSpace(null);}},[targetSpace,live]);
+  const hasAssistant = !live || Boolean(live.assistant);
   const scopeName =
     scope.length === data.spaces.length
       ? tr("全部工作空间")
@@ -181,6 +182,7 @@ export default function CenterPreview({
           {tr(live?"真实数据 · 操作由中心校验":"示例数据 · 操作仅在本页生效")}
         </span>
         <div>
+          {live?.tools}
           <button disabled={live?.loading} onClick={reset}>{tr(live?"刷新":"重置预览")}</button>
         </div>
       </div>
@@ -236,14 +238,16 @@ export default function CenterPreview({
               {live.execution.notes.length > 0 && <b>{live.execution.notes.length}</b>}
             </button>
           )}
-          <button className="cp-primary" onClick={() => changeTab("assistant")}>
-            <NavigationIcon tab="assistant" />
-            {tr("向助手下指令")}
-          </button>
+          {hasAssistant && (
+            <button className="cp-primary" onClick={() => changeTab("assistant")}>
+              <NavigationIcon tab="assistant" />
+              {tr("向助手下指令")}
+            </button>
+          )}
         </div>
       </header>
       <nav className="cp-tabs" aria-label={tr("中心功能")}>
-        {(live?.legacy ? [...tabs, [legacyTab[0], live.legacyLabel || legacyTab[1]] as [PreviewTab, string]] : tabs).map(([id, label]) => (
+        {(live?.legacy ? [...tabs, [legacyTab[0], live.legacyLabel || legacyTab[1]] as [PreviewTab, string]] : tabs).filter(([id]) => id !== "assistant" || hasAssistant).map(([id, label]) => (
           <button
             key={id}
             aria-current={tab === id ? "page" : undefined}
@@ -295,6 +299,7 @@ export default function CenterPreview({
         {tab === "overview" && (
           <OverviewTab
             live={live}
+            hasAssistant={hasAssistant}
             spaces={spaces}
             demands={demands}
             spaceById={spaceById}
@@ -312,6 +317,7 @@ export default function CenterPreview({
         {tab === "demands" && (
           <DemandsTab
             live={live}
+            hasAssistant={hasAssistant}
             filteredDemands={filteredDemands}
             spaceById={spaceById}
             state={state}
@@ -355,7 +361,7 @@ export default function CenterPreview({
             }}
           />
         )}
-        {tab === "assistant" && live?.assistant(scope)}
+        {tab === "assistant" && live?.assistant?.(scope)}
         {tab === "assistant" && !live && (
           <SampleAssistant
             messagesRef={messagesRef}
@@ -410,8 +416,10 @@ export default function CenterPreview({
           liveMode={Boolean(live)}
           space={spaceById[publication.workspaceId]}
           onClose={() => setSelectedPublication(null)}
+          onSchedule={live?.schedule && ((scheduledAt) => live.schedule!(publication, scheduledAt).then(() => { setSelectedPublication(null); setNotice(tr("排期已保存到中心，原发布身份不变。")); }))}
+          onRetry={live?.retry && (() => live.retry!(publication).then(() => { setSelectedPublication(null); setNotice(tr("已请求中心恢复原发布，请稍后查看结果。")); }))}
           onUpdate={(updated) => {
-            if(live){live.manage("calendar",updated.workspaceId);return;}
+            if(live)return;
             setData((old) => ({
               ...old,
               publications: old.publications.map((p) =>

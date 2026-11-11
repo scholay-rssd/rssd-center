@@ -41,6 +41,20 @@ export interface PreviewPublication {
   date: string;
   time: string;
   state: "planned" | "ready" | "scheduled" | "published" | "blocked";
+  /** The Center record behind a real calendar entry; absent in sample data. */
+  record?: {
+    source: "rssd" | "postiz";
+    publicationId: string;
+    scheduledAt: string;
+    updatedAt: string;
+    hasSchedule: boolean;
+    /** Still queued at the Center, so its time can be changed. */
+    canSchedule: boolean;
+    /** Stopped at the Center and can be sent again under the same identity. */
+    canRetry: boolean;
+    error?: string;
+    url?: string;
+  };
 }
 export interface PreviewData {
   demandCounts?: Array<{workspaceId:string;state:string;count:number}>;

@@ -222,10 +222,7 @@ export default function CalendarTab({
       </div>
       {live?.calendarTruncated && (
         <p className="cp-list-footer">
-          {tr("当前显示前 200 条发布记录。")}
-          <button onClick={() => live.manage("calendar")}>
-            {tr("打开中心分页查看全部")}
-          </button>
+          {tr("当前显示前 200 条发布记录，缩短时间范围可查看其余记录。")}
         </p>
       )}
     </>

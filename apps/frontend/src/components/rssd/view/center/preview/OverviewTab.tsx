@@ -6,6 +6,7 @@ import { WorkspaceIcon } from "./PreviewIcons";
 
 export default function OverviewTab({
   live,
+  hasAssistant,
   spaces,
   demands,
   spaceById,
@@ -20,6 +21,7 @@ export default function OverviewTab({
   setSelectedTask,
 }: {
   live?: LiveCenterActions;
+  hasAssistant: boolean;
   spaces: PreviewSpace[];
   demands: PreviewDemand[];
   spaceById: Record<string, PreviewSpace>;
@@ -197,17 +199,26 @@ export default function OverviewTab({
             </p>
           )}
           <div className="cp-aside-note">
-            <span>{tr("线上管理助手")}</span>
+            <span>{tr(hasAssistant ? "线上管理助手" : "生产目标")}</span>
             <strong>{tr("按目标维护需求池")}</strong>
             <p>
-              {live
+              {!hasAssistant
+                ? tr("已启用的生产目标按周期和时区补充需求，由执行设备认领。")
+                : live
                 ? tr("在中心管理生产目标，选择本机智能体执行任务。退出桌面后，已启用的目标仍会继续维护。")
                 : tr("这里预留最近巡检、调整理由与运行状态。实际服务由中心接入。")}
             </p>
-            <button onClick={() => changeTab("assistant")}>
-              {tr("查看助手界面")}
-              <Icon kind="arrow" />
-            </button>
+            {hasAssistant ? (
+              <button onClick={() => changeTab("assistant")}>
+                {tr("查看助手界面")}
+                <Icon kind="arrow" />
+              </button>
+            ) : (
+              <button onClick={() => live!.manage("goals")}>
+                {tr("维护生产目标")}
+                <Icon kind="arrow" />
+              </button>
+            )}
           </div>
         </aside>
       </div>

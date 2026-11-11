@@ -1507,3 +1507,20 @@
 .cp-local-assistant .cp-composer-footer > span { display: block; width: 100%; overflow-wrap: anywhere; }
 .cp-local-assistant .cp-composer-footer button { margin-left: 0; }
 .cp-local-assistant .cp-agent-message { padding-bottom: 20px; }
+
+.center-preview-drawer .cp-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+}
+.center-preview-drawer .cp-detail-actions a,
+.cp-preview-bar a {
+  color: var(--cp-accent);
+  text-decoration: none;
+}
+.center-preview-drawer .cp-detail-actions a:hover,
+.cp-preview-bar a:hover {
+  text-decoration: underline;
+}

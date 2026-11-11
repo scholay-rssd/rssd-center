@@ -1,3 +1,4 @@
-/* Where the desktop work-centre view sits inside the Center shell. */
-.rssd-desktop{flex:1;min-height:78vh;border-radius:8px;overflow:hidden}
-.rssd-desktop .center-preview{height:auto;min-height:78vh}
+/* The work centre fills the page; it is the Center's home, not a panel inside another shell. */
+.rssd-desktop{min-height:100vh}
+.rssd-desktop .center-preview{height:auto;min-height:100vh;max-width:1560px;margin:0 auto}
+.rssd-desktop .cp-preview-bar>div{align-items:center;gap:14px}
