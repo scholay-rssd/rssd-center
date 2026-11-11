@@ -33,6 +33,9 @@ export default function CalendarTab({
   moveCalendar: (direction: number) => void;
   setSelectedPublication: (id: string) => void;
 }) {
+  // An entry names its destination; the icon belongs to that destination's platform.
+  const platformOf = (destination: string) =>
+    data.destinations.find((d) => d.name === destination)?.platform || destination;
   return (
     <>
       <div className="cp-section-heading">
@@ -116,7 +119,7 @@ export default function CalendarTab({
                 <strong>{p.title}</strong>
                 <small className="cp-destination-label">
                   <DestinationIcon
-                    name={p.destination}
+                    name={platformOf(p.destination)}
                     workspaceId={p.workspaceId}
                     size={20}
                   />
@@ -184,7 +187,7 @@ export default function CalendarTab({
                         <strong>{p.title}</strong>
                         <small className="cp-destination-label">
                           <DestinationIcon
-                            name={p.destination}
+                            name={platformOf(p.destination)}
                             workspaceId={p.workspaceId}
                             size={20}
                           />

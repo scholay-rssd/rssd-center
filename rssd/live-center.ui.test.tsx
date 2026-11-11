@@ -127,3 +127,17 @@ test('a schedule is changed in the calendar drawer once across a lost response, 
   expect(writes[0].body.expectedUpdatedAt).toBe(queued.updatedAt);
   expect(writes[0].body.scheduledAt).toBe(new Date('2026-12-01T10:30').toISOString());
 });
+
+test('a channel shows its platform logo from the identifier the Center reports, and the sidebar carries the mark',async()=>{
+  mockFetch.mockImplementation(async(path:string)=>path.startsWith('/rssd/v1/coordination/channels')
+    ?response({destinations:[{id:'li',name:'Company page',kind:'postiz',integrationId:'int-li',enabled:true,workspaceIds:['one']}],channels:[{id:'int-li',name:'RSSD',providerIdentifier:'linkedin-page'},{id:'int-th',name:'Threads account',providerIdentifier:'threads'},{id:'int-new',name:'Unknown network',providerIdentifier:'not-shipped'}]})
+    :center(path));
+  render(<RssdCenter initialView="channels"/>);
+  // An unassigned account is listed under its own name twice, as the channel and as the account.
+  const logo=async(name:string)=>(await screen.findAllByText(name))[0].closest('tr')!.querySelector('img')?.getAttribute('src');
+  expect(await logo('Company page')).toBe('/icons/platforms/linkedin-page.png');
+  expect(await logo('Threads account')).toBe('/icons/platforms/threads.png');
+  // A platform without a shipped icon falls back to the generic glyph instead of a broken image.
+  expect(await logo('Unknown network')).toBeUndefined();
+  expect(document.querySelector('.cp-side-brand svg.cp-brand-mark')).toBeTruthy();
+});
