@@ -1,7 +1,7 @@
 'use client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { useFetch } from '@gitroom/helpers/utils/custom.fetch';
+import { ApiError, useRssdApi } from './api';
 import { useUser } from '@gitroom/frontend/components/layout/user.context';
 import './workspace.css';
 import {WorkspacePolicy,DestinationSettings} from './configuration';
@@ -15,13 +15,13 @@ const Editor = dynamic(() => import('@uiw/react-md-editor'), { ssr: false });
 const names: Record<string,string> = {queued:'待领取',claimed:'进行中',blocked:'待处理',completed:'已交稿',cancelled:'已取消',idle:'空闲',running:'工作中',paused:'已暂停',revoked:'已撤销',accepted:'已接收',submitted:'已提交',verified:'已发布',failed:'失败',unknown:'待核实',draft_saved:'已存草稿'};
 type Row = Record<string, any>;
 type Tab = 'overview'|'calendar'|'goals'|'demands'|'works'|'publications'|'workers'|'settings'|'destinations'|'health'|'guestbooks'|'labels';
-class ApiError extends Error { constructor(message:string,public status:number,public code?:string){super(message);} }
 const label = (state:string) => ({published:'已发布',legacy_published:'原系统已发布',dispatching:'正在分发',superseded:'已被新版替代'}[state] || names[state] || state);
 const when = (value?:string) => value ? new Date(value).toLocaleString('zh-CN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '尚未连接';
 
 const validTabs = ['overview','calendar','goals','demands','works','publications','workers','settings','destinations','health','guestbooks','labels'];
-export function RssdWorkspace({initialTab,initialWorkspace}: {initialTab?:string;initialWorkspace?:string} = {}) {
-  const fetch = useFetch(), user=useUser();
+/** `embedded` is the management area of the desktop-styled Center page, which supplies the title and overview itself. */
+export function RssdWorkspace({initialTab,initialWorkspace,embedded=false}: {initialTab?:string;initialWorkspace?:string;embedded?:boolean} = {}) {
+  const api = useRssdApi(), user=useUser();
   const [tab,setTab]=useState<Tab>(validTabs.includes(initialTab||'')?initialTab as Tab:'demands'),[registry,setRegistry]=useState<Row[]>([]),[space,setSpace]=useState(initialWorkspace||'');
   const [listing,setListing]=useState<{key:string;rows:Row[]}>({key:'',rows:[]}),[search,setSearch]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState('');
   const [loading,setLoading]=useState(false),[busy,setBusy]=useState(false),[creating,setCreating]=useState(false);
@@ -44,12 +44,6 @@ export function RssdWorkspace({initialTab,initialWorkspace}: {initialTab?:string
   const draftKey='rssd:editor-drafts:'+user?.orgId;
   const writable=active?.writable!==false;
   const contextLocked=busy||Boolean(pending);
-  const api=useCallback(async(path:string,method='GET',data?:unknown)=>{
-    const response=await fetch('/rssd/v1'+path,{method,...(data?{body:JSON.stringify(data)}:{})});
-    const result=await response.json().catch(()=>({message:'中心返回了无法读取的响应'}));
-    if(!response.ok)throw new ApiError(result.message || '操作失败',response.status,result.code);
-    return result;
-  },[fetch]);
   const loadRegistry=useCallback(async()=>{
     const result=await api('/registry');setRegistry(result.workspaces);
     setSpace(current=>{if(!current||result.workspaces.some((w:Row)=>w.id===current))return current;setNotice('指定工作空间不可用，已显示当前账号的授权范围。');return '';});
@@ -131,9 +125,9 @@ export function RssdWorkspace({initialTab,initialWorkspace}: {initialTab?:string
     setAttachments(old=>[...old.filter(m=>m.id!==result.id),{id:result.id,alt:file.name}]);setBody(old=>old+'\n\n!['+file.name.replace(/[\[\]\\\n\r]/g,' ')+']('+result.url+')\n');setNotice('配图已保存到中心，保存文章后会保留引用');
   };
   return <section className="rssd-workspace">
-    <header className="rssd-header"><div><div className="rssd-overline">RSSD / 内容生产</div><h1>工作中心</h1></div>
+    <header className="rssd-header">{!embedded&&<div><div className="rssd-overline">RSSD / 内容生产</div><h1>工作中心</h1></div>}
       <div className="rssd-header-actions"><label className="rssd-sr-only" htmlFor="rssd-space">工作空间</label><select id="rssd-space" disabled={contextLocked} value={space} onChange={e=>{setSpace(e.target.value);setSelected(null);setOffset(0);}}><option value="">全部工作空间</option>{registry.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select><button onClick={()=>void refresh()} disabled={loading}>刷新</button></div></header>
-    <nav className="rssd-tabs" aria-label="中心功能">{([['overview','总览'],['goals','生产目标'],['calendar','统一日历'],['demands','需求池'],['works','作品库'],['publications','发布记录'],['workers','执行设备'],['destinations','发布渠道'],['settings','工作空间'],['health','运行状况'],['guestbooks','留言审核'],['labels','流量标签']] as [Tab,string][]).map(([id,name])=><button key={id} disabled={contextLocked} aria-current={tab===id?'page':undefined} onClick={()=>{setTab(id);setOffset(0);setCreating(false);setSelected(null);setError('');setSearch('');}}>{name}</button>)}</nav>
+    <nav className="rssd-tabs" aria-label="中心功能">{([['overview','总览'],['goals','生产目标'],['calendar','统一日历'],['demands','需求池'],['works','作品库'],['publications','发布记录'],['workers','执行设备'],['destinations','发布渠道'],['settings','工作空间'],['health','运行状况'],['guestbooks','留言审核'],['labels','流量标签']] as [Tab,string][]).filter(([id])=>!embedded||id!=='overview').map(([id,name])=><button key={id} disabled={contextLocked} aria-current={tab===id?'page':undefined} onClick={()=>{setTab(id);setOffset(0);setCreating(false);setSelected(null);setError('');setSearch('');}}>{name}</button>)}</nav>
     {!writable&&<div className="rssd-message">此站点已导入，正在核对迁移。完成旧系统交接后才能在中心创建需求和提交作品。</div>}
     {error&&<div role="alert" className="rssd-message rssd-error">{error}</div>}
     {notice&&<div role="status" className="rssd-message">{notice}</div>}
