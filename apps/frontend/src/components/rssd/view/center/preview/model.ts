@@ -149,8 +149,8 @@ export function createPreviewData(): PreviewData {
       sections: ["法律观察"],
     },
     {
-      id: "lingxi",
-      name: "灵犀",
+      id: "xsime",
+      name: "犀术 IME",
       initial: "灵",
       target: 4,
       completed: 1,
@@ -240,7 +240,7 @@ export function createPreviewData(): PreviewData {
     ],
     ["legis", "法律观察", "数据使用中的告知与同意", "queued"],
     [
-      "lingxi",
+      "xsime",
       "日常观察",
       "如何记录一次有效的访谈",
       "completed",
@@ -358,9 +358,9 @@ export function createPreviewData(): PreviewData {
     {
       id: "demo-p8",
       workId: "demo-work-6",
-      workspaceId: "lingxi",
+      workspaceId: "xsime",
       title: "如何记录一次有效的访谈",
-      destination: "灵犀 · 网站",
+      destination: "犀术 IME · 网站",
       locale: "中文",
       date: "2026-11-07",
       time: "11:00",
