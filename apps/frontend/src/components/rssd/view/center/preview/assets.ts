@@ -3,7 +3,7 @@ const sites: Record<string, string> = {
   "academic": "/rssd-ui/sites/academic.png",
   "enter": "/rssd-ui/sites/enter-bw-v8.webp",
   "legis": "/rssd-ui/sites/legis-bw-v8.webp",
-  "lingxi": "/rssd-ui/sites/lingxi-bw-v8.webp",
+  "xsime": "/rssd-ui/sites/xsime-bw-v8.webp",
   "metho": "/rssd-ui/sites/metho-bw-v8.webp",
   "personal": "/rssd-ui/sites/personal-bw-v8.webp",
   "pets": "/rssd-ui/sites/pets-bw-v8.webp",
