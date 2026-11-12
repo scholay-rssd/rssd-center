@@ -398,7 +398,7 @@ test('private notes name the device that saved an edition\'s first version, and 
  await store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[edition('One')]},{publish:false});
  const name=(await db.$queryRawUnsafe('SELECT name FROM rssd_workers WHERE "orgId"=$1 AND id=$2',f.ctx.orgId,f.ctx.workerId))[0].name;
  assert.deepEqual((await f.service.privateNotes(f.ctx,'research',id)).firstMachine,{name});
- await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[edition('Two')]},{publish:false});
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',baseRevisions:{'zh-CN':1},editions:[edition('Two')]},{publish:false});
  assert.deepEqual((await f.service.privateNotes(f.ctx,'research',id)).firstMachine,{name},'a later save does not change who wrote it first');
  const byOwner=randomUUID(),ownerId='owner-first-'+randomUUID().slice(0,8);
  await store.submit(f.owner,{requestId:randomUUID(),workId:byOwner,workspaceId:'research',sectionId:'methods',editions:[{...edition('Three'),metadata:{editorial:{articleId:ownerId},notebook}}]},{publish:false});
