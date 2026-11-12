@@ -96,6 +96,8 @@ CREATE TABLE IF NOT EXISTS rssd_audit (
   "orgId" TEXT NOT NULL, id TEXT NOT NULL, actor TEXT NOT NULL, action TEXT NOT NULL, payload JSONB NOT NULL,
   "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY ("orgId", id)
 );
+-- Finds the device that first saved a work (see RssdEditorial.firstMachine).
+CREATE INDEX IF NOT EXISTS rssd_audit_work_saves ON rssd_audit ("orgId", (payload->>'workId'), "createdAt") WHERE action IN ('work.submit','work.save');
 CREATE TABLE IF NOT EXISTS rssd_editorial_requests (
  "orgId" TEXT NOT NULL,"workspaceId" TEXT NOT NULL,"requestKey" TEXT NOT NULL,
  intent TEXT NOT NULL,"payloadHash" TEXT NOT NULL,"workId" TEXT NOT NULL,locale TEXT NOT NULL,

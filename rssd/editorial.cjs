@@ -435,8 +435,19 @@ class RssdEditorial {
     });
     return {archiveId:id,archiveSha256:id,fileCount:input.files.length,centerManaged:true};
   }
+  /** The device that saved this edition's first version, by the name it was registered with. Null when a person
+   *  saved it in the Center, or when no saving device is on record (migrated and imported editions). */
+  async firstMachine(ctx,row){
+    const saved=(await q(this.store.db,`SELECT actor FROM rssd_audit WHERE "orgId"=$1 AND action IN ('work.submit','work.save')
+      AND payload->>'workId'=$2 AND payload->'editions' @> $3::jsonb ORDER BY "createdAt" ASC,id ASC LIMIT 1`,
+      ctx.orgId,row.workId,JSON.stringify([{locale:row.locale,revision:1}])))[0];
+    if(!saved)return null;
+    const worker=(await q(this.store.db,'SELECT name FROM rssd_workers WHERE "orgId"=$1 AND id=$2',ctx.orgId,saved.actor))[0];
+    return typeof worker?.name==='string'&&worker.name?{name:worker.name}:null;
+  }
   async privateNotes(ctx,workspaceId,id,revision){
     const row=await this.find(ctx,workspaceId,id);if(!row)p.fail('Manuscript not found',404);
+    const firstMachine=await this.firstMachine(ctx,row);
     const bound=revision===undefined?row.revision:Math.min(row.revision,page(revision,row.revision,Number.MAX_SAFE_INTEGER));
     const saved=await q(this.store.db,'SELECT id,revision,payload,sha256,"createdAt" FROM rssd_editorial_archives WHERE "orgId"=$1 AND "workspaceId"=$2 AND "workId"=$3 AND locale=$4 AND revision<=$5',ctx.orgId,workspaceId,row.workId,row.locale,bound);
     const legacy=(await q(this.store.db,'SELECT source->\'sourceArchives\' AS archives FROM rssd_legacy_documents WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3',ctx.orgId,row.workId,row.locale))[0];
@@ -449,13 +460,13 @@ class RssdEditorial {
     if(native)rows.push({...native,kind:'native'});
     rows.sort((a,b)=>b.revision-a.revision||(a.kind!==b.kind?(a.kind==='archive'?-1:1):new Date(b.createdAt||b.created)-new Date(a.createdAt||a.created)));
     for(const archive of rows.filter(r=>r.revision<=bound)){
-      if(archive.kind==='native')return {articleId:id,revision:archive.revision,privateEditorial:nativePrivateEditorial(archive.notebook,archive.bodyMarkdown),centerManaged:true};
+      if(archive.kind==='native')return {firstMachine,articleId:id,revision:archive.revision,privateEditorial:nativePrivateEditorial(archive.notebook,archive.bodyMarkdown),centerManaged:true};
       const bundle=archiveBundle(archive).bundle,notes=(bundle.files||[]).filter(f=>/(^|\/)internal-notes\.json$/.test(f.path));if(!notes.length)continue;
       if(notes.length!==1)p.fail('Original archive contains several author-note files',409,'archive_conflict');
       const bytes=Buffer.from(notes[0].data,'base64');if(digest(bytes)!==notes[0].sha256)p.fail('Author-note checksum mismatch',409,'archive_conflict');
-      return {articleId:id,revision:archive.revision,archiveId:archive.id,privateEditorial:JSON.parse(bytes.toString('utf8')),centerManaged:true};
+      return {firstMachine,articleId:id,revision:archive.revision,archiveId:archive.id,privateEditorial:JSON.parse(bytes.toString('utf8')),centerManaged:true};
     }
-    return {articleId:id,revision:null,privateEditorial:null,centerManaged:true};
+    return {firstMachine,articleId:id,revision:null,privateEditorial:null,centerManaged:true};
   }
   async retry(ctx,workspaceId,key,input){
     const old=await this.receipt(ctx,workspaceId,key);if(old.job.id!==input.jobId)p.fail('Retry must identify the original website job',409,'request_conflict');

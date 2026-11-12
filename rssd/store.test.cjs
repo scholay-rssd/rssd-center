@@ -392,6 +392,19 @@ test('editorial private originals round-trip exact bytes, keep author notes priv
  await assert.rejects(f.service.saveArchive(f.ctx,'research',bundle),{code:'revision_conflict'});
 });
 
+test('private notes name the device that saved an edition\'s first version, and nothing for a person',async()=>{
+ const f=await editorialFixture(),workId=randomUUID(),id='first-machine-'+randomUUID().slice(0,8),notebook={version:2,blocks:[],modelSignatures:[]};
+ const edition=title=>({locale:'zh-CN',title,bodyMarkdown:'Body '+title,metadata:{editorial:{articleId:id},notebook}});
+ await store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[edition('One')]},{publish:false});
+ const name=(await db.$queryRawUnsafe('SELECT name FROM rssd_workers WHERE "orgId"=$1 AND id=$2',f.ctx.orgId,f.ctx.workerId))[0].name;
+ assert.deepEqual((await f.service.privateNotes(f.ctx,'research',id)).firstMachine,{name});
+ await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[edition('Two')]},{publish:false});
+ assert.deepEqual((await f.service.privateNotes(f.ctx,'research',id)).firstMachine,{name},'a later save does not change who wrote it first');
+ const byOwner=randomUUID(),ownerId='owner-first-'+randomUUID().slice(0,8);
+ await store.submit(f.owner,{requestId:randomUUID(),workId:byOwner,workspaceId:'research',sectionId:'methods',editions:[{...edition('Three'),metadata:{editorial:{articleId:ownerId},notebook}}]},{publish:false});
+ assert.equal((await f.service.privateNotes(f.ctx,'research',ownerId)).firstMachine,null,'a person saving in the Center is not a machine');
+});
+
 test('native edition author notes are privately readable with immutable body hash and scope boundaries',async()=>{
  const f=await editorialFixture(),workId=randomUUID(),id='native-private-notes',body='Public native body',notebook={version:2,blocks:[{id:'para',type:'paragraph',text:body}],internalNotes:{writing:'NATIVE_PRIVATE'},blockNotes:{para:{notes:{verification:'ROW_PRIVATE'}}},modelSignatures:[]};
  await store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'Native title',bodyMarkdown:body,metadata:{editorial:{articleId:id},notebook}}]},{publish:false});
