@@ -27,6 +27,19 @@ the additive RSSD migration. The first-install flag does not reset existing data
 
 ## Verification
 
+Writing defaults are a public text/data bundle compiled from the core GitHub
+repository. Publish a validated catalog before starting new writing claims:
+`node rssd/writing-defaults.cjs publish catalog.json /config/rssd-writing-defaults/active.json`.
+Set `RSSD_WRITING_DEFAULTS_FILE` for another path. Publishing retains immutable
+hash-named versions and atomically switches the active file. No database migration
+or organization data is involved. The GET-only `/rssd/public/v1/writing-defaults`
+and `/:workspaceId/:sectionId` routes expose only that public catalog without a
+device credential. New write claims freeze the full selected rules; resumed legacy
+claims are preserved. New baseline-bound publications check the claimed baseline,
+actual notebook image references and captions. Draft storage remains available.
+The portable contract and fingerprint are maintained by core's
+`scripts/sync-writing-defaults-contract.mjs`.
+
 Use Node 22.19 and pnpm 10.6.1 with the committed lockfile. Run the backend build
 and frontend TypeScript check. The build packages `rssd/*.cjs` alongside the Nest
 output so deployment does not rely on a sibling private checkout.

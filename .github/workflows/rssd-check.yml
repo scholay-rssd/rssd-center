@@ -36,9 +36,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec prisma migrate diff --from-empty --to-schema-datamodel libraries/nestjs-libraries/src/database/prisma/schema.prisma --script --output rssd/postiz-schema.sql
-      - run: node --test rssd/coordination.test.cjs rssd/store.test.cjs rssd/discourse.test.cjs rssd/postiz.test.cjs rssd/initialize-database.test.cjs rssd/owner-context.test.cjs rssd/health.test.cjs rssd/labels.test.cjs rssd/community.test.cjs rssd/existing-site-publish.test.cjs
+      - run: node --test rssd/coordination.test.cjs rssd/store.test.cjs rssd/discourse.test.cjs rssd/postiz.test.cjs rssd/initialize-database.test.cjs rssd/owner-context.test.cjs rssd/health.test.cjs rssd/labels.test.cjs rssd/community.test.cjs rssd/existing-site-publish.test.cjs rssd/writing-defaults.test.cjs
       - run: pnpm --filter postiz-backend build
-      - run: node --test rssd/http.test.cjs rssd/body-parsers.test.cjs rssd/existing-site-publish.http.test.cjs
+      - run: node --test rssd/http.test.cjs rssd/body-parsers.test.cjs rssd/existing-site-publish.http.test.cjs rssd/writing-defaults.http.test.cjs
       - run: pnpm exec tsc --noEmit -p apps/frontend/tsconfig.json
       - run: pnpm exec jest --config rssd/jest-ui.config.cjs --runInBand
       - run: sudo apt-get update && sudo apt-get install -y age rclone

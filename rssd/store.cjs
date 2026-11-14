@@ -1,6 +1,7 @@
 'use strict';
 const {randomUUID, randomBytes} = require('node:crypto');
 const p = require('./protocol.cjs');
+const {validateWritingDelivery}=require('./writing-defaults.cjs');
 const encoded = value => JSON.stringify(value);
 const rows = (db, sql, ...params) => db.$queryRawUnsafe(sql, ...params);
 const execute = (db, sql, ...params) => db.$executeRawUnsafe(sql, ...params);
@@ -43,7 +44,7 @@ async function audit(db, ctx, action, payload) {
   await execute(db, 'INSERT INTO rssd_audit ("orgId",id,actor,action,payload) VALUES ($1,$2,$3,$4,$5::jsonb)',ctx.orgId,randomUUID(),ctx.workerId || ctx.userId || 'owner',action,encoded(payload));
 }
 class RssdStore {
-  constructor(db) { this.db = db; }
+  constructor(db,{writingDefaults}={}) { this.db = db; this.writingDefaults=writingDefaults; }
   transaction(fn) { return this.db.$transaction(fn, {maxWait:10000,timeout:20000}); }
   async writable(db,ctx,workspaceId) {
     const migration=await one(db,'SELECT state FROM rssd_migrations WHERE "orgId"=$1 AND "workspaceId"=$2',ctx.orgId,workspaceId);
@@ -277,7 +278,8 @@ class RssdStore {
         const channel=destination.kind==='postiz'?await one(db,'SELECT "providerIdentifier" FROM "Integration" WHERE "organizationId"=$1 AND id=$2',ctx.orgId,destination.config.integrationId):null;
         destinations.push({...target,name:destination.name,kind:destination.kind,...(channel?{platform:channel.providerIdentifier}:{})});
       }
-      const claimToken=randomUUID(),payload={...demand.payload,policy:section.policy,workspaceRevision:row.revision,destinations,outputContractVersion:1,claimExpiresAt:new Date(Date.now()+CLAIM_TTL_MS).toISOString()};
+      const writingDefaults=this.writingDefaults?await this.writingDefaults.freeze(demand):null;
+      const claimToken=randomUUID(),payload={...demand.payload,policy:section.policy,workspaceRevision:row.revision,destinations,outputContractVersion:1,claimExpiresAt:new Date(Date.now()+CLAIM_TTL_MS).toISOString(),...(writingDefaults?{writingDefaults}:{})};
       const result=await one(db,`UPDATE rssd_demands SET state='claimed',"workerId"=$3,"claimToken"=$4,generation=generation+1,
         payload=$5::jsonb,"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2 RETURNING *`,ctx.orgId,demand.id,ctx.workerId,claimToken,encoded(payload));
       await audit(db,ctx,'demand.claim',{id:demand.id,generation:result.generation});return result;
@@ -384,6 +386,7 @@ class RssdStore {
       if(work&&(work.workspaceId!==value.workspaceId||work.sectionId!==value.sectionId))p.fail('Work belongs to a different workspace or section',409,'identity_conflict');
       const result={requestId:value.requestId,workId:value.workId,workspaceId:value.workspaceId,status:(writePublications||storeOnlyDemand)?'accepted':'draft_saved',editions:[],publicationIds:[],...(storeOnlyDemand?{storeOnly:true,storeOnlyWorkerId:ctx.workerId}:{})};
       for(const edition of value.editions){
+        if(writePublications&&demand?.payload?.writingDefaults)validateWritingDelivery(edition,demand.payload.writingDefaults);
         const action=await one(db,`SELECT id FROM rssd_editorial_actions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND state IN ('queued','dispatching') LIMIT 1`,ctx.orgId,value.workId,edition.locale);
         if(action)p.fail('A website visibility action is in progress; retain the local result until its receipt settles',409,'publication_pending');
         const visibility=await one(db,'SELECT visibility FROM rssd_editorial_states WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3',ctx.orgId,value.workId,edition.locale);

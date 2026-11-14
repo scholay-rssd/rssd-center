@@ -60,6 +60,7 @@ import { RssdController } from '../rssd/rssd.controller';
 import { RssdAuthController } from '../rssd/rssd.auth.controller';
 import { RssdGuestbookController } from '../rssd/rssd.guestbook.controller';
 import { RssdCommunityController } from '../rssd/rssd.community.controller';
+import { RssdWritingDefaultsController } from '../rssd/rssd.writing-defaults.controller';
 import { RssdService } from '../rssd/rssd.service';
 import { RssdMiddleware } from '../rssd/rssd.middleware';
 
@@ -101,6 +102,7 @@ const authenticatedController = [
         RssdAuthController,
         RssdGuestbookController,
         RssdCommunityController,
+        RssdWritingDefaultsController,
         StripeController,
         AuthController,
         PublicController,
