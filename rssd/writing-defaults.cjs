@@ -26,7 +26,7 @@ function validateWritingDelivery(edition,baseline){
  if(!baseline)return;
  const n=edition.metadata?.notebook,ref=edition.metadata?.writingDefaults;
  if(ref?.baselineHash!==baseline.hash||ref?.catalogHash!==baseline.catalogHash||ref?.sourceCommit!==baseline.source.commit)throw new ProtocolError('Writing baseline does not match the original claim',409,'writing_defaults_conflict');
- let effective;try{effective=rules.compose(baseline,{origin:ref.adjustmentOrigin||'local',...(ref.imageAdjustment?{images:ref.imageAdjustment}:{})});}catch{throw new ProtocolError('Writing adjustment is invalid',400,'writing_defaults_conflict');}
+ let effective;try{effective=rules.compose(baseline,{origin:ref.adjustmentOrigin||'local',...(ref.imageAdjustment?{images:ref.imageAdjustment}:{}),...(ref.bodyLengthAdjustment?{bodyLength:ref.bodyLengthAdjustment}:{})});}catch{throw new ProtocolError('Writing adjustment is invalid',400,'writing_defaults_conflict');}
  const issues=rules.deliveryIssues(n,effective);
  for(const b of n?.blocks||[])if(b.type==='image'&&b.state==='ready'&&!edition.bodyMarkdown.includes(b.text))issues.push('Notebook image is absent from public body');
  if(issues.length)throw new ProtocolError(issues.join('; '),400,'writing_delivery_incomplete');

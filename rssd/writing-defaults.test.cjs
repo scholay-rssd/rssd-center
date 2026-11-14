@@ -29,3 +29,14 @@ test('a new writing delivery needs its actual baseline and a captioned image in 
  edition.metadata.writingDefaults.baselineHash='c'.repeat(64);assert.throws(()=>validateWritingDelivery(edition,b),e=>e.status===409);
 });
 module.exports={fixture};
+test('new baseline checks alt bounds and explicit body budgets while notes cannot substitute for body',()=>{
+ const c=fixture('fixture.3'),s=c.workspaces[0].sections[0];s.delivery={version:1,format:'notebook-v2-flat',altLength:true};s.images.altMin=20;s.images.altMax=60;delete c.hash;c.hash=rules.hash(c);
+ const b=rules.resolve(c,'fixture','section'),image={id:'image',type:'image',state:'ready',text:'https://example.org/fixture.png',alt:'白底展示两枚真实图标及空心与实心轮廓的对照关系'};
+ const n={blocks:[{id:'body',type:'paragraph',state:'ready',text:'甲乙丙丁戊己庚辛壬癸'},image,{type:'annotation',role:'caption',targetId:'image',state:'ready',text:'Synthetic attribution'}],internalNotes:{verification:'备'.repeat(1000)}};
+ const ref={baselineHash:b.hash,catalogHash:b.catalogHash,sourceCommit:b.source.commit,bodyLengthAdjustment:{unit:'han',minimum:9,target:10,maximum:11}};
+ const edition={bodyMarkdown:'![Fixture]('+image.text+')',metadata:{writingDefaults:ref,notebook:n}};
+ assert.doesNotThrow(()=>validateWritingDelivery(edition,b));
+ image.alt='𠀀'.repeat(61);assert.throws(()=>validateWritingDelivery(edition,b),/当前 61/);
+ image.alt='𠀀'.repeat(20);n.blocks[0].text='甲';assert.throws(()=>validateWritingDelivery(edition,b),/当前 1/);
+ ref.bodyLengthAdjustment.minimum=20;assert.throws(()=>validateWritingDelivery(edition,b),e=>e.code==='writing_defaults_conflict');
+});
