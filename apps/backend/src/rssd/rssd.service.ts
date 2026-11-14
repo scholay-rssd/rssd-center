@@ -20,6 +20,7 @@ const { RssdEditorial } = require('../../../../rssd/editorial.cjs');
 const { RssdEditorialActions } = require('../../../../rssd/editorial-actions.cjs');
 const { RssdMigration } = require('../../../../rssd/migration.cjs');
 const { RssdExistingSitePublish } = require('../../../../rssd/existing-site-publish.cjs');
+const { WritingDefaults } = require('../../../../rssd/writing-defaults.cjs');
 
 @Injectable()
 export class RssdService implements OnModuleInit, OnModuleDestroy {
@@ -39,7 +40,7 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   readonly existingSitePublish: any;
   private timer?: ReturnType<typeof setInterval>;
   constructor(prisma: PrismaService, posts: PostsService, temporal: TemporalService) {
-    this.store = new RssdStore(prisma);
+    this.store = new RssdStore(prisma,{writingDefaults:new WritingDefaults()});
     this.coordination = new RssdCoordination(this.store);
     this.existingSitePublish = new RssdExistingSitePublish(this.store);
     this.mcp = new RssdMcp(this.store, this.coordination, this.existingSitePublish);
