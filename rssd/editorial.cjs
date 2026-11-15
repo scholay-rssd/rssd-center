@@ -6,7 +6,7 @@ const {gunzipSync,gzipSync}=require('node:zlib');
 const p=require('./protocol.cjs');
 const {RssdStore}=require('./store.cjs');
 const {RssdMedia}=require('./media.cjs');
-const {imageManifest}=require('./rssd-media.cjs');
+const {imageManifest,overReadLimit}=require('./rssd-media.cjs');
 const {record,recordFields}=require('./rssd-record.cjs');
 const {StagedDrafts}=require('./staged-drafts.cjs');
 const {prepareStructuredDraft}=require('./structured-draft.cjs');
@@ -184,8 +184,10 @@ class RssdEditorial {
         const media=await this.media.row(ctx,item.id);
         if(media.workspaceId!==workspaceId)p.fail('Media belongs to a different workspace',403,'forbidden');
         bytes+=media.manifest.bytes;
-        if(bytes>(options.maxAssetBytes||2*1024*1024))p.fail('Referenced images exceed the staged draft limit',413,'media_limit');
+        overReadLimit(bytes);
       }
+      // A work that cannot fit the rest of a batch is read on its own instead.
+      if(options.batchBytes!==undefined&&bytes>options.batchBytes)p.fail('Read this work individually',413,'batch_response_limit');
     }
     let material;
     if(options.fingerprintOnly){
@@ -266,7 +268,7 @@ class RssdEditorial {
         const row=matches[0];
         if(!row)p.fail('Manuscript not found',404,'not_found');
         if(row.deletedAt)p.fail('This historical manuscript was deleted',410,'edition_deleted');
-        const data=await this.data(ctx,workspaceId,row,row.revision,entries,media==='referenced'?{referencedOnly:true}:{});
+        const data=await this.data(ctx,workspaceId,row,row.revision,entries,media==='referenced'?{referencedOnly:true,batchBytes:Math.floor(budget*3/4)}:{});
         const detail={id:row.documentId||row.workId,articleId:row.articleId,workId:row.workId,locale:row.locale,
           preservesEditorialFieldsOnSave:true,preservesLegacyOptionalBlanksOnSave:true,preservesStructuredDraftsOnSave:true,...(media==='referenced'?{boundedMediaReads:true}:{}),version:row.revision,revision:row.revision,publishedVersion:row.publishedVersion,url:row.url,data};
         item={articleId,ok:true,detail};

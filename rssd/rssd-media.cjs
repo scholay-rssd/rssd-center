@@ -19,5 +19,10 @@ function decodeImage(input){
  const actual=imageManifest(bytes),expected=mediaManifest(input);
  if(p.hash(actual)!==p.hash(expected))p.fail('Image checksum or type mismatch',409,'media_conflict');return {bytes,manifest:actual};
 }
+// A device reads a work's referenced images in one reply. The 2 MiB limit on what a device may
+// save does not apply to reading: a work edited in the Center can carry more, and the vault must
+// still be able to download it. This only bounds one reply; a single image may be up to 20 MiB.
+const DEVICE_READ_MEDIA_BYTES=32*1024*1024;
+function overReadLimit(bytes){if(bytes>DEVICE_READ_MEDIA_BYTES)p.fail('Referenced images exceed the 32 MiB device read limit',413,'media_limit');}
 const mediaId=(workspaceId,sha256)=>'media-'+p.hash([p.id(workspaceId),sha256]).slice(0,48);
-module.exports={MAX_BYTES,mediaManifest,imageManifest,decodeImage,mediaId};
+module.exports={MAX_BYTES,DEVICE_READ_MEDIA_BYTES,mediaManifest,imageManifest,decodeImage,mediaId,overReadLimit};

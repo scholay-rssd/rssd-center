@@ -4,7 +4,7 @@
 const p=require('./protocol.cjs');
 const {RssdStore}=require('./store.cjs');
 const {RssdMedia}=require('./media.cjs');
-const {imageManifest}=require('./rssd-media.cjs');
+const {imageManifest,overReadLimit}=require('./rssd-media.cjs');
 const {prepareStructuredDraft}=require('./structured-draft.cjs');
 const q=(db,sql,...v)=>db.$queryRawUnsafe(sql,...v),x=(db,sql,...v)=>db.$executeRawUnsafe(sql,...v);
 const lock=(db,key)=>x(db,'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',key);
@@ -42,7 +42,7 @@ class StagedDrafts {
    if(!paths.has(ref.path))continue;
    const row=await this.editorial.media.row(ctx,ref.id);
    if(row.workspaceId!==workspace||row.manifest.path!==ref.path)p.fail('Staged draft media identity changed',409,'media_conflict');
-   total+=row.manifest.bytes;if(total>2*1024*1024)p.fail('Referenced images exceed the staged draft limit',413,'media_limit');
+   total+=row.manifest.bytes;overReadLimit(total);
    refs.push(ref);paths.delete(ref.path);
   }
   if(paths.size)p.fail('Staged draft image is missing',409,'media_conflict');
