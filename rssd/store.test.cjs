@@ -931,7 +931,7 @@ test('staged translation source fingerprints do not load oversized source image 
  assert.equal(result.markdown,'English body');assert.equal(result.translationOf.revision,1);assert.match(result.translationOf.sha256,/^[a-f0-9]{64}$/);
 });
 
-test('staged reads return only current referenced media and reject oversize before reading bytes',async()=>{
+test('staged reads return only current referenced media, read past the save limit, and reject oversize before reading bytes',async()=>{
  const f=await editorialFixture();
  await f.service.submit(f.ctx,'research',f.packet,{intent:'draft'});
  const initial=await f.service.detail(f.ctx,'research',f.packet.data.id,{locale:'zh-CN'});
@@ -952,6 +952,9 @@ test('staged reads return only current referenced media and reject oversize befo
  const big=Buffer.concat([png,Buffer.alloc(2*1024*1024)]),manifest=mediaProtocol.imageManifest(big),uploaded=await f.media.upload(f.ctx,{workspaceId:'research',name:'large',...manifest,data:big.toString('base64')});
  raw.assets=[{id:uploaded.id,path:manifest.path}];raw.markdown='![large]('+manifest.path+')';
  await db.$executeRawUnsafe('UPDATE rssd_staged_drafts SET data=$2::jsonb WHERE "orgId"=$1 AND "overlayRevision"=3',f.owner.orgId,JSON.stringify(raw));
+ // More than a device may save (2 MiB) is still read back, so the vault can download the work.
+ reads=0;const large=await f.service.api(f.ctx,'research','GET',['staged-drafts',base.articleId],{locale:'zh-CN'});assert.equal(reads,1);assert.deepEqual(large.data.assets.map(a=>a.path),[manifest.path]);
+ const row=f.media.row.bind(f.media);f.media.row=async(ctx,id)=>{const value=await row(ctx,id);return id===uploaded.id?{...value,manifest:{...value.manifest,bytes:mediaProtocol.DEVICE_READ_MEDIA_BYTES+1}}:value;};
  reads=0;await assert.rejects(f.service.api(f.ctx,'research','GET',['staged-drafts',base.articleId],{locale:'zh-CN'}),{code:'media_limit'});assert.equal(reads,0);
 });
 
@@ -1110,7 +1113,7 @@ test('overlapping imports are fenced by lease generation and stale importer cann
  }finally{await fs.promises.rm(directory,{recursive:true,force:true});}
 });
 
-test('bounded canonical reads avoid historical image amplification while legacy reads remain compatible',async()=>{
+test('bounded canonical reads avoid historical image amplification, read past the save limit and stay within one reply',async()=>{
  const f=await editorialFixture(),workId=randomUUID(),png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYZkAAAAASUVORK5CYII=','base64'),images=[];
  for(let i=0;i<3;i++){const bytes=Buffer.concat([png,Buffer.alloc(900*1024,i)]),manifest=mediaProtocol.imageManifest(bytes);images.push(await f.media.upload(f.ctx,{workspaceId:'research',name:'image-'+i,...manifest,data:bytes.toString('base64')}));}
  const metadata={author:'Author',date:'2026-01-01',category:'Methods',editorial:{articleId:'bounded-example'}};
@@ -1122,8 +1125,17 @@ test('bounded canonical reads avoid historical image amplification while legacy 
  readCount=0;const legacy=await f.service.api(f.ctx,'research','GET',['cloud','bounded-example'],{locale:'zh-CN'});assert.equal(legacy.data.assets.length,3);assert.equal(readCount,3);
  const full={...edition,bodyMarkdown:images.map(a=>'![]('+a.url+')').join('\n')};
  await store.submit(f.owner,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',baseRevisions:{'zh-CN':1},editions:[full]},{publish:false});
- readCount=0;await assert.rejects(f.service.api(f.ctx,'research','GET',['cloud','bounded-example'],{locale:'zh-CN',media:'referenced'}),{code:'media_limit'});assert.equal(readCount,0);
- const batch=await f.service.api(f.ctx,'research','GET',['cloud','batch','read'],{locale:'zh-CN',ids:'bounded-example',media:'referenced'});assert.equal(batch.items[0].ok,false);assert.equal(batch.items[0].error.code,'media_limit');
+ // 2.7 MiB of referenced images: more than a device may save, still read whole, alone or in a batch.
+ readCount=0;const whole=await f.service.api(f.ctx,'research','GET',['cloud','bounded-example'],{locale:'zh-CN',media:'referenced'});assert.equal(whole.data.assets.length,3);assert.equal(readCount,3);
+ readCount=0;let batch=await f.service.api(f.ctx,'research','GET',['cloud','batch','read'],{locale:'zh-CN',ids:'bounded-example',media:'referenced'});assert.equal(batch.items[0].ok,true);assert.equal(batch.items[0].detail.data.assets.length,3);
+ const row=f.media.row.bind(f.media);let inflated=0;f.media.row=async(ctx,id)=>{const value=await row(ctx,id);return id===images[0].id&&inflated?{...value,manifest:{...value.manifest,bytes:inflated}}:value;};
+ // A work too large for the rest of a batch is sent back to be read on its own, before any bytes are read.
+ inflated=4*1024*1024;readCount=0;batch=await f.service.api(f.ctx,'research','GET',['cloud','batch','read'],{locale:'zh-CN',ids:'bounded-example',media:'referenced'});
+ assert.equal(batch.items[0].ok,false);assert.deepEqual([batch.items[0].error.code,batch.items[0].error.status],['batch_response_limit',413]);assert.equal(readCount,0);
+ // Past the device read limit a work is refused outright, again before any bytes are read.
+ inflated=mediaProtocol.DEVICE_READ_MEDIA_BYTES;readCount=0;
+ await assert.rejects(f.service.api(f.ctx,'research','GET',['cloud','bounded-example'],{locale:'zh-CN',media:'referenced'}),{code:'media_limit'});assert.equal(readCount,0);
+ batch=await f.service.api(f.ctx,'research','GET',['cloud','batch','read'],{locale:'zh-CN',ids:'bounded-example',media:'referenced'});assert.equal(batch.items[0].ok,false);assert.equal(batch.items[0].error.code,'media_limit');assert.equal(readCount,0);
 });
 
 test('retired migration columns allow only their imported works to save and publish, without reopening production columns',async()=>{
