@@ -204,7 +204,8 @@ export class PostsService {
     if (
       !resolved ||
       !('postId' in resolved) ||
-      resolved.postId === post.releaseId
+      (resolved.postId === post.releaseId &&
+        resolved.releaseURL === post.releaseURL)
     ) {
       return {
         releaseId: post.releaseId,
