@@ -45,7 +45,15 @@ async function audit(db, ctx, action, payload) {
 }
 class RssdStore {
   constructor(db,{writingDefaults}={}) { this.db = db; this.writingDefaults=writingDefaults; }
-  transaction(fn) { return this.db.$transaction(fn, {maxWait:10000,timeout:20000}); }
+  transaction(fn, options={}) {
+    // Editorial publication scans migrated history inside this transaction.
+    // A closed transaction must stay a protocol error: Nest otherwise hides it
+    // as a blank 500 and the client cannot tell that the request was rolled back.
+    return this.db.$transaction(fn, {maxWait:10000,timeout:20000,...options}).catch(error=>{
+      if(error?.code==='P2028'||/transaction.*(timeout|expired)|transaction not found/i.test(String(error?.message||'')))p.fail('Publication transaction timed out before it could commit; retry the original request',503,'transaction_timeout');
+      throw error;
+    });
+  }
   async writable(db,ctx,workspaceId) {
     const migration=await one(db,'SELECT state FROM rssd_migrations WHERE "orgId"=$1 AND "workspaceId"=$2',ctx.orgId,workspaceId);
     if(migration&&migration.state!=='active')p.fail('This workspace is staged for migration; its original writer is still active',409,'migration_staged');

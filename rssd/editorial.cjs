@@ -298,10 +298,19 @@ class RssdEditorial {
   async legacyRequest(ctx,workspaceId,key,intent){
     await this.workspace(ctx,workspaceId);p.id(key);
     const field=intent==='draft'?'drafts':'requests';
+    // Containment runs before the array is expanded. A new request key then
+    // does not materialize every migrated document's request list inside the
+    // publication transaction.
     const row=(await q(this.store.db,`SELECT l."documentId",l."workId",l.locale,l.source->'document' AS document,
       l.source->'jobs' AS jobs,l.source->'revisions' AS revisions,r.value AS request
-      FROM rssd_legacy_documents l JOIN rssd_works w ON w."orgId"=l."orgId" AND w.id=l."workId",
-      LATERAL jsonb_array_elements(l.source->$4::text) r WHERE l."orgId"=$1 AND w."workspaceId"=$2 AND r.value->>'key'=$3`,ctx.orgId,workspaceId,key,field))[0];
+      FROM (
+        SELECT l.source,l."documentId",l."workId",l.locale
+        FROM rssd_legacy_documents l JOIN rssd_works w ON w."orgId"=l."orgId" AND w.id=l."workId"
+        WHERE l."orgId"=$1 AND w."workspaceId"=$2
+          AND l.source->$4 @> jsonb_build_array(jsonb_build_object('key',$3::text))
+      ) l
+      CROSS JOIN LATERAL jsonb_array_elements(l.source->$4::text) r
+      WHERE r.value->>'key'=$3`,ctx.orgId,workspaceId,key,field))[0];
     if(!row)return null;
     const original=JSON.parse(row.revisions.at(-1).payload),id=row.document.kind==='news'?original.id:'record-'+row.documentId;
     const result={centerManaged:true,legacy:true,id:row.documentId,articleId:id,requestKey:key,revision:row.request.revision,url:row.document.permalink};
@@ -413,7 +422,7 @@ class RssdEditorial {
       const receipt={id:current?.documentId||data.record?.documentId||workId,articleId:data.id,requestKey:input.requestKey,revision,url:route};
       await x(db,`INSERT INTO rssd_editorial_requests ("orgId","workspaceId","requestKey",intent,"payloadHash","workId",locale,"destinationId","publicationId",receipt)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,ctx.orgId,workspaceId,input.requestKey,intent,fingerprint,workId,locale,destinationId,publication?.id||null,JSON.stringify(receipt));
-    });
+    }, {timeout:60000});
     return this.receipt(ctx,workspaceId,input.requestKey,{intent});
   }
   async saveArchive(ctx,workspaceId,input){
