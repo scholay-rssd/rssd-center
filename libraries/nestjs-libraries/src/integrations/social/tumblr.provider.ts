@@ -366,7 +366,7 @@ export class TumblrProvider extends SocialAbstract implements SocialProvider {
     id: string,
     accessToken: string,
     postDetails: PostDetails<TumblrDto>[],
-    integration: Integration
+    _integration: Integration
   ): Promise<PostResponse[]> {
     const [post] = postDetails;
     const content = await this.createContentBlocks(post);
@@ -383,22 +383,30 @@ export class TumblrProvider extends SocialAbstract implements SocialProvider {
       ? await this.createMultipartPost(id, accessToken, payload, post.media)
       : await this.createJsonPost(id, accessToken, payload);
 
-    const postId = String(
+    const rawId =
       response.response?.id_string ||
-        response.response?.post_id ||
-        response.response?.id ||
-        ''
-    );
-    const blogUrl = this.normalizeBlogUrl(
-      integration.profile || `https://www.tumblr.com/${id}`
-    );
+      response.response?.post_id ||
+      response.response?.id;
+    if (
+      !rawId ||
+      (typeof rawId === 'number' && !Number.isSafeInteger(rawId)) ||
+      !/^\d+$/.test(String(rawId))
+    ) {
+      throw new BadBody(
+        this.identifier,
+        '{}',
+        '{}',
+        'Tumblr did not return a usable post ID. The post may be live; check the blog before retrying.'
+      );
+    }
+    const postId = String(rawId);
 
     return [
       {
         id: post.id,
         status: 'completed',
         postId,
-        releaseURL: `${blogUrl}/post/${postId}`,
+        releaseURL: this.postUrl(id, postId),
       },
     ];
   }
@@ -413,8 +421,39 @@ export class TumblrProvider extends SocialAbstract implements SocialProvider {
     )}/avatar/128`;
   }
 
-  private normalizeBlogUrl(url: string) {
-    return this.normalizeUrl(url).replace(/\/$/, '');
+  // Repair the old dashboard-shaped /blog/view/<name>/post/<id> links on
+  // read. Keep other historical URLs unchanged, including custom domains.
+  async resolveReleaseId(
+    _accessToken: string,
+    releaseId: string,
+    integration: Integration,
+    _settings: any,
+    releaseURL: string
+  ) {
+    if (!/^\d+$/.test(releaseId) || !integration.internalId) return;
+    try {
+      const url = new URL(releaseURL);
+      const blog = encodeURIComponent(integration.internalId);
+      const invalidPaths = [
+        `/blog/view/${blog}/post/${releaseId}`,
+        `/${blog}/post/${releaseId}`,
+      ];
+      if (
+        url.hostname === 'www.tumblr.com' &&
+        invalidPaths.includes(url.pathname.replace(/\/$/, ''))
+      ) {
+        return {
+          postId: releaseId,
+          releaseURL: this.postUrl(integration.internalId, releaseId),
+        };
+      }
+    } catch (err) {
+      // Leave unrecognized historical receipts unchanged.
+    }
+  }
+
+  private postUrl(blogName: string, postId: string) {
+    return `https://www.tumblr.com/${encodeURIComponent(blogName)}/${postId}`;
   }
 
   private normalizeUrl(url: string) {

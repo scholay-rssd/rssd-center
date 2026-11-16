@@ -6,15 +6,27 @@ import {
 } from '@gitroom/nestjs-libraries/integrations/social/social.integrations.interface';
 import { makeSecureId } from '@gitroom/nestjs-libraries/services/make.secure.id';
 import dayjs from 'dayjs';
-import { SocialAbstract } from '@gitroom/nestjs-libraries/integrations/social.abstract';
-import { getPublicKey, Relay, finalizeEvent, SimplePool } from 'nostr-tools';
+import {
+  BadBody,
+  SocialAbstract,
+} from '@gitroom/nestjs-libraries/integrations/social.abstract';
+import { getPublicKey, finalizeEvent, nip19, SimplePool } from 'nostr-tools';
+import type { Relay as RelayType } from 'nostr-tools';
 
 import WebSocket from 'ws';
 import { AuthService } from '@gitroom/helpers/auth/auth.service';
 import { Integration } from '@prisma/client';
 
+// The package exports this subpath at runtime; the repository's legacy TS
+// module resolution cannot resolve its declaration through package exports.
+const { Relay, useWebSocketImplementation } = require('nostr-tools/relay') as {
+  Relay: typeof RelayType;
+  useWebSocketImplementation: (socket: typeof WebSocket) => void;
+};
+
 // @ts-ignore
 global.WebSocket = WebSocket;
+useWebSocketImplementation(WebSocket);
 
 const list = [
   'wss://nos.lol',
@@ -102,37 +114,44 @@ export class NostrProvider extends SocialAbstract implements SocialProvider {
     return {};
   }
 
-  private async publish(pubkey: string, event: any) {
-    let id = '';
-    for (const relay of list) {
-      try {
-        const relayInstance = await Relay.connect(relay);
-        const value = new Promise<any>((resolve) => {
-          relayInstance.subscribe([{ kinds: [1], authors: [pubkey] }], {
-            eoseTimeout: 6000,
-            onevent: (event) => {
-              resolve(event);
-            },
-            oneose: () => {
-              resolve({});
-            },
-            onclose: () => {
-              resolve({});
-            },
-          });
-        });
+  private async publish(event: ReturnType<typeof finalizeEvent>) {
+    // Every relay receives the same signed event. An OK from at least one
+    // relay confirms that exact event; an older event from the same author
+    // must never be used as its receipt.
+    const accepted = await Promise.all(
+      list.map(async (url) => {
+        let relay: RelayType | undefined;
+        try {
+          relay = new Relay(url);
+          await relay.connect({ timeout: 8000 });
+          relay.publishTimeout = 8000;
+          await relay.publish(event);
+          return true;
+        } catch (err) {
+          return false;
+        } finally {
+          try {
+            relay?.close();
+          } catch (err) {
+            // Closing a failed connection must not hide another relay's OK.
+          }
+        }
+      })
+    );
 
-        await relayInstance.publish(event);
-        const all = await value;
-        relayInstance.close();
-        // relayInstance.close();
-        id = id || all?.id;
-      } catch (err) {
-        /**empty**/
-      }
+    if (!accepted.some(Boolean)) {
+      // A timeout or disconnect can occur after a relay accepted the event.
+      // Stop the workflow rather than signing and publishing a new event on
+      // retry. The public ID lets the owner check relays before retrying.
+      throw new BadBody(
+        this.identifier,
+        JSON.stringify({ eventId: event.id }),
+        '{}',
+        `No Nostr relay confirmed event ${event.id}. It may have been published; check the event before retrying.`
+      );
     }
 
-    return id;
+    return event.id;
   }
 
   async authenticate(params: {
@@ -187,13 +206,13 @@ export class NostrProvider extends SocialAbstract implements SocialProvider {
       this.secretKey(password)
     );
 
-    const eventId = await this.publish(id, textEvent);
+    const eventId = await this.publish(textEvent);
 
     return [
       {
         id: firstPost.id,
         postId: String(eventId),
-        releaseURL: `https://primal.net/e/${eventId}`,
+        releaseURL: `https://primal.net/e/${nip19.noteEncode(eventId)}`,
         status: 'completed',
       },
     ];
@@ -224,13 +243,13 @@ export class NostrProvider extends SocialAbstract implements SocialProvider {
       this.secretKey(password)
     );
 
-    const eventId = await this.publish(id, textEvent);
+    const eventId = await this.publish(textEvent);
 
     return [
       {
         id: commentPost.id,
         postId: String(eventId),
-        releaseURL: `https://primal.net/e/${eventId}`,
+        releaseURL: `https://primal.net/e/${nip19.noteEncode(eventId)}`,
         status: 'completed',
       },
     ];
