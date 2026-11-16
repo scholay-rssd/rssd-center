@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS rssd_legacy_documents (
  locale TEXT NOT NULL,"sourceHash" TEXT NOT NULL,source JSONB NOT NULL,"deletedAt" TIMESTAMPTZ(3),
  PRIMARY KEY ("orgId","siteId","documentId")
 );
+CREATE INDEX IF NOT EXISTS rssd_legacy_request_keys ON rssd_legacy_documents USING GIN ((source->'requests') jsonb_path_ops);
+CREATE INDEX IF NOT EXISTS rssd_legacy_draft_keys ON rssd_legacy_documents USING GIN ((source->'drafts') jsonb_path_ops);
 CREATE TABLE IF NOT EXISTS rssd_media (
   "orgId" TEXT NOT NULL, id TEXT NOT NULL, "workspaceId" TEXT NOT NULL, name TEXT NOT NULL,
   manifest JSONB NOT NULL, "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
