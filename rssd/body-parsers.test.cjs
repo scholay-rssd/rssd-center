@@ -13,7 +13,7 @@ class BodyProbe {
 }
 Controller()(BodyProbe);
 Post(['rssd/v1/heartbeat','rssd/v1/claims','auth/login','rssd/v1/editorial/fixture/publish',
-  'rssd/v1/editorial/fixture/staged-drafts',
+  'rssd/v1/editorial/fixture/staged-drafts','rssd/v1/editorial/fixture/renditions',
   'rssd/v1/submissions','rssd/v1/drafts','rssd/v1/media','rssd/public/v1/community/discourse'])(
   BodyProbe.prototype,'echo',Object.getOwnPropertyDescriptor(BodyProbe.prototype,'echo'));
 Req()(BodyProbe.prototype,'echo',0);
@@ -44,6 +44,12 @@ test('staged draft bodies are bounded before parsing without changing publicatio
  const post=await start(t),path='/rssd/v1/editorial/fixture/staged-drafts';
  assert.equal((await post(path,JSON.stringify({value:'x'.repeat(3*1024*1024)}))).status,201);
  assert.equal((await post(path,JSON.stringify({value:'x'.repeat(4*1024*1024)}))).status,413);
+});
+
+test('rendition manifests have a bounded parser',async t=>{
+ const post=await start(t),path='/rssd/v1/editorial/fixture/renditions';
+ assert.equal((await post(path,JSON.stringify({value:'x'.repeat(128*1024)}))).status,201);
+ assert.equal((await post(path,JSON.stringify({value:'x'.repeat(2*1024*1024)}))).status,413);
 });
 
 test('editorial and submission parsers retain their larger payload support',async t=>{

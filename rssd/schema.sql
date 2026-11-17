@@ -71,6 +71,23 @@ CREATE TABLE IF NOT EXISTS rssd_editions (
   payload JSONB NOT NULL, hash TEXT NOT NULL,
   "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY ("orgId", "workId", locale, revision)
 );
+CREATE TABLE IF NOT EXISTS rssd_renditions (
+  "orgId" TEXT NOT NULL, id TEXT NOT NULL, "workspaceId" TEXT NOT NULL,
+  "workId" TEXT NOT NULL, locale TEXT NOT NULL, revision INTEGER NOT NULL, variant TEXT NOT NULL,
+  summary JSONB NOT NULL, payload JSONB NOT NULL,
+  "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY ("orgId",id),
+  FOREIGN KEY ("orgId","workId",locale,revision) REFERENCES rssd_editions ("orgId","workId",locale,revision)
+);
+CREATE INDEX IF NOT EXISTS rssd_renditions_workspace ON rssd_renditions ("orgId","workspaceId",locale,id);
+CREATE INDEX IF NOT EXISTS rssd_renditions_work ON rssd_renditions ("orgId","workspaceId",locale,"workId",id);
+CREATE TABLE IF NOT EXISTS rssd_rendition_media (
+  "orgId" TEXT NOT NULL, "renditionId" TEXT NOT NULL, "mediaId" TEXT NOT NULL,
+  PRIMARY KEY ("orgId","renditionId","mediaId"),
+  FOREIGN KEY ("orgId","renditionId") REFERENCES rssd_renditions ("orgId",id),
+  FOREIGN KEY ("orgId","mediaId") REFERENCES rssd_media ("orgId",id)
+);
+CREATE INDEX IF NOT EXISTS rssd_rendition_media_asset ON rssd_rendition_media ("orgId","mediaId");
 CREATE TABLE IF NOT EXISTS rssd_submissions (
   "orgId" TEXT NOT NULL, "requestId" TEXT NOT NULL, "payloadHash" TEXT NOT NULL,
   "workspaceId" TEXT NOT NULL, "workId" TEXT NOT NULL, result JSONB NOT NULL,
