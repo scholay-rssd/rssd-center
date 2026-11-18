@@ -71,7 +71,40 @@ function inputData(input,{allowOptionalBlanks=false}={}){
     if(!/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(data.record.documentId||'')||data.id!=='record-'+data.record.documentId)p.fail('Structured manuscript identity mismatch');
     recordFields(record(data.record),{title:data.title,bodyMarkdown:data.markdown});
   }
+  if(data.privateAppend!==undefined)privateAppend(data.privateAppend);
   return data;
+}
+// A draft may add to the work's private record, never replace it: completed runs (for example the agent and
+// model that drew a picture) and text appended to one internal note. The private record stays at the Center;
+// publication strips the notebook, so none of this reaches a reader.
+const APPEND_NOTES=new Set(['supplement','writing','images','verification','other']);
+function privateAppend(value){
+  p.object(value,'private record addition');
+  if(Object.keys(value).some(key=>!['modelSignatures','internalNotes'].includes(key)))p.fail('Invalid private record addition');
+  const runs=p.array(value.modelSignatures||[],'private runs',20);
+  for(const run of runs){
+    p.object(run,'private run');
+    if(Object.keys(run).some(key=>!['runId','agentId','agentName','modelId','modelName','action','status','startedAt','device'].includes(key)))p.fail('Invalid private run');
+    if(!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(run.runId||'')||typeof run.agentId!=='string'||!run.agentId||run.agentId.length>80||typeof run.agentName!=='string'||!run.agentName||run.agentName.length>120)p.fail('Invalid private run identity');
+    if(run.status!=='completed'||!['image','write','translate','revise'].includes(run.action)||!Number.isFinite(Date.parse(run.startedAt)))p.fail('Invalid private run');
+    for(const key of ['modelId','modelName'])if(run[key]!==null&&(typeof run[key]!=='string'||run[key].length>120))p.fail('Invalid private run model');
+    if(run.device!==undefined&&(typeof run.device!=='string'||run.device.length>120))p.fail('Invalid private run device');
+  }
+  const notes=value.internalNotes===undefined?{}:p.object(value.internalNotes,'private notes');
+  for(const [key,text] of Object.entries(notes))if(!APPEND_NOTES.has(key)||typeof text!=='string'||!text.trim()||text.length>4000)p.fail('Invalid private note: '+key);
+  return value;
+}
+/** The draft's notebook: the work's current private record plus the addition, deduplicated by run and by note text. */
+function appendPrivateRecord(notebook,prior,addition){
+  const next={...(notebook||{})};
+  const runs=[...(prior?.modelSignatures||[])],seen=new Set(runs.map(run=>run.runId));
+  for(const run of addition.modelSignatures||[])if(!seen.has(run.runId)){seen.add(run.runId);runs.push({...run});}
+  const notes={...(prior?.internalNotes||{})};
+  for(const [key,text] of Object.entries(addition.internalNotes||{})){const old=notes[key]||'',add=text.trim();if(!old.split('\n\n').includes(add))notes[key]=[old,add].filter(Boolean).join('\n\n');}
+  next.modelSignatures=runs;next.internalNotes=notes;
+  if(prior?.blockNotes&&!next.blockNotes)next.blockNotes=prior.blockNotes;
+  if(runs.length>2000||Object.values(notes).some(text=>text.length>16000))p.fail('Private record is full',409,'private_notes_invalid');
+  return next;
 }
 function archiveBundle(row){
   const bytes=Buffer.from(row.payload,'base64');
@@ -246,7 +279,7 @@ class RssdEditorial {
     const options=media==='referenced'?{referencedOnly:true}:{};
     const data=await this.data(ctx,workspaceId,row,revision,undefined,options);
     return {id:row.documentId||row.workId,articleId:row.articleId,workId:row.workId,locale:row.locale,
-      preservesEditorialFieldsOnSave:true,preservesLegacyOptionalBlanksOnSave:true,preservesStructuredDraftsOnSave:true,...(media==='referenced'?{boundedMediaReads:true}:{}),version:row.revision,revision,publishedVersion:row.publishedVersion,url:row.url,data,
+      preservesEditorialFieldsOnSave:true,preservesLegacyOptionalBlanksOnSave:true,preservesStructuredDraftsOnSave:true,acceptsPrivateAppendOnSave:true,...(media==='referenced'?{boundedMediaReads:true}:{}),version:row.revision,revision,publishedVersion:row.publishedVersion,url:row.url,data,
       ...(scope==='status'?{published:row.publishedVersion?await this.data(ctx,workspaceId,row,row.publishedVersion,undefined,options):null}:{})};
   }
   // Read small batches without exposing private archives. Resolve the complete identity map
@@ -271,7 +304,7 @@ class RssdEditorial {
         if(row.deletedAt)p.fail('This historical manuscript was deleted',410,'edition_deleted');
         const data=await this.data(ctx,workspaceId,row,row.revision,entries,media==='referenced'?{referencedOnly:true,batchBytes:Math.floor(budget*3/4)}:{});
         const detail={id:row.documentId||row.workId,articleId:row.articleId,workId:row.workId,locale:row.locale,
-          preservesEditorialFieldsOnSave:true,preservesLegacyOptionalBlanksOnSave:true,preservesStructuredDraftsOnSave:true,...(media==='referenced'?{boundedMediaReads:true}:{}),version:row.revision,revision:row.revision,publishedVersion:row.publishedVersion,url:row.url,data};
+          preservesEditorialFieldsOnSave:true,preservesLegacyOptionalBlanksOnSave:true,preservesStructuredDraftsOnSave:true,acceptsPrivateAppendOnSave:true,...(media==='referenced'?{boundedMediaReads:true}:{}),version:row.revision,revision:row.revision,publishedVersion:row.publishedVersion,url:row.url,data};
         item={articleId,ok:true,detail};
         const bytes=Buffer.byteLength(JSON.stringify(item));
         if(bytes>budget)item={articleId,ok:false,error:{code:'batch_response_limit',status:413,message:'Read this work individually'}};
@@ -415,6 +448,11 @@ class RssdEditorial {
       const route=current?.url||(locale==='en'?(source?'/en/news/'+source.articleId+'/':'/en/news/'+data.id+'/'):'/news/'+data.id+'/');
       const metadata={...(previousEdition?.metadata||{}),author:data.author,date:data.date,category:data.category,
         publication:{...(previousEdition?.metadata?.publication||{}),path:route},editorial:{...(previousEdition?.metadata?.editorial||{}),articleId:data.id,...(data.record?{documentId:data.record.documentId}:{})}};
+      if(data.privateAppend){
+        if(!current)p.fail('A private record can only be added to an existing work',409,'identity_conflict');
+        const prior=(await editorial.privateNotes(ctx,workspaceId,data.id)).privateEditorial;
+        metadata.notebook=appendPrivateRecord(previousEdition?.metadata?.notebook,prior,data.privateAppend);
+      }
       if(structured)metadata.record={...structured.metadata.record,fields:{...structured.metadata.record.fields,...structured.sections}};
       else if(data.record)metadata.record=record(data.record);
       const packet={requestId:'editorial-'+p.hash([workspaceId,input.requestKey]).slice(0,48),workId,workspaceId,sectionId:data.sectionId,baseRevisions:{[locale]:input.expectedVersion},editions:[{locale,title:data.title,summary:data.summary,bodyMarkdown,sources:previousEdition?.sources||[],media:attachments,translationOf,metadata}]};
@@ -546,4 +584,4 @@ class RssdEditorial {
     return {...result,centerManaged:true};
   }
 }
-module.exports={RssdEditorial,archiveBundle,legacyFingerprint,nativePrivateEditorial};
+module.exports={RssdEditorial,archiveBundle,legacyFingerprint,nativePrivateEditorial,privateAppend,appendPrivateRecord};
