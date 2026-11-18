@@ -19,10 +19,20 @@ FROM dependencies AS build
 COPY . /app
 RUN pnpm exec prisma migrate diff --from-empty --to-schema-datamodel libraries/nestjs-libraries/src/database/prisma/schema.prisma --script --output rssd/postiz-schema.sql
 RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm run build
-RUN node -e "for(const n of ['body-parsers','store','publisher','media','migration','editorial','editorial-actions'])require('./apps/backend/dist/rssd/'+n+'.cjs')"
 # Build caches are not runtime inputs; source stays available at the pinned
 # public repository revision identified by the OCI label.
 RUN rm -rf apps/frontend/.next/cache apps/frontend/.next/build
+# Record which installed packages the built processes can load.
+RUN node rssd/prune-runtime-modules.cjs plan /app /app/runtime-modules
+
+# The install without the packages the runtime never loads (frontend browser
+# libraries, build tools, test runners, other platforms' binaries) and without
+# source maps or type declarations: 3.5 GB down to about 1 GB. Its inputs are
+# the dependency layer and the sorted keep list, so code-only revisions reuse it.
+FROM dependencies AS runtime-modules
+COPY rssd/prune-runtime-modules.cjs /tmp/prune-runtime-modules.cjs
+COPY --from=build /app/runtime-modules.keep.json /tmp/runtime-modules.keep.json
+RUN node /tmp/prune-runtime-modules.cjs apply /app /tmp/runtime-modules.keep.json
 
 FROM node:22.20.0-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends nginx ca-certificates \
@@ -31,7 +41,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends nginx ca-certif
     && mkdir -p /www /config/rssd /uploads && chown -R www:www /www /var/lib/nginx
 RUN npm --no-update-notifier --no-fund --global install pm2@7.0.4
 WORKDIR /app
-COPY --from=dependencies /app/node_modules /app/node_modules
+COPY --from=runtime-modules /app/node_modules /app/node_modules
 COPY --from=build /app/apps/backend/dist /app/apps/backend/dist
 COPY --from=build /app/apps/orchestrator/dist /app/apps/orchestrator/dist
 COPY --from=build /app/apps/frontend/.next /app/apps/frontend/.next
@@ -40,7 +50,15 @@ COPY --from=build /app/apps/frontend/package.json /app/apps/frontend/next.config
 COPY --from=build /app/rssd /app/rssd
 COPY --from=build /app/LICENSE /app/package.json /app/
 COPY var/docker/nginx.conf /etc/nginx/nginx.conf
+COPY --from=build /app/runtime-modules.check.json /app/runtime-modules.check.json
 ENV NODE_ENV=production RSSD_DISPATCH_ENABLED=0
+# The pruned modules must reach every package copy the plan recorded and load
+# what the processes load at start: the rssd modules, both Nest app modules,
+# next.config.js and the Temporal workflow bundle. The backend reads
+# DATABASE_URL and opens Redis while loading, so both point at a closed port
+# (the ioredis ECONNREFUSED lines in the build log are expected).
+RUN DATABASE_URL=postgresql://check:check@127.0.0.1:9/check REDIS_URL=redis://127.0.0.1:9 \
+    node rssd/prune-runtime-modules.cjs verify /app /app/runtime-modules.check.json
 ARG RSSD_REVISION
 LABEL org.opencontainers.image.source="https://github.com/scholay-rssd/rssd-center" \
       org.opencontainers.image.licenses="AGPL-3.0-only" \
