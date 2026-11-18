@@ -52,10 +52,13 @@ export class RssdController {
   @Get('/guestbooks/:siteId/messages') guestbookMessages(@Req() req: any, @Param('siteId') siteId: string, @Query('status') status: string) { return this.rssd.guestbook.moderation(req.rssd, siteId, status); }
   @Post('/guestbooks/:siteId/messages/:id/review') reviewGuestbook(@Req() req: any, @Param('siteId') siteId: string, @Param('id') id: string, @Body() body: any) { return this.rssd.guestbook.review(req.rssd, siteId, id, body.status); }
   @Post('/media') uploadMedia(@Req() req: any, @Body() body: any) { return this.rssd.media.upload(req.rssd, body); }
+  @Post('/media/missing') missingMedia(@Req() req: any, @Body() body: any) { return this.rssd.media.missing(req.rssd, body); }
   @Get('/media/:id') media(@Req() req: any, @Param('id') id: string) { return this.rssd.media.status(req.rssd, id); }
   @Get('/media/:id/raw') async rawMedia(@Req() req: any, @Param('id') id: string, @Res() res: any) {
-    const {bytes,row}=await this.rssd.media.bytes(req.rssd,id);
-    res.set({'Content-Type':row.manifest.mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}).send(bytes);
+    const media=await this.rssd.media.raw(req.rssd,id,req.headers['if-none-match']);
+    res.status(media.status).set(media.headers);
+    if(!media.stream)return res.end();
+    media.stream().on('error',()=>res.destroy()).pipe(res);
   }
   @Get('/registry') registry(@Req() req: any) { return this.rssd.store.registry(req.rssd); }
   @Get('/migration-proof/:siteId/:workspaceId')
