@@ -499,6 +499,7 @@ class RssdEditorial {
     if(first==='renditions'){
       const renditions=new RssdRenditions(this.store);
       if(method==='GET'&&parts.length===1)result=await renditions.list(ctx,workspaceId,query);
+      else if(method==='GET'&&parts.length===2&&id==='source')result=await renditions.source(this.store.db,ctx,workspaceId,query.workId,query.locale,Number(query.revision));
       else if(method==='GET'&&parts.length===2)result=await renditions.detail(ctx,workspaceId,id);
       else if(method==='POST'&&parts.length===1)result=await renditions.save(ctx,workspaceId,input);
       else p.fail('Unknown rendition operation',404,'not_found');

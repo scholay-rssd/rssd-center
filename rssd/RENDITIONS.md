@@ -23,6 +23,7 @@ All paths below are relative to `/api/rssd/v1/editorial/<workspaceId>`.
 
 | Method | Path | Result |
 | --- | --- | --- |
+| GET | `/renditions/source?workId=<id>&locale=en&revision=1` | Read the edition identity for packaging |
 | POST | `/renditions` | Save an immutable manifest after uploading its media |
 | GET | `/renditions/<id>` | Read a complete manifest |
 | GET | `/renditions?locale=en&limit=40&after=<id>&workId=<id>` | Read metadata and covers with keyset pagination |
@@ -38,7 +39,7 @@ List queries read summaries and source revision metadata. Full page recipes and 
   "workspaceId": "research",
   "workId": "example-work",
   "locale": "en",
-  "source": {"revision": 1, "editionHash": "<64 lowercase hex characters>", "hash": "<render input SHA-256>"},
+  "source": {"articleId": "example-article", "siteId": "example-site", "revision": 1, "editionHash": "<64 lowercase hex characters>", "hash": "<render input SHA-256>"},
   "variant": "model",
   "engine": {"name": "example", "version": "1"},
   "width": 1080,
@@ -49,6 +50,6 @@ List queries read summaries and source revision metadata. Full page recipes and 
 }
 ```
 
-The save transaction validates workspace access, migration state, worker revocation, exact source revision/hash and every referenced media ID. A failed save can leave uploaded blobs available for a retry. Resubmit the identical manifest after an uncertain response, or look up its content-addressed ID. The manifest and dependency rows commit together.
+The save transaction validates workspace access, migration state, worker revocation, source article, site, revision and edition hash and every referenced media ID. A failed save can leave uploaded blobs available for a retry. Resubmit the identical manifest after an uncertain response, or look up its content-addressed ID. The manifest and dependency rows commit together.
 
 Schema initialization creates additive tables and indexes. The existing database backup includes these tables and the existing media backup includes the referenced blobs. Production rollout and importing existing local exports follow the owner's release authorization.
