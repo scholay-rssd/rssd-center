@@ -805,6 +805,21 @@ test('private center media is idempotent, workspace-scoped and rewritten only fo
   const media=new RssdMedia(store,{directory,origin:'https://center.example'}),bytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYZkAAAAASUVORK5CYII=','base64'),manifest=mediaProtocol.imageManifest(bytes);
   const input={workspaceId:'research',name:'figure.png',...manifest,data:bytes.toString('base64')};const a=await media.upload(f.ctx,input),b=await media.upload(f.ctx,input);assert.equal(a.id,b.id);assert.deepEqual((await media.bytes(f.ctx,a.id)).bytes,bytes);
   await assert.rejects(media.status({...f.ctx,workspaceIds:[]},a.id),{status:403});await assert.rejects(media.status({...f.owner,orgId:randomUUID()},a.id),{status:404});
+  const raw=await media.raw(f.ctx,a.id),etag='"'+manifest.sha256+'"',chunks=[];
+  assert.equal(raw.status,200);assert.equal(raw.headers.ETag,etag);assert.equal(raw.headers['Cache-Control'],'private, max-age=31536000, immutable');
+  assert.equal(raw.headers['Content-Length'],String(bytes.length));assert.equal(raw.headers['Content-Type'],'image/png');
+  for await(const chunk of raw.stream())chunks.push(chunk);assert.deepEqual(Buffer.concat(chunks),bytes);
+  for(const header of [etag,'W/'+etag,'"other", '+etag,'*']){const cached=await media.raw(f.ctx,a.id,header);assert.equal(cached.status,304);assert.equal(cached.stream,undefined);assert.equal(cached.headers.ETag,etag);}
+  assert.equal((await media.raw(f.ctx,a.id,'"other"')).status,200);
+  await assert.rejects(media.raw({...f.ctx,workspaceIds:[]},a.id,etag),{status:403});await assert.rejects(media.raw({...f.owner,orgId:randomUUID()},a.id,etag),{status:404});
+  const absent=mediaProtocol.mediaId('research','0'.repeat(64));
+  assert.deepEqual(await media.missing(f.ctx,{workspaceId:'research',ids:[a.id,absent,absent]}),{workspaceId:'research',missing:[absent]});
+  await assert.rejects(media.missing({...f.ctx,workspaceIds:[]},{workspaceId:'research',ids:[a.id]}),{status:403});
+  await assert.rejects(media.missing(f.ctx,{workspaceId:'research',ids:Array.from({length:1001},(_,i)=>'media-'+i)}),{status:400});
+  const stored=media.path(f.ctx.orgId,manifest);await fs.promises.truncate(stored,1);
+  await assert.rejects(media.raw(f.ctx,a.id),{code:'media_conflict'});assert.equal((await media.raw(f.ctx,a.id,etag)).status,304);
+  await fs.promises.rm(stored);await assert.rejects(media.raw(f.ctx,a.id),{code:'media_conflict'});
+  await media.upload(f.ctx,input);assert.equal((await media.raw(f.ctx,a.id)).status,200);
   const edition={...f.packet.editions[0],bodyMarkdown:'![Evidence]('+a.url+')',media:[{id:a.id,alt:'Evidence'}]},packet={...f.packet,editions:[edition]};await store.submit(f.ctx,packet);
   const output=await media.publication(f.owner.orgId,'research',edition);assert.equal(output.edition.bodyMarkdown,'![Evidence]('+manifest.path+')');assert.deepEqual(output.assets,[manifest]);assert.equal(output.uploads[0].id,a.id);
   const platformOnly=await media.publication(f.owner.orgId,'research',{...edition,bodyMarkdown:'Article without an inline image.'});assert.deepEqual(platformOnly.assets,[]);assert.deepEqual(platformOnly.uploads,[]);

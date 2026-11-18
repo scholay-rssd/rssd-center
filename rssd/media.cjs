@@ -1,5 +1,6 @@
 'use strict';
-const {mkdir,readFile,open,rename,rm}=require('node:fs/promises');
+const {mkdir,readFile,open,rename,rm,stat}=require('node:fs/promises');
+const {createReadStream}=require('node:fs');
 const {join,resolve}=require('node:path');
 const {randomUUID}=require('node:crypto');
 const p=require('./protocol.cjs'),m=require('./rssd-media.cjs');
@@ -11,6 +12,28 @@ class RssdMedia {
  async row(ctx,id){p.id(id);const row=(await this.store.db.$queryRawUnsafe('SELECT * FROM rssd_media WHERE "orgId"=$1 AND id=$2',ctx.orgId,id))[0];if(!row)p.fail('Media not found',404,'not_found');await this.store.workspace(this.store.db,ctx,row.workspaceId);return row;}
  async status(ctx,id){return this.view(await this.row(ctx,id));}
  async bytes(ctx,id){const row=await this.row(ctx,id),bytes=await readFile(this.path(ctx.orgId,row.manifest));if(p.hash(m.imageManifest(bytes))!==p.hash(row.manifest))p.fail('Stored media checksum mismatch',409,'media_conflict');return {bytes,row};}
+ // A media ID is derived from its content hash, so the bytes behind an ID never change and a
+ // reader may keep them. The size check catches a truncated or missing file without hashing the
+ // whole image on every view. Publication still verifies the full checksum through bytes().
+ async raw(ctx,id,ifNoneMatch){
+  const row=await this.row(ctx,id),etag='"'+row.manifest.sha256+'"';
+  const headers={'Content-Type':row.manifest.mime,'Cache-Control':'private, max-age=31536000, immutable',ETag:etag,'X-Content-Type-Options':'nosniff'};
+  const known=String(ifNoneMatch||'').split(',').map(tag=>tag.trim().replace(/^W\//,''));
+  if(known.includes(etag)||known.includes('*'))return {status:304,headers};
+  const file=this.path(ctx.orgId,row.manifest);
+  const size=await stat(file).then(found=>found.size,error=>{if(error.code==='ENOENT')return -1;throw error;});
+  if(size!==row.manifest.bytes)p.fail('Stored media checksum mismatch',409,'media_conflict');
+  return {status:200,headers:{...headers,'Content-Length':String(size)},stream:()=>createReadStream(file)};
+ }
+ // One reply for a whole card set, instead of one status request per image.
+ async missing(ctx,input){
+  p.object(input,'media status');
+  const workspaceId=p.id(input.workspaceId);await this.store.workspace(this.store.db,ctx,workspaceId);
+  const ids=[...new Set(p.array(input.ids,'media IDs',1000).map(id=>p.id(id)))];
+  const rows=await this.store.db.$queryRawUnsafe('SELECT id FROM rssd_media WHERE "orgId"=$1 AND "workspaceId"=$2 AND id=ANY($3::text[])',ctx.orgId,workspaceId,ids);
+  const saved=new Set(rows.map(row=>row.id));
+  return {workspaceId,missing:ids.filter(id=>!saved.has(id))};
+ }
  async upload(ctx,input){
   const workspaceId=p.id(input.workspaceId);await this.store.workspace(this.store.db,ctx,workspaceId);
   const {bytes,manifest}=m.decodeImage(input),id=m.mediaId(workspaceId,manifest.sha256),name=p.text(input.name||id,'media name',300);
