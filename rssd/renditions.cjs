@@ -1,5 +1,6 @@
 'use strict';
 const p = require('./protocol.cjs');
+const {resolveArticleId} = require('./existing-site-publish.cjs');
 
 const MAX_RECIPE_BYTES = 2 * 1024 * 1024;
 function sha(value, name) {
@@ -26,6 +27,10 @@ function rendition(input) {
     coverMediaId: input.coverMediaId == null ? null : p.id(input.coverMediaId),
     representation: input.representation,
   };
+  if (source.articleId !== undefined || source.siteId !== undefined) {
+    value.source.articleId = p.id(source.articleId, 'source article');
+    value.source.siteId = p.id(source.siteId, 'source site');
+  }
   const pages = p.array(input.pages, 'pages', 500);
   if (!pages.length) p.fail('A rendition needs pages');
   if (value.representation === 'raster') {
@@ -54,26 +59,45 @@ function mediaIds(value) {
 class RssdRenditions {
   constructor(store) { this.store = store; }
 
+  async source(db, ctx, workspaceId, workId, locale, revision) {
+    const {row} = await this.store.workspace(db, ctx, p.id(workspaceId));
+    const siteId = row.payload.siteId || workspaceId;
+    const editions = await db.$queryRawUnsafe(`SELECT e.hash, e.payload->>'title' AS title, w."sectionId",
+      COALESCE(l.source->'document'->>'kind', e.payload->'metadata'->'record'->>'kind', 'news') AS kind,
+      COALESCE(l."documentId", e.payload->'metadata'->'editorial'->>'documentId') AS "documentId",
+      COALESCE((jsonb_path_query_first(l.source->'revisions', '$[*] ? (@.version == $revision)',
+        jsonb_build_object('revision', e.revision))->>'payload')::jsonb->>'id',
+        e.payload->'metadata'->'editorial'->>'articleId', (l.source->'revisions'->-1->>'payload')::jsonb->>'id') AS "articleId"
+      FROM rssd_editions e JOIN rssd_works w ON w."orgId"=e."orgId" AND w.id=e."workId"
+      LEFT JOIN rssd_legacy_documents l ON l."orgId"=e."orgId" AND l."workId"=e."workId" AND l.locale=e.locale AND l."siteId"=$6
+      WHERE e."orgId"=$1 AND w."workspaceId"=$2 AND e."workId"=$3 AND e.locale=$4 AND e.revision=$5`,
+    ctx.orgId, workspaceId, p.id(workId), p.locale(locale), p.integer(revision, 'revision', 1), siteId);
+    if (!editions.length) p.fail('Source edition not found', 404, 'not_found');
+    if (editions.length !== 1) p.fail('Ambiguous source edition', 409, 'identity_conflict');
+    const edition = editions[0];
+    const metadata = {record: {kind: edition.kind}, editorial: {articleId: edition.articleId, documentId: edition.documentId}};
+    return {workspaceId, siteId, workId, locale, revision, hash: edition.hash,
+      articleId: resolveArticleId(workId, locale, {metadata}), title: edition.title, kind: edition.kind, sectionId: edition.sectionId};
+  }
+
   async save(ctx, workspaceId, input) {
     const value = rendition(input);
     if (value.workspaceId !== workspaceId) p.fail('Rendition workspace mismatch');
     const id = 'rendition-' + p.hash(value);
     return this.store.transaction(async db => {
-      await this.store.workspace(db, ctx, workspaceId);
+      const edition = await this.source(db, ctx, workspaceId, value.workId, value.locale, value.source.revision);
       await this.store.writable(db, ctx, workspaceId);
       if (ctx.workerId) {
         const workers = await db.$queryRawUnsafe('SELECT id FROM rssd_workers WHERE "orgId"=$1 AND id=$2 AND "revokedAt" IS NULL', ctx.orgId, ctx.workerId);
         if (!workers.length) p.fail('Device revoked', 401);
       }
-      const [edition] = await db.$queryRawUnsafe(`SELECT e.hash, e.payload->>'title' AS title,
-        COALESCE(e.payload->'metadata'->'record'->>'kind',
-          (SELECT l.source->'document'->>'kind' FROM rssd_legacy_documents l
-           WHERE l."orgId"=e."orgId" AND l."workId"=e."workId" AND l.locale=e.locale LIMIT 1),'news') AS kind, w."sectionId"
-        FROM rssd_editions e JOIN rssd_works w ON w."orgId"=e."orgId" AND w.id=e."workId"
-        WHERE e."orgId"=$1 AND w."workspaceId"=$2 AND e."workId"=$3 AND e.locale=$4 AND e.revision=$5`,
-      ctx.orgId, workspaceId, value.workId, value.locale, value.source.revision);
-      if (!edition) p.fail('Source edition not found', 404, 'not_found');
       if (edition.hash !== value.source.editionHash) p.fail('Source edition hash mismatch', 409, 'source_conflict');
+      if (!value.source.articleId) {
+        const existing = await db.$queryRawUnsafe('SELECT id FROM rssd_renditions WHERE "orgId"=$1 AND "workspaceId"=$2 AND id=$3', ctx.orgId, workspaceId, id);
+        if (existing.length) return {id, workspaceId, source: value.source};
+        p.fail('Prepare the export again with its source article and site', 409, 'identity_conflict');
+      }
+      if (edition.articleId !== value.source.articleId || edition.siteId !== value.source.siteId) p.fail('Source article or site mismatch', 409, 'identity_conflict');
       const ids = mediaIds(value);
       const assets = await db.$queryRawUnsafe('SELECT id,manifest FROM rssd_media WHERE "orgId"=$1 AND "workspaceId"=$2 AND id=ANY($3::text[])', ctx.orgId, workspaceId, ids);
       if (assets.length !== ids.length) p.fail('Upload all referenced media in this workspace first', 409, 'missing_media');
