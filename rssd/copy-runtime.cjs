@@ -23,3 +23,4 @@ copyFileSync(join(__dirname,'editorial.cjs'),join(target,'editorial.cjs'));
 copyFileSync(join(__dirname,'editorial-actions.cjs'),join(target,'editorial-actions.cjs'));
 for(const file of ['structured-draft.cjs','staged-drafts.cjs','staged-reconcile.cjs'])copyFileSync(join(__dirname,file),join(target,file));
 copyDirectory(join(__dirname,'community-public'),join(target,'community-public'));
+copyFileSync(join(__dirname,'renditions.cjs'),join(target,'renditions.cjs'));

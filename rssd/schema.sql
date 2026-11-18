@@ -174,3 +174,13 @@ CREATE TABLE IF NOT EXISTS rssd_existing_site_publishes (
  "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY ("orgId","requestId")
 );
 CREATE INDEX IF NOT EXISTS rssd_existing_site_publishes_work ON rssd_existing_site_publishes ("orgId","workId",locale,revision,"destinationId");
+CREATE TABLE IF NOT EXISTS rssd_renditions (
+ "orgId" TEXT NOT NULL, id TEXT NOT NULL, "workspaceId" TEXT NOT NULL,
+ "workId" TEXT NOT NULL, locale TEXT NOT NULL, revision INTEGER NOT NULL,
+ "sectionId" TEXT NOT NULL, method TEXT NOT NULL, title TEXT NOT NULL,
+ cover TEXT NOT NULL, "pageCount" INTEGER NOT NULL, bytes BIGINT NOT NULL,
+ payload JSONB NOT NULL, "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY ("orgId",id)
+);
+CREATE INDEX IF NOT EXISTS rssd_renditions_workspace ON rssd_renditions ("orgId","workspaceId",id);
+CREATE INDEX IF NOT EXISTS rssd_renditions_source ON rssd_renditions ("orgId","workId",locale,revision);

@@ -507,6 +507,12 @@ class RssdEditorial {
     if(method==='GET'&&parts.length===1&&first==='site'){
       const workspace=await this.workspace(ctx,workspaceId);
       result={protocol:'scholay-content',version:1,siteId:workspace.siteId,spaceId:workspace.id,origin:workspace.origin,capabilities:['language-editions-v1','rssd-center-v1','staged-drafts-v1','bounded-media-v1']};
+    }else if(first==='renditions'){
+      const cards=new (require('./renditions.cjs').RssdRenditions)(this.store,this.media);
+      if(method==='GET'&&parts.length===1)result=await cards.list(ctx,workspaceId,query);
+      else if(method==='GET'&&parts.length===2)result=await cards.detail(ctx,workspaceId,id);
+      else if(method==='POST'&&parts.length===1)result=await cards.save(ctx,workspaceId,input);
+      else p.fail('Unknown rendition operation',404,'not_found');
     }else if(first==='staged-drafts'){
       const drafts=new StagedDrafts(this,inputData);
       if(method==='GET'&&parts.length===1)result=await drafts.list(ctx,workspaceId,query);
