@@ -9,6 +9,7 @@ const {RssdMedia}=require('./media.cjs');
 const {imageManifest,overReadLimit}=require('./rssd-media.cjs');
 const {record,recordFields}=require('./rssd-record.cjs');
 const {StagedDrafts}=require('./staged-drafts.cjs');
+const {RssdRenditions}=require('./renditions.cjs');
 const {prepareStructuredDraft}=require('./structured-draft.cjs');
 const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args);
 const x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
@@ -504,9 +505,16 @@ class RssdEditorial {
     if(parts.some(part=>!part||part.includes('/')||part==='.'||part==='..'))p.fail('Invalid editorial path');
     const [first,id,third]=parts;
     let result;
-    if(method==='GET'&&parts.length===1&&first==='site'){
+    if(first==='renditions'){
+      const renditions=new RssdRenditions(this.store);
+      if(method==='GET'&&parts.length===1)result=await renditions.list(ctx,workspaceId,query);
+      else if(method==='GET'&&parts.length===2&&id==='source')result=await renditions.source(this.store.db,ctx,workspaceId,query.workId,query.locale,Number(query.revision));
+      else if(method==='GET'&&parts.length===2)result=await renditions.detail(ctx,workspaceId,id);
+      else if(method==='POST'&&parts.length===1)result=await renditions.save(ctx,workspaceId,input);
+      else p.fail('Unknown rendition operation',404,'not_found');
+    }else if(method==='GET'&&parts.length===1&&first==='site'){
       const workspace=await this.workspace(ctx,workspaceId);
-      result={protocol:'scholay-content',version:1,siteId:workspace.siteId,spaceId:workspace.id,origin:workspace.origin,capabilities:['language-editions-v1','rssd-center-v1','staged-drafts-v1','bounded-media-v1']};
+      result={protocol:'scholay-content',version:1,siteId:workspace.siteId,spaceId:workspace.id,origin:workspace.origin,capabilities:['language-editions-v1','rssd-center-v1','staged-drafts-v1','bounded-media-v1','card-renditions-v1']};
     }else if(first==='staged-drafts'){
       const drafts=new StagedDrafts(this,inputData);
       if(method==='GET'&&parts.length===1)result=await drafts.list(ctx,workspaceId,query);

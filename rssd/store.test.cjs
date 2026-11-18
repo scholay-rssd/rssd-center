@@ -38,6 +38,104 @@ async function fixture() {
   return {owner,worker,ctx,packet};
 }
 
+test('renditions use the editorial route with immutable source linkage and workspace-scoped media', async () => {
+ const f=await fixture();
+ await store.submit(f.ctx,f.packet,{publish:false});
+ const edition=await store.edition(f.ctx,f.packet.workId,'en',1);
+ const directory=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'rssd-rendition-test-'));
+ try {
+  const media=new RssdMedia(store,{directory}),editorial=new RssdEditorial(store,media);
+  const bytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jC9sAAAAASUVORK5CYII=','base64');
+  const asset=await media.upload(f.ctx,{workspaceId:'research',...mediaProtocol.imageManifest(bytes),data:bytes.toString('base64')});
+  const lookup={workId:f.packet.workId,locale:'en',revision:'1'};
+  const source=await editorial.api(f.ctx,'research','GET',['renditions','source'],lookup);
+  const articleId='center-'+p.hash([f.packet.workId,'en']).slice(0,48);
+  assert.equal(source.articleId,articleId);assert.equal(source.hash,edition.hash);assert.equal(source.siteId,'research');
+  assert.equal(source.payload,undefined);
+  const value={schemaVersion:1,format:'cards',workspaceId:'research',workId:f.packet.workId,locale:'en',
+   source:{articleId,siteId:source.siteId,revision:1,editionHash:edition.hash,hash:p.hash('rendered source')},variant:'model',
+   engine:{name:'synthetic',version:'1'},width:1080,height:1440,coverMediaId:asset.id,
+   representation:'raster',pages:[{mediaId:asset.id},{mediaId:asset.id}]};
+  const save=input=>editorial.api(f.ctx,'research','POST',['renditions'],{},input);
+  for(const change of [{articleId:'other'},{siteId:'other'},{articleId:undefined,siteId:undefined}])
+   await assert.rejects(save({...value,source:{...value.source,...change}}),{code:'identity_conflict'});
+  const saved=await Promise.all(Array.from({length:4},()=>save(value)));
+  assert.equal(new Set(saved.map(row=>row.id)).size,1);
+  const id=saved[0].id;
+  const detail=await editorial.api(f.ctx,'research','GET',['renditions',id]);
+  assert.deepEqual(detail.pages,value.pages);
+  const listed=await editorial.api(f.ctx,'research','GET',['renditions'],{locale:'en',limit:'1'});
+  assert.equal(listed.items.length,1);assert.equal(listed.items[0].assetBytes,bytes.length);
+  assert.equal(listed.items[0].current,true);assert.equal(listed.items[0].pages,undefined);
+  assert.equal(listed.items[0].cover.mediaId,asset.id);
+  assert.equal((await db.$queryRawUnsafe('SELECT * FROM rssd_rendition_media WHERE "orgId"=$1 AND "renditionId"=$2',f.ctx.orgId,id)).length,1);
+  await assert.rejects(db.$executeRawUnsafe('DELETE FROM rssd_media WHERE "orgId"=$1 AND id=$2',f.ctx.orgId,asset.id),{code:'23503'});
+  await assert.rejects(save({...value,source:{...value.source,editionHash:'0'.repeat(64)}}),{code:'source_conflict'});
+  await assert.rejects(save({...value,pages:[{mediaId:'missing'}]}),{code:'missing_media'});
+  await store.saveWorkspace(f.owner,{id:'second',name:'Second',sections:[{id:'methods',name:'Methods',policy:{version:1,targets:[]}}]});
+  const second=await media.upload(f.owner,{workspaceId:'second',...mediaProtocol.imageManifest(bytes),data:bytes.toString('base64')});
+  assert.equal(fs.readdirSync(path.join(directory,p.hash(f.ctx.orgId))).length,1);
+  await assert.rejects(save({...value,pages:[{mediaId:second.id}]}),{code:'missing_media'});
+  await assert.rejects(editorial.api(f.ctx,'second','GET',['renditions','source'],lookup),{status:403});
+  await assert.rejects(editorial.api(f.owner,'second','GET',['renditions','source'],lookup),{status:404});
+  await assert.rejects(editorial.api(f.ctx,'second','GET',['renditions',id]),{status:403});
+  await assert.rejects(editorial.api(f.owner,'second','GET',['renditions',id]),{status:404});
+  const other=await fixture();
+  await assert.rejects(editorial.api(other.ctx,'research','GET',['renditions',id]),{status:404});
+  await assert.rejects(editorial.api(other.ctx,'research','POST',['renditions'],{},value),{status:404});
+  const layout={...value,variant:'smart',representation:'layout',css:'p {font-size:24px}',
+   pages:[{html:'<p>Complete original body</p>'}],mediaIds:[]};
+  const layoutSaved=await save(layout);
+  assert.equal((await editorial.api(f.ctx,'research','GET',['renditions',layoutSaved.id])).pages[0].html,layout.pages[0].html);
+  await assert.rejects(save({...layout,pages:[{html:'<img src="data:image/png;base64,AAAA">'}]}),{status:400});
+  await assert.rejects(save({...layout,pages:[]}),{status:400});
+  const first=await editorial.api(f.ctx,'research','GET',['renditions'],{locale:'en',limit:1,workId:value.workId});
+  const last=await editorial.api(f.ctx,'research','GET',['renditions'],{locale:'en',limit:1,after:first.next,workId:value.workId});
+  assert(first.next);assert.equal(last.next,null);assert.notEqual(first.items[0].id,last.items[0].id);
+  // A newer source must not silently relabel an earlier generated set.
+  await db.$executeRawUnsafe('INSERT INTO rssd_editions ("orgId","workId",locale,revision,payload,hash) VALUES ($1,$2,$3,2,$4::jsonb,$5)',f.ctx.orgId,value.workId,'en',JSON.stringify({...edition.payload,title:'New source'}),p.hash('new source'));
+  assert.equal((await editorial.api(f.ctx,'research','GET',['renditions'],{locale:'en'})).items[0].current,false);
+  assert.equal((await save(value)).id,id);
+  await store.revokeWorker(f.owner,f.ctx.workerId);
+  await assert.rejects(save(value),{status:401});
+ } finally {fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test('source lookup preserves historical migrated article IDs when site and workspace IDs differ', async () => {
+ const f=await fixture(), workspace={id:'research',siteId:'research-site',name:'Research',sections:[{id:'methods',name:'Methods',policy:{version:1,targets:[]}}]};
+ await store.saveWorkspace(f.owner,workspace,1);
+ await store.submit(f.ctx,f.packet,{publish:false});
+ const archive={document:{kind:'news'},revisions:[{version:1,payload:JSON.stringify({id:'original-id'})},{version:2,payload:JSON.stringify({id:'renamed-id'})}]};
+ await db.$executeRawUnsafe(`INSERT INTO rssd_legacy_documents ("orgId","siteId","documentId","workId",locale,"sourceHash",source)
+   VALUES ($1,'research-site','old-document',$2,'en',$3,$4::jsonb)`,f.ctx.orgId,f.packet.workId,p.hash(archive),JSON.stringify(archive));
+ const editorial=new RssdEditorial(store,null), query={workId:f.packet.workId,locale:'en',revision:1};
+ const source=await editorial.api(f.ctx,'research','GET',['renditions','source'],query);
+ assert.equal(source.articleId,'original-id');assert.equal(source.siteId,'research-site');
+});
+
+test('rendition gallery paginates indexed summaries across a large workspace', async t => {
+ const f=await fixture();
+ await store.submit(f.ctx,f.packet,{publish:false});
+ await db.$executeRawUnsafe(`INSERT INTO rssd_renditions ("orgId",id,"workspaceId","workId",locale,revision,variant,summary,payload)
+   SELECT $1,'rendition-benchmark-'||lpad(i::text,8,'0'),'research',$2,'en',1,'model',
+     jsonb_build_object('id','rendition-benchmark-'||lpad(i::text,8,'0'),'pageCount',20),
+     jsonb_build_object('pages',repeat('x',10000)) FROM generate_series(1,10000) i`,f.ctx.orgId,f.packet.workId);
+ let galleryQuery;
+ const observedStore=new RssdStore({...db,$queryRawUnsafe(sql,...params){
+   if(sql.includes('FROM rssd_renditions r'))galleryQuery=[sql,...params];
+   return db.$queryRawUnsafe(sql,...params);
+ }});
+ const editorial=new RssdEditorial(observedStore,null);
+ const start=performance.now();
+ const page=await editorial.api(f.ctx,'research','GET',['renditions'],{locale:'en',after:'rendition-benchmark-00005000',limit:40});
+ assert.equal(page.items.length,40);assert.equal(page.items[0].id,'rendition-benchmark-00005001');
+ assert.equal(page.next,'rendition-benchmark-00005040');assert.equal(page.items[0].payload,undefined);
+ const elapsed=performance.now()-start;
+ const [sql,...params]=galleryQuery;
+ const plan=await db.$queryRawUnsafe('EXPLAIN (ANALYZE,FORMAT JSON) '+sql,...params);
+ t.diagnostic('10,000 renditions, 40-summary API page in '+elapsed.toFixed(1)+' ms; query plan '+JSON.stringify(plan[0]['QUERY PLAN']));
+});
+
 test('device authorization validates PKCE, owner scope and single-use exchange without exposing credentials',async()=>{
  const {DeviceAuthorization,CALLBACK}=require('./device-auth.cjs'),{createHash}=require('node:crypto');
  const f=await fixture(),auth=new DeviceAuthorization(store,{publicOrigin:'https://center.example',verifyOwner:async()=>true}),verifier='a'.repeat(64);
