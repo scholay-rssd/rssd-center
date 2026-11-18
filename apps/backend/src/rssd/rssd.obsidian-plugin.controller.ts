@@ -1,10 +1,14 @@
-import { Controller, Get, Header, Param, HttpException, Res } from '@nestjs/common';
+import { Controller, Get, Header, Param, HttpException, Req, Res } from '@nestjs/common';
 const { PluginReleases } = require('../../../../rssd/obsidian-plugin-releases.cjs');
 
 // Public GET-only surface for the signed RSSD Obsidian plugin release and its
 // files, built from public repositories. It holds no credentials or workspace
 // data, and a vault installs a release only when its signature verifies
 // against the key compiled into the plugin it already runs.
+const reply = (e: any) => e?.status && e?.code
+  ? { status: e.status, body: { message: e.message, code: e.code } }
+  : { status: 503, body: { message: 'The plugin release is unavailable', code: 'plugin_release_unavailable' } };
+
 @Controller('/rssd/public/v1/obsidian-plugin')
 export class RssdObsidianPluginController {
   private readonly releases = new PluginReleases();
@@ -12,13 +16,14 @@ export class RssdObsidianPluginController {
   @Header('Cache-Control', 'no-store')
   async latest() {
     try { return await this.releases.latest(); }
-    catch (e: any) { throw new HttpException({ message: e.message, code: e.code }, e.status || 503); }
+    catch (e: any) { const { status, body } = reply(e); throw new HttpException(body, status); }
   }
   @Get('/files/:sha256')
-  async file(@Param('sha256') sha256: string, @Res() res: any) {
+  async file(@Param('sha256') sha256: string, @Req() req: any, @Res() res: any) {
     try {
-      const bytes = await this.releases.file(sha256);
-      res.status(200).set({ 'Content-Type': 'application/octet-stream', 'Content-Length': String(bytes.length), 'Cache-Control': 'public, max-age=31536000, immutable' }).end(bytes);
-    } catch (e: any) { res.status(e.status || 503).json({ message: e.message, code: e.code }); }
+      const file = await this.releases.raw(sha256, req.headers['if-none-match']);
+      res.status(file.status).set(file.headers);
+      return file.body ? res.end(file.body) : res.end();
+    } catch (e: any) { const { status, body } = reply(e); res.status(status).json(body); }
   }
 }

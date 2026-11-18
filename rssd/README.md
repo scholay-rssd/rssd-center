@@ -40,6 +40,20 @@ actual notebook image references and captions. Draft storage remains available.
 The portable contract and fingerprint are maintained by core's
 `scripts/sync-writing-defaults-contract.mjs`.
 
+Obsidian plugin releases are public, signed builds of the RSSD plugin; every vault
+installs a newer one by itself. `node release.mjs publish` in rssd-obsidian builds,
+signs and uploads a release, then runs
+`node rssd/obsidian-plugin-releases.cjs publish <release folder> /config/rssd-obsidian-plugin`
+here. The first publish passes `--key <release-key.pub>` to pin the release key. From
+then on, a release must verify against the pinned key, a version is never lowered or
+reused, publishing the same release again changes nothing, and `latest.json` is
+replaced atomically. Files are kept by hash, and only the newest three releases keep
+their files. Set `RSSD_PLUGIN_RELEASES_DIR` for another folder. No database migration
+or organization data is involved. The GET-only `/rssd/public/v1/obsidian-plugin/latest`
+and `/files/:sha256` routes serve only that public release without a device credential.
+Vaults verify the signature themselves, against the key compiled into the plugin they
+run.
+
 Use Node 22.19 and pnpm 10.6.1 with the committed lockfile. Run the backend build
 and frontend TypeScript check. The build packages `rssd/*.cjs` alongside the Nest
 output so deployment does not rely on a sibling private checkout.
