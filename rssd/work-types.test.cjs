@@ -271,3 +271,23 @@ test('the publisher runs its follow-up after a verified publication, and a faili
   assert.equal(outcome(f),'published');
   assert.deepEqual(calls,['publication-1']);
 });
+
+test('a Center transaction timeout leaves a website action or publication queued for retry, not blocked',async()=>{
+  const {classifyDestinationError}=require('./publisher.cjs');
+  const timeout=()=>new p.ProtocolError('Publication transaction timed out before it could commit; retry the original request',503,'transaction_timeout');
+  const outcome=async error=>{
+    let finished;
+    const actions=Object.assign(Object.create(RssdEditorialActions.prototype),{running:false,
+      claim:async()=>({id:'action-1'}),dispatch:async()=>{throw error;},finish:async(row,result)=>(finished=result)});
+    await actions.tick();
+    return finished;
+  };
+  const retried=await outcome(timeout());
+  assert.equal(retried.state,'queued');assert.match(retried.error,/queried before retry/);
+  assert.equal((await outcome(new p.ProtocolError('Website action destination is disabled or changed',409,'missing_destination'))).state,'blocked');
+  assert.equal((await outcome(Object.assign(Error('Receiver returned HTTP 403'),{status:403}))).state,'blocked');
+  assert.equal((await outcome(Object.assign(Error('fetch failed'),{code:'ECONNREFUSED'}))).state,'queued');
+  const classified=classifyDestinationError(timeout());
+  assert.equal(classified.blocked,false);assert.equal(classified.code,'transaction_timeout');
+  assert.equal(classifyDestinationError(new p.ProtocolError('Bad packet',400,'invalid_request')).blocked,true);
+});
