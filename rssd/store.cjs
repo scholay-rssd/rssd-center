@@ -54,7 +54,8 @@ async function audit(db, ctx, action, payload) {
   await execute(db, 'INSERT INTO rssd_audit ("orgId",id,actor,action,payload) VALUES ($1,$2,$3,$4,$5::jsonb)',ctx.orgId,randomUUID(),ctx.workerId || ctx.userId || 'owner',action,encoded(payload));
 }
 class RssdStore {
-  constructor(db,{writingDefaults}={}) { this.db = db; this.writingDefaults=writingDefaults; }
+  // `mounts` (an RssdMounts over this store) is set after construction; without it voices are not decided.
+  constructor(db,{writingDefaults}={}) { this.db = db; this.writingDefaults=writingDefaults; this.mounts=null; }
   transaction(fn, options={}) {
     // Editorial publication scans migrated history inside this transaction.
     // A closed transaction must stay a protocol error: Nest otherwise hides it
@@ -175,6 +176,7 @@ class RssdStore {
         await lock(db,'demand-topic:'+ctx.orgId+':'+value.workspaceId+':'+value.sectionId);
         if(await one(db,'SELECT id FROM rssd_demands WHERE "orgId"=$1 AND id=$2',ctx.orgId,value.id))p.fail('Demand identity already exists',409,'identity_conflict');
         if(value.adaptedFrom)await this.adaptedSource(db,ctx,value);
+        if(value.voice?.persona)await this.namedPersona(db,ctx,value);
         if(allowRepeat)await audit(db,ctx,'demand.allow-repeat',{id:value.id});
         else await this.refuseRepeat(db,ctx,value,section);
         const result=await one(db,`INSERT INTO rssd_demands ("orgId",id,"workspaceId","sectionId",kind,title,priority,payload)
@@ -260,6 +262,11 @@ class RssdStore {
     if(!work||work.workspaceId!==value.workspaceId)p.fail('The article this note is to be rewritten from is not in this workspace',409,'source_conflict');
     const edition=await one(db,'SELECT 1 AS found FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND revision=$3 LIMIT 1',ctx.orgId,value.adaptedFrom.workId,value.adaptedFrom.revision);
     if(!edition)p.fail('The source article has no such revision',409,'source_conflict');
+  }
+  /** An order names a persona only where the library has it and has not retired it. */
+  async namedPersona(db,ctx,value) {
+    if(!this.mounts)p.fail('This Center has no persona library',409,'unknown_persona');
+    await this.mounts.requirePersona(db,ctx.orgId,value.voice.persona);
   }
   /**
    * The earlier work or open demand of the same section that a write demand repeats, or null. A note that is
@@ -355,17 +362,23 @@ class RssdStore {
         destinations.push({...target,name:destination.name,kind:destination.kind,...(channel?{platform:channel.providerIdentifier}:{})});
       }
       const writingDefaults=this.writingDefaults?await this.writingDefaults.freeze(demand):null;
-      const claimToken=randomUUID(),payload={...demand.payload,policy:section.policy,workspaceRevision:row.revision,destinations,outputContractVersion:1,claimExpiresAt:new Date(Date.now()+CLAIM_TTL_MS).toISOString(),...(writingDefaults?{writingDefaults}:{})};
+      // Which persona writes this work is decided now and frozen with the other rules. A decision left by an
+      // earlier claim that was released is not carried over.
+      const {voiceDecision:_,...queued}=demand.payload;
+      const voiceDecision=this.mounts?await this.mounts.decide(db,ctx.orgId,demand,section.policy):null;
+      const claimToken=randomUUID(),payload={...queued,policy:section.policy,workspaceRevision:row.revision,destinations,outputContractVersion:1,claimExpiresAt:new Date(Date.now()+CLAIM_TTL_MS).toISOString(),...(writingDefaults?{writingDefaults}:{}),...(voiceDecision?{voiceDecision}:{})};
       const result=await one(db,`UPDATE rssd_demands SET state='claimed',"workerId"=$3,"claimToken"=$4,generation=generation+1,
         payload=$5::jsonb,"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2 RETURNING *`,ctx.orgId,demand.id,ctx.workerId,claimToken,encoded(payload));
-      await audit(db,ctx,'demand.claim',{id:demand.id,generation:result.generation});return result;
+      await audit(db,ctx,'demand.claim',{id:demand.id,generation:result.generation});
+      return this.mounts?this.mounts.attach(db,ctx.orgId,result):result;
     });
   }
   async activeClaim(ctx) {
     if(!ctx.workerId)p.fail('Device authentication required',403);
     return this.transaction(async db=>{
       await this.expireStaleClaims(db,ctx.orgId);
-      return one(db,`SELECT * FROM rssd_demands WHERE "orgId"=$1 AND "workerId"=$2 AND state IN ('claimed','blocked')`,ctx.orgId,ctx.workerId);
+      const claim=await one(db,`SELECT * FROM rssd_demands WHERE "orgId"=$1 AND "workerId"=$2 AND state IN ('claimed','blocked')`,ctx.orgId,ctx.workerId);
+      return this.mounts?this.mounts.attach(db,ctx.orgId,claim):claim;
     });
   }
   async changeDemand(ctx,id,input) {
@@ -443,7 +456,16 @@ class RssdStore {
         // A new work of a section whose frozen policy names a persona carries that persona's name as its
         // byline and its ID in the edition's private metadata. Translations and updates keep the byline of
         // the edition they came from, so they are not checked here.
-        if(demand.kind==='write'&&policy?.persona){
+        // A claim that froze a voice decision is checked against that instead: the preset that wrote is
+        // recorded privately, and the founder signs only where the section says so.
+        if(demand.kind==='write'&&demand.payload.voiceDecision){
+          if(!this.mounts)p.fail('This Center has no persona library',409,'voice_conflict');
+          const settled=await this.mounts.checkSubmission(demand.payload.voiceDecision,value.editions);
+          if(settled!==demand.payload.voiceDecision){
+            demand.payload={...demand.payload,voiceDecision:settled};
+            await execute(db,'UPDATE rssd_demands SET payload=$3::jsonb WHERE "orgId"=$1 AND id=$2',ctx.orgId,demand.id,encoded(demand.payload));
+          }
+        }else if(demand.kind==='write'&&policy?.persona){
           for(const edition of value.editions){
             if(edition.metadata?.author!==policy.persona.name||edition.metadata?.persona?.id!==policy.persona.id)
               p.fail('This section is signed by '+policy.persona.name+'; the '+edition.locale+' edition carries another byline',409,'byline_conflict');

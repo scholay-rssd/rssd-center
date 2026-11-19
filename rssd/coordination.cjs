@@ -73,8 +73,9 @@ class RssdCoordination {
    const dueAt=input.changes?.dueAt===null?null:input.changes?.dueAt?date(input.changes.dueAt,'dueAt'):old.payload.dueAt||null;
    const payload={...old.payload,...value,dueAt};
    // A field the edited demand no longer states is cleared, not kept from the earlier payload.
-   for(const key of ['workType','adaptedFrom','topicKey','lead'])if(!Object.prototype.hasOwnProperty.call(value,key))delete payload[key];
+   for(const key of ['workType','adaptedFrom','topicKey','lead','voice'])if(!Object.prototype.hasOwnProperty.call(value,key))delete payload[key];
    if(value.adaptedFrom)await this.store.adaptedSource(db,ctx,value);
+   if(value.voice?.persona)await this.store.namedPersona(db,ctx,value);
    if(value.title!==old.title||(value.topicKey||null)!==(old.payload.topicKey||null)||Boolean(value.adaptedFrom)!==Boolean(old.payload.adaptedFrom)){
     const {section}=await this.store.workspace(db,ctx,old.workspaceId,old.sectionId);
     await db.$executeRawUnsafe('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))','demand-topic:'+ctx.orgId+':'+old.workspaceId+':'+old.sectionId);

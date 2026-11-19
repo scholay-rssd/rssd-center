@@ -203,3 +203,12 @@ CREATE TABLE IF NOT EXISTS rssd_annotations (
 );
 CREATE INDEX IF NOT EXISTS rssd_annotations_work ON rssd_annotations ("orgId","workId",locale,revision,"createdAt");
 CREATE INDEX IF NOT EXISTS rssd_annotations_workspace ON rssd_annotations ("orgId","workspaceId","createdAt");
+
+-- The mount library: what a writer is handed for one work besides the section's rules. One row is one revision
+-- of one item of a kind, and the first kind is persona. A row's content never changes, and `version` orders
+-- the revisions of an item. `entry` is what the Center reads to decide, `content` what the claiming device gets.
+CREATE TABLE IF NOT EXISTS rssd_mounts (
+ "orgId" TEXT NOT NULL,kind TEXT NOT NULL,id TEXT NOT NULL,revision TEXT NOT NULL,version INTEGER NOT NULL,
+ hash TEXT NOT NULL,entry JSONB NOT NULL,content JSONB NOT NULL,"retiredAt" TIMESTAMPTZ(3),
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY ("orgId",kind,id,revision)
+);
