@@ -54,9 +54,19 @@ function policy(input) {
     destinationId: id(target.destinationId, 'destinationId'), locale: locale(target.locale),
   }));
   if (new Set(targets.map(t => t.destinationId + ':' + t.locale)).size !== targets.length) fail('Duplicate publication target');
-  return {version: integer(value.version ?? 1, 'policy.version', 1),
+  const result = {version: integer(value.version ?? 1, 'policy.version', 1),
     instructions: text(value.instructions ?? '', 'instructions', 100000, true),
     brand: json(value.brand || {}, 'brand'), targets};
+  // The persona that signs this section's new works: its ID and the name printed as the byline. Being
+  // part of the policy, it is frozen with a claim like every other rule. A section without one keeps the
+  // site's own byline. Nothing else about a persona belongs here.
+  if (value.persona != null) result.persona = persona(value.persona);
+  return result;
+}
+function persona(input) {
+  const value = object(input, 'persona'), name = text(value.name, 'persona.name', 80);
+  if (name !== name.trim() || /[\x00-\x1f\x7f]/.test(name)) fail('Invalid persona.name');
+  return {id: id(value.id, 'persona.id'), name};
 }
 function workspace(input) {
   const value = object(input, 'workspace');
@@ -141,4 +151,4 @@ function submission(input) {
     baseRevisions: bases, editions};
 }
 module.exports = {VERSION, ProtocolError, fail, object, text, id, locale, array, integer, canonical, hash,
-  publicUrl, json, policy, workspace, demand, DEMAND_WORK_TYPES, referencedMediaIds, edition, submission};
+  publicUrl, json, policy, persona, workspace, demand, DEMAND_WORK_TYPES, referencedMediaIds, edition, submission};
