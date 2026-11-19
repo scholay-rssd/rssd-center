@@ -16,7 +16,8 @@ All endpoints extend `/api/rssd/v1` and use the existing owner session or worksp
 Rules:
 
 - Only a **published** revision of an article or a note is annotated; without `revision` it is the newest published one. A draft answers `not_published`; a calendar, history or resource record answers `not_annotatable`.
-- Which sections apply is decided here, not by the client: the work's type from the edition, the section's writing family from the published writing defaults, a card page when a raster rendition exists for that revision, and a rewritten note from its source link. Without published writing defaults only the common questions are asked.
+- Form version 2 is one questionnaire for every article and note: the slop taxonomy of Shaib et al. (arXiv:2509.19163), an initial yes or no judgement and eleven yes or no codes in three themes. Its sections apply to every work.
+- What a form's sections may depend on is decided here, not by the client: the work's type from the edition, the section's writing family from the published writing defaults, a card page when a raster rendition exists for that revision, and a rewritten note from its source link. Without published writing defaults only the common questions are asked.
 - `formVersion` must be the current version (`form_changed` otherwise). Answers are checked against the form: every item that applies and is not optional, nothing that does not apply (`invalid_annotation`).
 - Rows are only added. The newest row of one annotator for one revision and form version is the one that counts.
 - A person is identified by the credential (`device:<workerId>` or `user:<userId>`). A device may submit a model's answers under `annotator {kind:"model", id}`; the row records who submitted it.

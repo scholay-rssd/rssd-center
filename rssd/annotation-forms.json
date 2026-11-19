@@ -1,897 +1,165 @@
 {
  "schemaVersion": 1,
- "version": "1",
+ "version": "2",
  "locale": "zh-CN",
- "note": "Version 1. A change of wording that changes what an item means, an added or removed item, or a changed option is a new version; answers always name the version they were given for.",
+ "note": "Version 2. This form is not our own: it is a Chinese rendering of the slop taxonomy of Shaib, Chakrabarty, Garcia-Olano and Wallace, Measuring AI \"Slop\" in Text (arXiv:2509.19163), Table 11, with its three themes and eleven codes, preceded by that study's initial binary judgement. The confidence item follows the 1 to 5 scale of Russell, Karpinska and Iyyer (arXiv:2501.15654). Each code is one yes or no item whose text lists the paper's own criteria; where the answer is yes, the annotator pastes one passage that shows it, which stands in for the paper's span labelling. `traces` is ours, not the paper's: where in the writing process to look when a theme scores badly.",
+ "sources": [
+  {
+   "id": "shaib2025",
+   "title": "Measuring AI \"Slop\" in Text",
+   "url": "https://arxiv.org/abs/2509.19163",
+   "used": "Themes, codes and their criteria (Table 11); the initial binary judgement"
+  },
+  {
+   "id": "russell2025",
+   "title": "People who frequently use ChatGPT for writing tasks are accurate and robust detectors of AI-generated text",
+   "url": "https://arxiv.org/abs/2501.15654",
+   "used": "The 1 to 5 confidence rating"
+  }
+ ],
  "sections": [
   {
-   "id": "article-facts",
-   "title": "事实与来源",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ]
-   },
-   "items": [
-    {
-     "id": "fact-spot-check",
-     "type": "check",
-     "text": "任选正文里一处具体事实（数字、日期、名称、结论），能在文末列出的来源里找到依据。",
-     "note": true
-    },
-    {
-     "id": "unsupported-claims",
-     "type": "choice",
-     "text": "正文里有没有读起来没有依据的断言？",
-     "options": [
-      {
-       "id": "none",
-       "label": "没有"
-      },
-      {
-       "id": "few",
-       "label": "有一两处"
-      },
-      {
-       "id": "many",
-       "label": "有多处"
-      }
-     ]
-    },
-    {
-     "id": "references-match",
-     "type": "check",
-     "text": "文末参考来源与正文引用对得上：没有只列不引的，也没有引了却没列的。"
-    }
-   ]
-  },
-  {
-   "id": "article-answer",
-   "title": "是否回答了问题",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ]
-   },
-   "items": [
-    {
-     "id": "question-answered",
-     "type": "scale",
-     "text": "读完之后，标题提出的问题得到了回答。",
-     "anchors": {
-      "1": "完全没有回答",
-      "3": "回答了一部分",
-      "5": "完整回答"
-     }
-    },
-    {
-     "id": "title-fit",
-     "type": "choice",
-     "text": "标题和内容的关系是：",
-     "options": [
-      {
-       "id": "accurate",
-       "label": "准确概括了内容"
-      },
-      {
-       "id": "too-broad",
-       "label": "标题比内容大或泛"
-      },
-      {
-       "id": "mismatch",
-       "label": "标题与内容不符"
-      },
-      {
-       "id": "two-part",
-       "label": "标题分成了两截（前半点题、后半解释）"
-      }
-     ]
-    },
-    {
-     "id": "density",
-     "type": "scale",
-     "text": "信息密度。",
-     "anchors": {
-      "1": "大量空话和套话",
-      "3": "有内容但注水",
-      "5": "每一段都有新信息"
-     }
-    }
-   ]
-  },
-  {
-   "id": "article-prose",
-   "title": "表达",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ]
-   },
-   "items": [
-    {
-     "id": "voice",
-     "type": "scale",
-     "text": "读起来像一个懂行的人在讲，而不是模板拼出来的。",
-     "anchors": {
-      "1": "明显的模板腔",
-      "3": "时好时坏",
-      "5": "自然，有人的语气"
-     }
-    },
-    {
-     "id": "main-flaw",
-     "type": "choice",
-     "text": "最明显的一个问题是：",
-     "options": [
-      {
-       "id": "none",
-       "label": "没有明显问题"
-      },
-      {
-       "id": "filler",
-       "label": "套话或空泛的总结"
-      },
-      {
-       "id": "repetition",
-       "label": "重复、啰嗦"
-      },
-      {
-       "id": "disclaimer",
-       "label": "把核验说明写进了正文（如“未实测”“以官网为准”）"
-      },
-      {
-       "id": "structure",
-       "label": "结构混乱，找不到重点"
-      },
-      {
-       "id": "jargon",
-       "label": "术语不解释，读不懂"
-      }
-     ]
-    },
-    {
-     "id": "notes-in-body",
-     "type": "check",
-     "text": "正文里出现了本该放在作者备注里的内容（核验过程、免责声明、写作说明）。",
-     "note": true
-    }
-   ]
-  },
-  {
-   "id": "article-images",
-   "title": "配图",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ]
-   },
-   "items": [
-    {
-     "id": "image-role",
-     "type": "choice",
-     "text": "配图和正文的关系是：",
-     "options": [
-      {
-       "id": "helps",
-       "label": "有助于理解内容"
-      },
-      {
-       "id": "decorative",
-       "label": "只是装饰"
-      },
-      {
-       "id": "misleading",
-       "label": "与内容不符或有误导"
-      },
-      {
-       "id": "none",
-       "label": "没有配图"
-      }
-     ]
-    },
-    {
-     "id": "captions",
-     "type": "check",
-     "text": "图注合乎规则：有图题、作者或机构、来源；AI 生成的图有标识。",
-     "optional": true
-    }
-   ]
-  },
-  {
-   "id": "article-overall",
+   "id": "overall",
    "title": "整体判断",
    "appliesTo": {
     "workTypes": [
-     "article"
-    ]
-   },
-   "items": [
-    {
-     "id": "would-share",
-     "type": "scale",
-     "text": "你愿意把这篇转给对这个话题感兴趣的朋友。",
-     "anchors": {
-      "1": "不会",
-      "3": "看情况",
-      "5": "很愿意"
-     }
-    },
-    {
-     "id": "topic-worth",
-     "type": "choice",
-     "text": "只看选题本身（不管写得好坏）：",
-     "options": [
-      {
-       "id": "worth",
-       "label": "值得写"
-      },
-      {
-       "id": "average",
-       "label": "一般"
-      },
-      {
-       "id": "not-worth",
-       "label": "不值得写"
-      },
-      {
-       "id": "duplicate",
-       "label": "和本站已有内容重复"
-      }
-     ]
-    },
-    {
-     "id": "disposition",
-     "type": "choice",
-     "text": "如果由你决定，这篇：",
-     "options": [
-      {
-       "id": "publish",
-       "label": "可以直接发布"
-      },
-      {
-       "id": "minor",
-       "label": "小改后发布"
-      },
-      {
-       "id": "rewrite",
-       "label": "需要重写"
-      },
-      {
-       "id": "drop",
-       "label": "这个题不该写"
-      }
-     ]
-    }
-   ]
-  },
-  {
-   "id": "article-cards",
-   "title": "卡片页",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ],
-    "cards": true
-   },
-   "items": [
-    {
-     "id": "cards-standalone",
-     "type": "scale",
-     "text": "只看卡片、不看正文，能明白这篇讲了什么。",
-     "anchors": {
-      "1": "看不明白",
-      "3": "大概明白",
-      "5": "完全明白"
-     }
-    },
-    {
-     "id": "cards-paging",
-     "type": "choice",
-     "text": "分页是否合理：",
-     "options": [
-      {
-       "id": "good",
-       "label": "合理"
-      },
-      {
-       "id": "crowded",
-       "label": "有的页太挤"
-      },
-      {
-       "id": "sparse",
-       "label": "有的页太空"
-      },
-      {
-       "id": "bad-break",
-       "label": "断在了不该断的地方"
-      }
-     ]
-    },
-    {
-     "id": "cards-faithful",
-     "type": "check",
-     "text": "卡片内容与正文一致，没有正文里没有的说法。",
-     "note": true
-    }
-   ]
-  },
-  {
-   "id": "note-common",
-   "title": "笔记",
-   "appliesTo": {
-    "workTypes": [
+     "article",
      "note"
     ]
    },
+   "traces": "先凭整体印象作答，再往下逐项看。论文里三位标注人在这一题上的一致性很低，它只用来和下面各项对照，不单独作结论。",
    "items": [
     {
-     "id": "note-hook",
+     "id": "overall-slop",
+     "type": "check",
+     "polarity": "tell",
+     "text": "先读完全文。整体看，这是不是一篇“AI 味”明显的稿子：泛泛而谈、啰嗦、不准确、跑题，或者没有带来什么实际价值？"
+    },
+    {
+     "id": "overall-confidence",
      "type": "scale",
-     "text": "首图和标题让人想点开。",
+     "text": "你对上面这个判断有多大把握？",
      "anchors": {
-      "1": "不想点",
+      "1": "没有把握",
       "3": "一般",
-      "5": "很想点"
+      "5": "很有把握"
      }
-    },
-    {
-     "id": "note-pictures",
-     "type": "scale",
-     "text": "图片本身就是内容，而不是文字的装饰。",
-     "anchors": {
-      "1": "图可有可无",
-      "3": "图有帮助",
-      "5": "没有图就不成立"
-     }
-    },
-    {
-     "id": "note-length",
-     "type": "choice",
-     "text": "文字的长度：",
-     "options": [
-      {
-       "id": "right",
-       "label": "恰好"
-      },
-      {
-       "id": "too-long",
-       "label": "太长，像一篇短文章"
-      },
-      {
-       "id": "too-short",
-       "label": "太短，没说清楚"
-      }
-     ]
-    },
-    {
-     "id": "note-fact",
-     "type": "check",
-     "text": "任选一处具体事实，能找到依据。",
-     "note": true
-    },
-    {
-     "id": "note-tags",
-     "type": "choice",
-     "text": "标签：",
-     "options": [
-      {
-       "id": "fit",
-       "label": "贴切"
-      },
-      {
-       "id": "broad",
-       "label": "过泛"
-      },
-      {
-       "id": "off",
-       "label": "与内容无关"
-      },
-      {
-       "id": "none",
-       "label": "没有标签"
-      }
-     ]
-    },
-    {
-     "id": "note-voice",
-     "type": "scale",
-     "text": "读起来像人写的平台笔记，而不是文章摘要。",
-     "anchors": {
-      "1": "像摘要",
-      "3": "介于两者之间",
-      "5": "像真人笔记"
-     }
-    },
-    {
-     "id": "note-share",
-     "type": "scale",
-     "text": "你愿意收藏或转发这篇笔记。",
-     "anchors": {
-      "1": "不会",
-      "3": "看情况",
-      "5": "很愿意"
-     }
-    },
-    {
-     "id": "note-disposition",
-     "type": "choice",
-     "text": "如果由你决定，这篇：",
-     "options": [
-      {
-       "id": "publish",
-       "label": "可以直接发布"
-      },
-      {
-       "id": "minor",
-       "label": "小改后发布"
-      },
-      {
-       "id": "rewrite",
-       "label": "需要重写"
-      },
-      {
-       "id": "drop",
-       "label": "这个题不该写"
-      }
-     ]
     }
    ]
   },
   {
-   "id": "note-adapted",
-   "title": "改写自长文",
+   "id": "information-utility",
+   "title": "信息效用",
    "appliesTo": {
     "workTypes": [
+     "article",
      "note"
-    ],
-    "adapted": true
+    ]
    },
+   "traces": "取材是否给了足够具体的材料；选题简述是否太泛；写作要求是否规定了篇幅下限。",
    "items": [
     {
-     "id": "adapted-faithful",
+     "id": "iu1-density",
      "type": "check",
-     "text": "笔记里没有出现原文没有的说法。",
-     "note": true
+     "polarity": "tell",
+     "note": true,
+     "text": "信息密度。文中是否出现下列任何一种情况：话很多，实际信息很少；放在几乎任何语境下都成立的泛泛之谈；不增加任何内容的填充词句。"
     },
     {
-     "id": "adapted-own",
-     "type": "scale",
-     "text": "它是为平台重新写的，而不是把原文截短。",
-     "anchors": {
-      "1": "只是截短",
-      "3": "部分重写",
-      "5": "完全重写"
-     }
+     "id": "iu2-relevance",
+     "type": "check",
+     "polarity": "tell",
+     "note": true,
+     "text": "相关性。文中是否出现下列任何一种情况：没有回应题目或任务里的具体要点；对上下文、问题或任务没有实质贡献；与文章本来的目的脱节。"
     }
    ]
   },
   {
-   "id": "family-animal",
-   "title": "动物档案",
+   "id": "information-quality",
+   "title": "信息质量",
    "appliesTo": {
     "workTypes": [
-     "article"
-    ],
-    "families": [
-     "animal"
+     "article",
+     "note"
     ]
    },
+   "traces": "取材与核验流程；来源是否真的被读过；提示词是否要求给出判断，还是要求“全面、客观”。",
    "items": [
     {
-     "id": "animal-identify",
-     "type": "scale",
-     "text": "识别特征写得足以把它和相近的品种或物种区分开。",
-     "anchors": {
-      "1": "分不出来",
-      "3": "能分出一部分",
-      "5": "能明确区分"
-     }
-    },
-    {
-     "id": "animal-care",
-     "type": "scale",
-     "text": "照护建议具体、可执行，而不是“多陪伴”“注意健康”这类话。",
-     "anchors": {
-      "1": "全是空话",
-      "3": "部分具体",
-      "5": "都能照着做"
-     }
-    },
-    {
-     "id": "animal-picture",
+     "id": "iq1-factuality",
      "type": "check",
-     "text": "配图确实是这个品种或物种。",
-     "note": true
+     "polarity": "tell",
+     "note": true,
+     "text": "事实性。文中是否出现下列任何一种情况：不正确或编造的信息；有误导性或逻辑不成立的说法。"
+    },
+    {
+     "id": "iq2-bias",
+     "type": "check",
+     "polarity": "tell",
+     "note": true,
+     "text": "立场。文中是否出现下列任何一种情况：该有主观看法的地方显得过于“客观”；需要观点的地方没有观点；视角与语境不相称；该投入的地方显得置身事外；带着不恰当的视角或预设（如一边倒的断言）。"
     }
    ]
   },
   {
-   "id": "family-method",
-   "title": "方法与统计",
+   "id": "style-quality",
+   "title": "文体质量",
    "appliesTo": {
     "workTypes": [
-     "article"
-    ],
-    "families": [
-     "method"
+     "article",
+     "note"
     ]
    },
+   "traces": "文风规则和去套话技能；正文模板与栏目要素的写法；人格与读者设定；成稿前有没有修改环节。",
    "items": [
     {
-     "id": "method-followable",
-     "type": "scale",
-     "text": "步骤完整到读者可以照着做。",
-     "anchors": {
-      "1": "无法照做",
-      "3": "缺关键步骤",
-      "5": "可以照做"
-     }
-    },
-    {
-     "id": "method-example",
+     "id": "sq1-repetition",
      "type": "check",
-     "text": "例子里的数字或计算可以核对，结果是对的。",
-     "note": true
+     "polarity": "tell",
+     "note": true,
+     "text": "重复。文中是否出现下列任何一种情况：同样的词或短语用得过多；重复前文、没有新信息的句子；套路化写作里常见的过渡语用得过多；用词和表达缺少变化。"
     },
     {
-     "id": "method-conditions",
+     "id": "sq2-templatedness",
      "type": "check",
-     "text": "说明了这个方法适用和不适用的条件。"
-    }
-   ]
-  },
-  {
-   "id": "family-procedure",
-   "title": "操作步骤",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ],
-    "families": [
-     "procedure"
-    ]
-   },
-   "items": [
-    {
-     "id": "procedure-works",
-     "type": "choice",
-     "text": "按文中步骤操作：",
-     "options": [
-      {
-       "id": "tried-ok",
-       "label": "我试了，可行"
-      },
-      {
-       "id": "tried-fail",
-       "label": "我试了，不可行"
-      },
-      {
-       "id": "complete",
-       "label": "没有试，但步骤完整"
-      },
-      {
-       "id": "gaps",
-       "label": "步骤有缺失"
-      }
-     ],
-     "note": true
+     "polarity": "tell",
+     "note": true,
+     "text": "模板化。文中是否出现下列任何一种情况：过度依赖公式化的结构和句型；可预料的格式，比如过多的要点列表；同样的过渡语反复出现；一再出现按同一个模式写成的句子或段落。"
     },
     {
-     "id": "procedure-version",
+     "id": "sq3-coherence",
      "type": "check",
-     "text": "标明了平台和版本。"
-    }
-   ]
-  },
-  {
-   "id": "family-progress",
-   "title": "新进展",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ],
-    "families": [
-     "progress"
-    ]
-   },
-   "items": [
-    {
-     "id": "progress-new",
-     "type": "scale",
-     "text": "说清了“新在哪里”，以及和已有做法的区别。",
-     "anchors": {
-      "1": "没说",
-      "3": "说得模糊",
-      "5": "说得清楚"
-     }
+     "polarity": "tell",
+     "note": true,
+     "text": "连贯性。文中是否出现下列任何一种情况：句子结构或组织不好；论证或叙述前后不一致；要花很大力气才能读懂；各段没有合力推进论点或叙事。"
     },
     {
-     "id": "progress-attribution",
+     "id": "sq4-naturalness",
      "type": "check",
-     "text": "原始材料说了什么、作者怎么解读，两者分得清。"
-    }
-   ]
-  },
-  {
-   "id": "family-briefing",
-   "title": "简报",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ],
-    "families": [
-     "briefing"
-    ]
-   },
-   "items": [
+     "polarity": "tell",
+     "note": true,
+     "text": "语言自然度。文中是否出现下列任何一种情况：读起来像人造的、生产出来的语言；奇怪的说法或不自然的措辞；语法没错但读着别扭；用词与语境不合。"
+    },
     {
-     "id": "briefing-independent",
+     "id": "sq5-verbosity",
      "type": "check",
-     "text": "各条之间相互独立，没有重复。"
+     "polarity": "tell",
+     "note": true,
+     "text": "冗长。文中是否出现下列任何一种情况：相对于传达的信息，文字过多；不必要的华丽或描写性语言；把字数放在内容之前；解释拖沓，需要大幅删改。"
     },
     {
-     "id": "briefing-why",
-     "type": "scale",
-     "text": "每一条都交代了为什么值得知道。",
-     "anchors": {
-      "1": "都没有",
-      "3": "部分有",
-      "5": "每条都有"
-     }
-    }
-   ]
-  },
-  {
-   "id": "family-dated",
-   "title": "日程与历史",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ],
-    "families": [
-     "dated"
-    ]
-   },
-   "items": [
-    {
-     "id": "dated-accurate",
+     "id": "sq6-word-complexity",
      "type": "check",
-     "text": "日期和年份准确。",
-     "note": true
+     "polarity": "tell",
+     "note": true,
+     "text": "用词复杂度。文中是否出现下列任何一种情况：词汇与语境不相称；不必要的术语或复杂说法；让意思变模糊的时髦词；过多使用生僻词。"
     },
     {
-     "id": "dated-custom",
+     "id": "sq7-tone",
      "type": "check",
-     "text": "区分了每年的惯例和当年的具体安排。",
-     "optional": true
-    }
-   ]
-  },
-  {
-   "id": "family-legal",
-   "title": "法律",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ],
-    "families": [
-     "legal"
-    ]
-   },
-   "items": [
-    {
-     "id": "legal-jurisdiction",
-     "type": "check",
-     "text": "标明了法域和时点。"
-    },
-    {
-     "id": "legal-structure",
-     "type": "scale",
-     "text": "事实、争点、结论分得清楚。",
-     "anchors": {
-      "1": "混在一起",
-      "3": "大致能分",
-      "5": "清楚分开"
-     }
-    },
-    {
-     "id": "legal-no-advice",
-     "type": "check",
-     "text": "没有给出像针对个案的法律意见那样的建议。"
-    }
-   ]
-  },
-  {
-   "id": "family-resource",
-   "title": "资源与入口",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ],
-    "families": [
-     "resource"
-    ]
-   },
-   "items": [
-    {
-     "id": "resource-reachable",
-     "type": "choice",
-     "text": "文中给出的入口：",
-     "options": [
-      {
-       "id": "works",
-       "label": "打开可用"
-      },
-      {
-       "id": "broken",
-       "label": "打不开或已失效"
-      },
-      {
-       "id": "untested",
-       "label": "我没有试"
-      }
-     ],
-     "note": true
-    },
-    {
-     "id": "resource-audience",
-     "type": "scale",
-     "text": "说清了适合谁、不适合谁。",
-     "anchors": {
-      "1": "没说",
-      "3": "说得笼统",
-      "5": "说得具体"
-     }
-    }
-   ]
-  },
-  {
-   "id": "family-time-sensitive",
-   "title": "有时效的信息",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ],
-    "families": [
-     "time-sensitive"
-    ]
-   },
-   "items": [
-    {
-     "id": "timely-valid",
-     "type": "choice",
-     "text": "文中的有效期、费用或条件：",
-     "options": [
-      {
-       "id": "valid",
-       "label": "写明了，现在仍有效"
-      },
-      {
-       "id": "expired",
-       "label": "已过期或已变化"
-      },
-      {
-       "id": "missing",
-       "label": "没有写明"
-      },
-      {
-       "id": "unknown",
-       "label": "无法判断"
-      }
-     ],
-     "note": true
-    },
-    {
-     "id": "timely-steps",
-     "type": "check",
-     "text": "取得或报名的步骤完整。"
-    }
-   ]
-  },
-  {
-   "id": "family-visual",
-   "title": "视觉作品",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ],
-    "families": [
-     "visual"
-    ]
-   },
-   "items": [
-    {
-     "id": "visual-specific",
-     "type": "scale",
-     "text": "分析落在看得见的具体细节上（布局、字体、色彩、交互）。",
-     "anchors": {
-      "1": "只有形容词",
-      "3": "部分具体",
-      "5": "处处具体"
-     }
-    },
-    {
-     "id": "visual-credit",
-     "type": "check",
-     "text": "作者和来源标注清楚。"
-    }
-   ]
-  },
-  {
-   "id": "family-classical",
-   "title": "经典与解读",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ],
-    "families": [
-     "classical"
-    ]
-   },
-   "items": [
-    {
-     "id": "classical-source",
-     "type": "check",
-     "text": "原文与译解分开呈现，出处可查。",
-     "note": true
-    },
-    {
-     "id": "classical-commentary",
-     "type": "scale",
-     "text": "评论没有被当成原文的意思。",
-     "anchors": {
-      "1": "混为一谈",
-      "3": "偶有混淆",
-      "5": "界限清楚"
-     }
-    }
-   ]
-  },
-  {
-   "id": "family-owner",
-   "title": "作者自有材料",
-   "appliesTo": {
-    "workTypes": [
-     "article"
-    ],
-    "families": [
-     "owner"
-    ]
-   },
-   "items": [
-    {
-     "id": "owner-grounded",
-     "type": "scale",
-     "text": "内容来自作者真实的项目和材料，而不是泛泛而谈。",
-     "anchors": {
-      "1": "泛泛而谈",
-      "3": "部分有实料",
-      "5": "全是实料"
-     }
-    },
-    {
-     "id": "owner-invented",
-     "type": "choice",
-     "text": "有没有看起来像是编造的经历或成果？",
-     "options": [
-      {
-       "id": "no",
-       "label": "没有"
-      },
-      {
-       "id": "suspect",
-       "label": "有可疑之处"
-      },
-      {
-       "id": "yes",
-       "label": "有"
-      },
-      {
-       "id": "unknown",
-       "label": "无法判断"
-      }
-     ],
-     "note": true
+     "polarity": "tell",
+     "note": true,
+     "text": "语气。文中是否出现下列任何一种情况：千篇一律的腔调，没有个性或目的；没有视角或观点；场合随意却过于正式，或相反；读起来像旁观者，而不是投入其中的作者；回答时过度自信。"
     }
    ]
   }

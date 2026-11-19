@@ -5,7 +5,8 @@
 // A form is a list of sections. Each section says which works it applies to (by work type, by the section's
 // writing family, by whether the article has a card page, by whether a note was rewritten from an article) and
 // holds items of three kinds: `scale` (1 to 5, with words for 1, 3 and 5), `choice` (exactly one option) and
-// `check` (yes or no). An item may allow a short note, and may be optional. An answer sheet names the form
+// `check` (yes or no). A section may say where in the writing process its results point (`traces`), and a check
+// may say which of its answers is the bad sign (`polarity`). An item may allow a short note, and may be optional. An answer sheet names the form
 // version it answers, so a later version never changes what an earlier answer meant.
 import {readFileSync} from 'node:fs';
 import {CHOSEN_WORK_TYPES} from './work-types.mjs';
@@ -26,6 +27,7 @@ export function validateAnnotationForm(document,{families}={}){
  for(const section of document.sections){
   if(!plain(section)||!ID.test(section.id||'')||sectionIds.has(section.id))fail('Invalid or repeated section: '+section?.id);
   sectionIds.add(section.id);text(section.title,'A section title',80);
+  if(section.traces!==undefined)text(section.traces,'The traces of '+section.id,400);
   const applies=section.appliesTo;
   if(!plain(applies)||Object.keys(applies).some(key=>!['workTypes','families','cards','adapted'].includes(key)))fail('Invalid appliesTo in '+section.id);
   if(!Array.isArray(applies.workTypes)||!applies.workTypes.length||applies.workTypes.some(type=>!CHOSEN_WORK_TYPES.includes(type)))fail(section.id+' must name the work types it applies to');
@@ -36,14 +38,16 @@ export function validateAnnotationForm(document,{families}={}){
    if(!plain(item)||!ID.test(item.id||'')||itemIds.has(item.id))fail('Invalid or repeated item: '+item?.id);
    itemIds.add(item.id);text(item.text,'The text of '+item.id);
    if(!ANNOTATION_ITEM_TYPES.includes(item.type))fail(item.id+' has an unknown type');
-   if(Object.keys(item).some(key=>!['id','type','text','anchors','options','note','optional'].includes(key)))fail(item.id+' has an unknown field');
+   if(Object.keys(item).some(key=>!['id','type','text','anchors','options','note','optional','polarity'].includes(key)))fail(item.id+' has an unknown field');
+   // Which answer of a check points to machine writing: `tell` when yes does, `good` when no does.
+   if(item.polarity!==undefined&&(item.type!=='check'||!['tell','good'].includes(item.polarity)))fail(item.id+': polarity is tell or good, on a check');
    for(const key of ['note','optional'])if(item[key]!==undefined&&typeof item[key]!=='boolean')fail(item.id+': '+key+' is true or false');
    if(item.type==='scale'){
     if(!plain(item.anchors)||Object.keys(item.anchors).sort().join()!=='1,3,5')fail(item.id+' needs words for 1, 3 and 5');
     for(const value of Object.values(item.anchors))text(value,'An anchor of '+item.id,60);
    }else if(item.anchors!==undefined)fail(item.id+': only a scale has anchors');
    if(item.type==='choice'){
-    if(!Array.isArray(item.options)||item.options.length<2||item.options.length>8)fail(item.id+' needs 2 to 8 options');
+    if(!Array.isArray(item.options)||item.options.length<2||item.options.length>10)fail(item.id+' needs 2 to 10 options');
     const seen=new Set();
     for(const option of item.options){if(!plain(option)||!ID.test(option.id||'')||seen.has(option.id))fail(item.id+' has an invalid or repeated option');seen.add(option.id);text(option.label,'An option of '+item.id,80);}
    }else if(item.options!==undefined)fail(item.id+': only a choice has options');
@@ -101,3 +105,22 @@ const FAMILIES=Object.freeze([...new Set(Object.values(JSON.parse(readFileSync(n
 export const ANNOTATION_FAMILIES=FAMILIES;
 /** The current form. */
 export const ANNOTATION_FORM=validateAnnotationForm(JSON.parse(readFileSync(new URL('./annotation-forms.json',import.meta.url),'utf8')),{families:FAMILIES});
+
+/**
+ * One number per section from one answer sheet, for comparing works and runs: the mean of the section's scale
+ * answers (1 to 5, 5 the human end) and the share of its `tell` and `good` checks that point to machine writing.
+ * A section with no such answers is left out.
+ */
+export function annotationProfile(form,work,answers){
+ const out={};
+ for(const section of annotationSectionsFor(form,work)){
+  const scales=[],signs=[];
+  for(const item of section.items){
+   const value=answers?.[item.id]?.value;
+   if(item.type==='scale'&&Number.isSafeInteger(value))scales.push(value);
+   if(item.type==='check'&&item.polarity&&typeof value==='boolean')signs.push(item.polarity==='tell'?value:!value);
+  }
+  if(scales.length||signs.length)out[section.id]={...(scales.length?{scale:scales.reduce((a,b)=>a+b,0)/scales.length}:{}),...(signs.length?{tells:signs.filter(Boolean).length,checks:signs.length}:{})};
+ }
+ return out;
+}
