@@ -152,3 +152,112 @@ test('the editorial intake checks a stated work type and note link',()=>{
   const documentId='123e4567-e89b-42d3-a456-426614174000';
   assert.throws(()=>inputData({data:{...data,id:'record-'+documentId,markdown:'# 日程\n\n## 摘要\n\n一句话。\n\n## 正文\n\n正文。',workType:'article',record:{kind:'year',documentId,fields:{}}}}),/structured record keeps/);
 });
+
+// Card updates: a card set saved after its revision went live reaches the website through a `cards` action.
+const {RssdEditorialActions,cardsPacket}=require('./editorial-actions.cjs');
+const cardEdition={locale:'zh-CN',title:'缅因猫',bodyMarkdown:'正文。',summary:'',sources:[],media:[],metadata:{date:'2026-11-19',workType:'article'}};
+const livePacket=extra=>publication({version:1,requestId:'publication-1',siteId:'pets',workspaceId:'pets',sectionId:'daily-cat',workId:'maine-coon',locale:'zh-CN',revision:2,
+  contentHash:p.hash(cardEdition),content:publicContent(cardEdition),route:'/news/maine-coon/',...extra});
+
+function cardsFixture({status=['work-types-v1','card-updates-v1'],live=livePacket(),newest='rendition-1',pending=false,existing=false}={}){
+  const cipher=new CredentialCipher(secret),writes=[],stored=new Map();
+  const destination={id:destinationId,orgId,kind:'site',enabled:true,workspaceIds:['pets'],config:{origin:'https://pet.example',siteId:'pets',sealedToken:cipher.seal('site-token',orgId+':'+destinationId)}};
+  const site={head:{siteId:'pets',workId:'maine-coon',locale:'zh-CN',revision:2,route:'/news/maine-coon/',operation:'publish',operationSequence:1,contentHash:p.hash(cardEdition),state:'success'},live,receipts:new Map()};
+  const receipt=value=>({requestId:value.requestId,siteId:value.siteId,workId:value.workId,locale:value.locale,revision:value.revision,contentHash:value.contentHash,packetHash:p.hash(value),operation:value.operation||'publish',operationSequence:value.operationSequence,state:'success',release:'release-2'});
+  const fetchImpl=async(url,{method='GET',body}={})=>{
+    const path=new URL(url).pathname;
+    if(path.endsWith('/status'))return json({accepting:true,capabilities:status});
+    if(path.includes('/heads/'))return json(site.head);
+    if(path.startsWith('/rssd-content/'))return json(site.live);
+    const mediaMatch=/\/media\/([a-f0-9]{64})$/.exec(path);
+    if(mediaMatch){if(method==='POST'){const {data,...m}=JSON.parse(body);stored.set(mediaMatch[1],m);}return stored.has(mediaMatch[1])?json(stored.get(mediaMatch[1])):json({},404);}
+    if(path.endsWith('/submissions')&&method==='POST'){
+      // The receiver's rule for a card update: the live head, the next sequence, nothing changed but the card set.
+      const value=publication(JSON.parse(body)),head=site.head;
+      if(value.operation!=='cards'||value.expectedOperationSequence!==head.operationSequence||value.operationSequence!==head.operationSequence+1||value.revision!==head.revision||value.contentHash!==head.contentHash
+        ||p.hash([value.content,value.assets||[]])!==p.hash([site.live.content,site.live.assets||[]]))return json({message:'refused'},409);
+      site.head={...head,operation:'cards',operationSequence:value.operationSequence};site.live=value;site.receipts.set(value.requestId,receipt(value));
+      return json(receipt(value));
+    }
+    const submission=/\/submissions\/([^/]+)$/.exec(path);
+    if(submission)return site.receipts.has(submission[1])?json(site.receipts.get(submission[1])):json({},404);
+    return json({},404);
+  };
+  let inserted=null;
+  const db={
+    $queryRawUnsafe:async(sql,...values)=>{
+      if(/FROM rssd_destinations/.test(sql))return [destination];
+      if(/FROM rssd_renditions/.test(sql)&&/ id=\$3/.test(sql))return renditions[values[2]]?[{payload:renditions[values[2]]}]:[];
+      if(/FROM rssd_renditions/.test(sql))return newest?[{id:newest}]:[];
+      if(/UNION ALL SELECT id FROM rssd_editorial_actions/.test(sql))return pending?[{id:'publication-9'}]:[];
+      if(/FROM rssd_editorial_actions WHERE "orgId"=\$1 AND "workspaceId"=\$2 AND "requestKey"=\$3/.test(sql))return existing?[{id:'action-old'}]:[];
+      if(/FROM rssd_editorial_actions WHERE "orgId"=\$1 AND id=\$2 FOR UPDATE/.test(sql))return [{leaseToken:'lease'}];
+      if(/FROM rssd_works/.test(sql))return [{id:'maine-coon',workspaceId:'pets',sectionId:'daily-cat'}];
+      if(/FROM rssd_editions/.test(sql))return [{locale:'zh-CN',revision:2,payload:cardEdition,hash:p.hash(cardEdition)}];
+      return [];},
+    $executeRawUnsafe:async(sql,...values)=>{writes.push({sql,values});if(/INSERT INTO rssd_editorial_actions/.test(sql))inserted={requestKey:values[3],payload:JSON.parse(values[8])};return 1;},
+  };
+  const store={db,transaction:fn=>fn(db),async edition(){return {payload:cardEdition,hash:p.hash(cardEdition)};}};
+  const mediaStore={row:async(ctx,id)=>({id,workspaceId:'pets',manifest:media[id.slice(6)]}),bytes:async(ctx,id)=>({bytes:Buffer.from('png '+id)})};
+  // A later draft (revision 3) exists; revision 2 is live.
+  const entry={workId:'maine-coon',locale:'zh-CN',articleId:'maine-coon',revision:3,publishedVersion:2,sectionId:'daily-cat',url:'/news/maine-coon/',visibility:null,visibilityGeneration:0,deletedAt:null};
+  class Editorial{constructor(nested,mediaStore){this.store=nested;this.media=mediaStore;}async workspace(){return {id:'pets',siteId:'pets'};}async entries(){return [entry];}async find(){return entry;}}
+  const publisher=new RssdPublisher(store,{secret,fetchImpl,media:mediaStore});
+  const actions=new RssdEditorialActions(store,mediaStore,publisher,new Editorial(store,mediaStore));
+  const row=()=>({orgId,id:'action-cards-1',workspaceId:'pets',requestKey:inserted.requestKey,workId:'maine-coon',locale:'zh-CN',destinationId,action:'cards',payload:{...inserted.payload},receipt:{},packet:null,leaseToken:'lease',attempts:1,createdAt:new Date()});
+  return {actions,site,stored,writes,row,entry,get inserted(){return inserted;}};
+}
+const actionState=f=>f.writes.filter(w=>/UPDATE rssd_editorial_actions SET state=/.test(w.sql)).at(-1)?.values;
+
+test('a card update is the live packet with a new card set and the next sequence',()=>{
+  const live=livePacket({operation:'cards',operationSequence:3,expectedOperationSequence:2,expectedRevision:2,cards:{revision:2,pages:[{...media.d,width:1080,height:1440}]}});
+  const cards={revision:2,pages:[{...media.a,width:1080,height:1440}],cover:media.c};
+  const packet=cardsPacket(live,{revision:2,operationSequence:3},cards,'action-cards-2');
+  assert.deepEqual([packet.requestId,packet.operation,packet.operationSequence,packet.expectedOperationSequence,packet.expectedRevision],['action-cards-2','cards',4,3,2]);
+  assert.deepEqual(packet.cards,cards);
+  assert.equal(p.hash([packet.content,packet.assets||[]]),p.hash([live.content,live.assets||[]]));
+  assert.equal(packet.contentHash,live.contentHash);
+});
+
+test('a card set saved for the live revision is queued once and reaches the website without a new revision',async()=>{
+  const f=cardsFixture();
+  assert.equal(await f.actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN'}),'cards-rendition-1');
+  assert.deepEqual([f.inserted.payload.publicRevision,f.inserted.payload.renditionId,f.inserted.payload.revision],[2,'rendition-1',3]);
+  // Another draft saved before the update runs does not stop it: only the live revision matters.
+  f.entry.revision=4;
+  const result=await f.actions.dispatch(f.row());
+  assert.equal(result.state,'published');
+  assert.equal(f.site.live.operation,'cards');
+  assert.deepEqual(f.site.live.cards,{revision:2,pages:[{...media.a,width:1080,height:1440},{...media.b,width:1080,height:1440}],cover:media.c});
+  assert.deepEqual([...f.stored.keys()].sort(),[media.a.sha256,media.b.sha256,media.c.sha256]);
+  // The publication's receipt records the receiver's new operation sequence, which later actions are fenced on.
+  const upsert=f.writes.find(w=>/INSERT INTO rssd_publications/.test(w.sql));
+  assert.equal(upsert.values[5],2);
+  assert.equal(JSON.parse(upsert.values[8]).operationSequence,2);
+});
+
+test('a card update waits for a quiet edition, is queued once per card set, and skips a set just sent',async()=>{
+  assert.equal(await cardsFixture({pending:true}).actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN'}),null);
+  assert.equal(await cardsFixture({existing:true}).actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN'}),null);
+  assert.equal(await cardsFixture({newest:null}).actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN'}),null);
+  assert.equal(await cardsFixture().actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN',except:'rendition-1'}),null);
+});
+
+test('a card update is dropped for a receiver without card updates, or when the set is already live',async()=>{
+  const old=cardsFixture({status:['work-types-v1']});await old.actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN'});
+  assert.equal((await old.actions.dispatch(old.row())).state,'superseded');
+  assert.match(actionState(old)[4],/does not take card updates/);
+  assert.equal(old.site.live.operation,undefined);
+  const cards={revision:2,pages:[{...media.a,width:1080,height:1440},{...media.b,width:1080,height:1440}],cover:media.c};
+  const same=cardsFixture({live:livePacket({cards})});await same.actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN'});
+  assert.equal((await same.actions.dispatch(same.row())).state,'superseded');
+  assert.match(actionState(same)[4],/already on the website/);
+});
+
+test('the publisher runs its follow-up after a verified publication, and a failing follow-up changes nothing',async()=>{
+  const calls=[];
+  const f=fixture();f.publisher.afterPublish=async row=>{calls.push(row.id);throw Error('queue unavailable');};
+  const logged=console.error;console.error=()=>{};try{await f.publisher.dispatch(f.row);}finally{console.error=logged;}
+  assert.equal(outcome(f),'published');
+  assert.deepEqual(calls,['publication-1']);
+});

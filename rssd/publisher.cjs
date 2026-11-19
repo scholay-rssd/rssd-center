@@ -17,7 +17,9 @@ class CredentialCipher {
 }
 function visibleDestination(row){const {sealedToken,...config}=row.config;return {...row,config,hasCredential:Boolean(sealedToken)};}
 class RssdPublisher {
-  constructor(store,{secret,fetchImpl=fetch,media,postiz}={}){this.store=store;this.db=store.db;this.fetch=fetchImpl;this.secret=secret;this.media=media;this.postiz=postiz;this.running=false;}
+  // afterPublish(row) runs after a site publication is verified, for follow-up work such as a card update; its
+  // failure never changes the publication's outcome.
+  constructor(store,{secret,fetchImpl=fetch,media,postiz,afterPublish}={}){this.store=store;this.db=store.db;this.fetch=fetchImpl;this.secret=secret;this.media=media;this.postiz=postiz;this.afterPublish=afterPublish;this.running=false;}
   cipher(){return new CredentialCipher(this.secret);}
   async destinations(ctx){admin(ctx);return (await query(this.db,'SELECT * FROM rssd_destinations WHERE "orgId"=$1 ORDER BY id',ctx.orgId)).map(visibleDestination);}
   async saveDestination(ctx,input){
@@ -86,9 +88,11 @@ class RssdPublisher {
   /** Whether the site's receiver says it understands work types, note links and card sets. A receiver from before
    * its status endpoint answers 404, or 401 because its credential check runs first; either way it does not, and
    * a real credential problem still stops the submission itself. Any other failure is retried. */
-  async receiverCapable(config,token){
-    let status;try{status=await this.request(origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/status',{token});}catch(error){if([401,404].includes(error.status))return false;throw error;}
-    return Array.isArray(status?.capabilities)&&status.capabilities.includes(WORK_TYPES_CAPABILITY);
+  async receiverCapable(config,token){return (await this.receiverCapabilities(config,token)).includes(WORK_TYPES_CAPABILITY);}
+  /** The capabilities the site's receiver advertises; none for a receiver from before its status endpoint. */
+  async receiverCapabilities(config,token){
+    let status;try{status=await this.request(origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/status',{token});}catch(error){if([401,404].includes(error.status))return [];throw error;}
+    return Array.isArray(status?.capabilities)?status.capabilities.filter(item=>typeof item==='string'):[];
   }
   /** Public content as a receiver can take it. One that does not understand work types (and with them note links
    * and work tags) would drop them and return a different packet hash, so it gets the content it always had. */
@@ -164,7 +168,9 @@ class RssdPublisher {
     const readback=await this.request(publicUrl);
     if(p.hash(readback)!==p.hash(packet))return this.finish(row,{state:'queued',receipt,error:'Public content has not converged to the accepted revision',delay:30000});
     // Receipt URLs are not trusted as fetch targets and cannot redirect secrets.
-    return this.finish(row,{state:'published',receipt:{...receipt,publicUrl,url:config.origin+path,verifiedAt:new Date().toISOString()}});
+    const finished=await this.finish(row,{state:'published',receipt:{...receipt,publicUrl,url:config.origin+path,verifiedAt:new Date().toISOString()}});
+    if(this.afterPublish)try{await this.afterPublish(row);}catch(error){console.error('RSSD follow-up after publication '+row.id+' failed: '+String(error.message||error).slice(0,300));}
+    return finished;
   }
   async tick({orgId=null}={}){if(this.running)return null;this.running=true;let row;try{row=await this.claim(orgId);if(!row)return null;return await this.dispatch(row);}catch(error){
     if(!row)throw error;const classified=classifyDestinationError(error);

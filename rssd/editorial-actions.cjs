@@ -2,9 +2,15 @@
 const {randomUUID}=require('node:crypto');
 const p=require('./protocol.cjs');
 const {RssdStore}=require('./store.cjs');
-const {publication,publicContent,contentKey,packetMedia}=require('./publication.cjs');
+const {publication,publicContent,contentKey,packetMedia,visible,CARD_UPDATES_CAPABILITY}=require('./publication.cjs');
 const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args),x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
 const lock=(db,key)=>x(db,'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',key);
+// A card update is the live packet as the receiver publishes it, with a new card set and the next operation
+// sequence: the receiver accepts it only when everything but the card set is unchanged.
+function cardsPacket(live,head,cards,requestId){
+ const {operation,operationSequence,expectedOperationSequence,expectedRevision,cards:previous,...edition}=live;
+ return publication({...edition,requestId,operation:'cards',operationSequence:head.operationSequence+1,expectedOperationSequence:head.operationSequence,expectedRevision:head.revision,cards});
+}
 class RssdEditorialActions {
  constructor(store,media,publisher,editorial){this.store=store;this.media=media;this.publisher=publisher;this.editorial=editorial;this.running=false;}
  async list(ctx,workspaceId){
@@ -79,13 +85,43 @@ class RssdEditorialActions {
     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)`,ctx.orgId,'action-'+p.hash([workspaceId,input.requestKey]).slice(0,48),workspaceId,input.requestKey,fingerprint,row.workId,row.locale,destinationId,input.action,JSON.stringify(payload));
   });return this.status(ctx,workspaceId,input.requestKey);
  }
+ /**
+  * Queues the newest raster card set of a work edition's live revision for its website, once per card set. Nothing
+  * is queued while another website operation for the edition is pending; the follow-up after that operation
+  * queues it instead. `except` is a card set the caller has just sent.
+  */
+ async queueCards(orgId,{workspaceId,workId,locale,except=null}){
+  const ctx={orgId,admin:true,workspaceIds:null};
+  return this.store.transaction(async db=>{
+   await lock(db,orgId+':work:'+workId);
+   const nested=new RssdStore(db);nested.transaction=fn=>fn(db);const editorial=new this.editorial.constructor(nested,this.media);
+   const workspace=await editorial.workspace(ctx,workspaceId),destinationId='site-'+workspace.siteId;
+   const entry=(await editorial.entries(ctx,workspaceId)).find(item=>item.workId===workId&&item.locale===locale);
+   if(!entry?.publishedVersion||entry.deletedAt||entry.visibility==='withdrawn')return null;
+   const set=await this.publisher.newestCardSet({orgId,workspaceId,workId,locale,revision:entry.publishedVersion});
+   if(!set||set.id===except)return null;
+   const requestKey='cards-'+set.id;
+   if((await q(db,'SELECT id FROM rssd_editorial_actions WHERE "orgId"=$1 AND "workspaceId"=$2 AND "requestKey"=$3',orgId,workspaceId,requestKey))[0])return null;
+   const pending=(await q(db,`SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND state IN ('queued','dispatching')
+    UNION ALL SELECT id FROM rssd_editorial_actions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND state IN ('queued','dispatching')`,orgId,workId,locale,destinationId))[0];
+   if(pending)return null;
+   const edition=(await nested.edition(ctx,workId,locale,entry.publishedVersion)).payload;
+   const payload={articleId:entry.articleId,revision:entry.revision,publicRevision:entry.publishedVersion,sectionId:entry.sectionId,route:entry.url,edition,hash:p.hash(edition),renditionId:set.id,
+    previousVisibility:entry.visibility||'active',wasPublished:true,expectedPublishedVersion:entry.publishedVersion,expectedVisibilityGeneration:entry.visibilityGeneration||0,expectedReceiverOperationSequence:null,restoreAsDraft:false,restoreVisibility:'active'};
+   await x(db,`INSERT INTO rssd_editorial_actions ("orgId",id,"workspaceId","requestKey","payloadHash","workId",locale,"destinationId",action,payload)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'cards',$9::jsonb) ON CONFLICT ("orgId","workspaceId","requestKey") DO NOTHING`,orgId,'action-'+p.hash([workspaceId,requestKey]).slice(0,48),workspaceId,requestKey,p.hash([entry.articleId,'cards',set.id]),workId,locale,destinationId,JSON.stringify(payload));
+   return requestKey;
+  });
+ }
  async assertBase(db,row){
   if(!Object.hasOwn(row.payload,'expectedPublishedVersion')||!Object.hasOwn(row.payload,'expectedVisibilityGeneration'))p.fail('Original action base is missing; reconcile its retained request before retry',409,'action_base_missing');
   await lock(db,row.orgId+':work:'+row.workId);
   await q(db,'SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 FOR UPDATE',row.orgId,row.workId,row.locale);
   const nested=new RssdStore(db);nested.transaction=fn=>fn(db);const editorial=new this.editorial.constructor(nested,this.media);
   const current=await editorial.find({orgId:row.orgId,admin:true,workspaceIds:null},row.workspaceId,row.payload.articleId,{allowDeleted:true});
-  if(!current||current.revision!==row.payload.revision||(current.publishedVersion??null)!==row.payload.expectedPublishedVersion||(current.visibilityGeneration||0)!==row.payload.expectedVisibilityGeneration)p.fail('A newer edition or visibility decision superseded this action; its original request is retained',409,'stale_action');
+  // A card update only needs its revision to stay live and visible; a later draft does not stop it.
+  const draftMoved=row.action!=='cards'&&current?.revision!==row.payload.revision;
+  if(!current||draftMoved||current.deletedAt&&row.action==='cards'||(current.publishedVersion??null)!==row.payload.expectedPublishedVersion||(current.visibilityGeneration||0)!==row.payload.expectedVisibilityGeneration)p.fail('A newer edition or visibility decision superseded this action; its original request is retained',409,'stale_action');
   const pending=(await q(db,`SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND state IN ('queued','dispatching')
    UNION ALL SELECT id FROM rssd_editorial_actions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND id<>$5 AND state IN ('queued','dispatching')`,row.orgId,row.workId,row.locale,row.destinationId,row.id))[0];
   if(pending)p.fail('Another website operation is pending; preserve this original action',409,'publication_pending');
@@ -112,7 +148,7 @@ class RssdEditorialActions {
   return {...row,leaseToken,attempts:row.attempts+1};
  });}
  async finish(row,{state,receipt=row.receipt,error=null,delay=10000,packet=row.packet,visibility}={}){
-  return this.store.transaction(async db=>{
+  const finished=await this.store.transaction(async db=>{
    const current=(await q(db,'SELECT * FROM rssd_editorial_actions WHERE "orgId"=$1 AND id=$2 FOR UPDATE',row.orgId,row.id))[0];
    if(!current||current.leaseToken!==row.leaseToken)return {id:row.id,state:'lease_lost'};
    if(state==='published'){
@@ -130,6 +166,11 @@ class RssdEditorialActions {
    await x(db,`UPDATE rssd_editorial_actions SET state=$3,receipt=$4::jsonb,error=$5,packet=$6::jsonb,"leaseToken"=NULL,"leaseUntil"=NULL,"nextAttemptAt"=CURRENT_TIMESTAMP+($7*interval '1 millisecond'),"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2`,row.orgId,row.id,state,JSON.stringify(receipt),error,packet?JSON.stringify(packet):null,delay);
    return {id:row.id,state,error};
   });
+  // A card set saved while a shown edition's operation was pending goes out after it.
+  if(finished.state==='published'&&['publish','restore','cards'].includes(row.action)&&!receipt.localOnly)
+   try{await this.queueCards(row.orgId,{workspaceId:row.workspaceId,workId:row.workId,locale:row.locale,except:row.payload.renditionId||null});}
+   catch(error){console.error('RSSD card update after action '+row.id+' could not be queued: '+String(error.message||error).slice(0,300));}
+  return finished;
  }
  async dispatch(row){
   const destination=(await q(this.store.db,'SELECT * FROM rssd_destinations WHERE "orgId"=$1 AND id=$2',row.orgId,row.destinationId))[0];
@@ -159,26 +200,37 @@ class RssdEditorialActions {
     return this.finish(row,{state:'published',visibility:row.action==='delete'?'deleted':['withdraw','delete'].includes(head.operation)?'withdrawn':'active',
      receipt:{requestId:row.id,localOnly:true,draftRestored:row.action==='restore',operation:row.action,operationSequence:head.operationSequence||0}});
    }
-   const prepared=await this.media.publication(row.orgId,row.workspaceId,row.payload.edition),content=publicContent(prepared.edition);
-   if(!content.metadata.date)content.metadata.date=new Date(row.createdAt).toISOString().slice(0,10);
-   const hidden=head&&['withdraw','delete'].includes(head.operation),operation=row.action==='publish'?(hidden?'restore':null):row.action;
-   let hash=row.payload.hash;
-   if(['withdraw','delete'].includes(operation)){
-    if(head.contentHash)hash=head.contentHash;
-    else if(head.revision>0){const archived=await this.store.edition({orgId:row.orgId,admin:true,workspaceIds:null},row.workId,row.locale,head.revision);hash=archived.hash;}
+   if(row.action==='cards'){
+    // The receiver must take card updates, and its live packet must be the edition this card set was made from.
+    if(!head)p.fail('Published receiver identity is missing; reconcile its original release before changing its cards',409,'receiver_head_missing');
+    if(!(await this.publisher.receiverCapabilities(config,token)).includes(CARD_UPDATES_CAPABILITY))return this.finish(row,{state:'superseded',error:'The website does not take card updates yet; the card set goes out with the next revision'});
+    const live=await this.publisher.request(config.origin+'/rssd-content/'+contentKey(row)+'.json');
+    if(!visible(live)||live.workId!==row.workId||live.locale!==row.locale||live.revision!==head.revision||live.contentHash!==row.payload.hash)p.fail('The live edition differs from the one this card set was made from',409,'receiver_head_conflict');
+    const {cards}=await this.publisher.cardSet({...row,revision:head.revision},row.payload.renditionId);
+    if(p.hash(live.cards||null)===p.hash(cards))return this.finish(row,{state:'superseded',error:'This card set is already on the website'});
+    packet=cardsPacket(live,head,cards,row.id);
+   }else{
+    const prepared=await this.media.publication(row.orgId,row.workspaceId,row.payload.edition),content=publicContent(prepared.edition);
+    if(!content.metadata.date)content.metadata.date=new Date(row.createdAt).toISOString().slice(0,10);
+    const hidden=head&&['withdraw','delete'].includes(head.operation),operation=row.action==='publish'?(hidden?'restore':null):row.action;
+    let hash=row.payload.hash;
+    if(['withdraw','delete'].includes(operation)){
+     if(head.contentHash)hash=head.contentHash;
+     else if(head.revision>0){const archived=await this.store.edition({orgId:row.orgId,admin:true,workspaceIds:null},row.workId,row.locale,head.revision);hash=archived.hash;}
+    }
+    // A shown edition carries its work type only to a receiver that understands it, and with it the newest card set
+    // for the revision. The packet is frozen below, so a retry sends the same one.
+    const shown=!['withdraw','delete'].includes(operation),revision=shown?row.payload.publicRevision||row.payload.revision:head.revision;
+    const capable=shown&&await this.publisher.receiverCapable(config,token);
+    this.publisher.receiverContent(content,capable);
+    const set=capable&&content.metadata.workType!=='note'?await this.publisher.newestCardSet({...row,revision}):null;
+    const cards=set?(await this.publisher.cardSet({...row,revision},set.id)).cards:null;
+    packet=publication({version:1,requestId:row.id,siteId:config.siteId,workspaceId:row.workspaceId,sectionId:row.payload.sectionId,workId:row.workId,locale:row.locale,
+     revision,contentHash:hash,route:head?.route||row.payload.route,
+     operationSequence:(head?.operationSequence||0)+1,
+     ...(operation?{operation,operationSequence:(head?.operationSequence||0)+1,expectedOperationSequence:head?.operationSequence||0,expectedRevision:head?.revision||0}:{}),
+     ...(shown?{content,...(prepared.assets.length?{assets:prepared.assets}:{}),...(cards?{cards}:{})}:{})});
    }
-   // A shown edition carries its work type only to a receiver that understands it, and with it the newest card set
-   // for the revision. The packet is frozen below, so a retry sends the same one.
-   const shown=!['withdraw','delete'].includes(operation),revision=shown?row.payload.publicRevision||row.payload.revision:head.revision;
-   const capable=shown&&await this.publisher.receiverCapable(config,token);
-   this.publisher.receiverContent(content,capable);
-   const set=capable&&content.metadata.workType!=='note'?await this.publisher.newestCardSet({...row,revision}):null;
-   const cards=set?(await this.publisher.cardSet({...row,revision},set.id)).cards:null;
-   packet=publication({version:1,requestId:row.id,siteId:config.siteId,workspaceId:row.workspaceId,sectionId:row.payload.sectionId,workId:row.workId,locale:row.locale,
-    revision,contentHash:hash,route:head?.route||row.payload.route,
-    operationSequence:(head?.operationSequence||0)+1,
-    ...(operation?{operation,operationSequence:(head?.operationSequence||0)+1,expectedOperationSequence:head?.operationSequence||0,expectedRevision:head?.revision||0}:{}),
-    ...(shown?{content,...(prepared.assets.length?{assets:prepared.assets}:{}),...(cards?{cards}:{})}:{})});
    const changed=await x(this.store.db,'UPDATE rssd_editorial_actions SET packet=$4::jsonb WHERE "orgId"=$1 AND id=$2 AND "leaseToken"=$3',row.orgId,row.id,row.leaseToken,JSON.stringify(packet));
    if(!changed)return {id:row.id,state:'lease_lost'};row.packet=packet;
   }
@@ -216,4 +268,4 @@ class RssdEditorialActions {
   finally{this.running=false;}
  }
 }
-module.exports={RssdEditorialActions};
+module.exports={RssdEditorialActions,cardsPacket};

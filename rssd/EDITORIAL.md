@@ -55,6 +55,18 @@ kept with the publication (`payload.sitePacket`), so every retry sends the same
 packet. Publish and restore actions make the same decisions and freeze them in
 the action packet.
 
+A raster card set saved after its revision went live reaches the website as a
+`cards` action, without a new content revision. It is queued automatically
+once per card set, keyed `cards-<renditionId>`: when the rendition is saved for
+the live revision, and after a publication or a publish, restore or card action
+of the edition succeeds, so a set saved while another website operation was
+pending follows it. Nothing is queued while another operation for the edition
+is pending. The action sends the live packet back with the new card set and the
+receiver's next operation sequence; a later draft does not stop it, but a newer
+live revision, a withdrawal or a deletion supersedes it. A receiver that does
+not advertise `card-updates-v1`, or already shows that card set, supersedes the
+action without a submission, and the card set goes with the next revision.
+
 Native claim-submit receipts (`GET /submissions/:requestId` / `rssd_receipt`)
 return `publicationIds`. Those ids are the website `job.id` values for site
 destinations; they are not editorial `requestKey`s. `GET /requests/:key`
