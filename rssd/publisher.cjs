@@ -2,7 +2,7 @@
 const {createHash,createCipheriv,createDecipheriv,randomBytes,randomUUID}=require('node:crypto');
 const p=require('./protocol.cjs');
 const {admin}=require('./store.cjs');
-const {publication,publicContent,contentKey}=require('./publication.cjs');
+const {publication,publicContent,contentKey,WORK_TYPES_CAPABILITY}=require('./publication.cjs');
 const {dispatchDiscourse}=require('./discourse.cjs');
 const json=JSON.stringify;
 const query=(db,sql,...values)=>db.$queryRawUnsafe(sql,...values);
@@ -83,6 +83,31 @@ class RssdPublisher {
     const reader=response.body.getReader();let size=0;const chunks=[];try{for(;;){const r=await reader.read();if(r.done)break;size+=r.value.length;if(size>8*1024*1024)throw Error('Destination response is too large');chunks.push(r.value);}}finally{await reader.cancel();}
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   }
+  /** Whether the site's receiver says it understands work types, note links and card sets. */
+  async receiverCapable(config,token){
+    const status=await this.request(origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/status',{token});
+    return Array.isArray(status?.capabilities)&&status.capabilities.includes(WORK_TYPES_CAPABILITY);
+  }
+  /**
+   * The card set published with an article edition: the newest raster set made from this exact revision and
+   * saved before the publication was requested, so a retried dispatch builds the same packet. Layout sets are
+   * left out: a site shows pictures only. None when no such set exists or media storage is unavailable.
+   */
+  async cardSet(row){
+    if(!this.media)return null;
+    const set=await one(this.db,`SELECT payload FROM rssd_renditions WHERE "orgId"=$1 AND "workspaceId"=$2 AND "workId"=$3 AND locale=$4 AND revision=$5
+      AND payload->>'representation'='raster' AND "createdAt"<=$6 ORDER BY "createdAt" DESC,id DESC LIMIT 1`,row.orgId,row.workspaceId,row.workId,row.locale,row.revision,row.createdAt);
+    if(!set)return null;
+    const ctx={orgId:row.orgId,admin:true,workspaceIds:null},uploads=[];
+    const manifest=async id=>{
+      const media=await this.media.row(ctx,id);if(media.workspaceId!==row.workspaceId)p.fail('Card media belongs to a different workspace',403);
+      if(!uploads.some(upload=>upload.manifest.sha256===media.manifest.sha256))uploads.push({manifest:media.manifest,id:media.id});
+      return media.manifest;
+    };
+    const pages=[];for(const page of set.payload.pages)pages.push({...await manifest(page.mediaId),width:set.payload.width,height:set.payload.height});
+    const cover=set.payload.coverMediaId?await manifest(set.payload.coverMediaId):null;
+    return {cards:{revision:row.revision,pages,...(cover?{cover}:{})},uploads};
+  }
   async dispatch(row){
     const destination=await one(this.db,'SELECT * FROM rssd_destinations WHERE "orgId"=$1 AND id=$2',row.orgId,row.destinationId);
     if(!destination?.enabled||!destination.workspaceIds.includes(row.workspaceId))return this.finish(row,{state:'blocked',error:'Destination is disabled or workspace authorization was removed'});
@@ -97,8 +122,13 @@ class RssdPublisher {
     if((row.payload.edition.media?.length||/\/api\/rssd\/v1\/media\//.test(row.payload.edition.bodyMarkdown||''))&&!this.media)p.fail('Media storage is unavailable',400,'missing_media');
     const prepared=this.media?await this.media.publication(row.orgId,row.workspaceId,row.payload.edition):{edition:row.payload.edition,assets:[],uploads:[]};
     const content=publicContent(prepared.edition);if(!content.metadata.date)content.metadata.date=new Date(row.createdAt).toISOString().slice(0,10);
-    const packet=publication({version:1,requestId:row.id,siteId:config.siteId,workspaceId:row.workspaceId,sectionId:row.payload.sectionId,workId:row.workId,locale:row.locale,revision:row.revision,contentHash:row.payload.hash,content,route:path,...(prepared.assets.length?{assets:prepared.assets}:{})});
-    for(const upload of prepared.uploads){
+    // A receiver that does not advertise work types gets the packet it always had: it would drop the new
+    // fields and return a different packet hash.
+    const capable=await this.receiverCapable(config,token);
+    if(!capable){delete content.metadata.workType;delete content.metadata.adaptedFrom;}
+    const cards=capable&&content.metadata.workType!=='note'?await this.cardSet(row):null;
+    const packet=publication({version:1,requestId:row.id,siteId:config.siteId,workspaceId:row.workspaceId,sectionId:row.payload.sectionId,workId:row.workId,locale:row.locale,revision:row.revision,contentHash:row.payload.hash,content,route:path,...(prepared.assets.length?{assets:prepared.assets}:{}),...(cards?{cards:cards.cards}:{})});
+    for(const upload of [...prepared.uploads,...(cards?.uploads||[])]){
       const url=origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/media/'+upload.manifest.sha256;
       let stored;try{stored=await this.request(url,{token});}catch(error){if(error.status!==404)throw error;const {bytes}=await this.media.bytes({orgId:row.orgId,admin:true,workspaceIds:null},upload.id);stored=await this.request(url,{token,method:'POST',body:{...upload.manifest,data:bytes.toString('base64')}});}
       if(p.hash(stored)!==p.hash(upload.manifest))p.fail('Site media receipt mismatch',409,'media_conflict');

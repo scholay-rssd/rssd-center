@@ -63,7 +63,8 @@ class StagedDrafts {
   p.object(input,'staged draft');p.id(input.articleId);p.locale(input.locale);p.integer(input.baseRevision,'baseRevision',1);p.integer(input.overlayRevision,'overlayRevision',0,2147483646);
   const inputKeys=new Set(['requestKey','articleId','workId','locale','baseRevision','baseHash','basePublishedVersion','overlayRevision','data']);
   if(input.workId!==undefined)p.id(input.workId,'workId');
-  const dataKeys=new Set(['id','title','summary','markdown','author','date','category','sectionId','locale','assets','translationOf']);
+  // workType and adaptedFrom: a work's type and the article a note was rewritten from (checked by inputData).
+  const dataKeys=new Set(['id','title','summary','markdown','author','date','category','sectionId','locale','assets','translationOf','workType','adaptedFrom']);
   if(Object.keys(input).some(k=>!inputKeys.has(k))||!input.data||typeof input.data!=='object'||Array.isArray(input.data)||Object.keys(input.data).some(k=>!dataKeys.has(k)))p.fail('Unknown staged draft field');
   if(Buffer.byteLength(JSON.stringify(input))>4*1024*1024)p.fail('Staged draft request exceeds 4 MiB',413,'payload_too_large');
   if(!hex(input.baseHash))p.fail('Invalid base hash');if(input.basePublishedVersion!==null)p.integer(input.basePublishedVersion,'basePublishedVersion',1);

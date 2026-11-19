@@ -11,6 +11,7 @@ const {record,recordFields}=require('./rssd-record.cjs');
 const {StagedDrafts}=require('./staged-drafts.cjs');
 const {RssdRenditions}=require('./renditions.cjs');
 const {prepareStructuredDraft}=require('./structured-draft.cjs');
+const {CHOSEN_WORK_TYPES}=require('./publication.cjs');
 const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args);
 const x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
 const digest=value=>createHash('sha256').update(value).digest('hex');
@@ -72,6 +73,17 @@ function inputData(input,{allowOptionalBlanks=false}={}){
     recordFields(record(data.record),{title:data.title,bodyMarkdown:data.markdown});
   }
   if(data.privateAppend!==undefined)privateAppend(data.privateAppend);
+  // A work's type, and for a note the Chinese article it was rewritten from (by its article ID). null clears them.
+  if(data.workType!=null){
+    if(!CHOSEN_WORK_TYPES.includes(data.workType))p.fail('Invalid work type');
+    if(data.record)p.fail('A structured record keeps the type of its record kind');
+  }
+  if(data.adaptedFrom!=null){
+    if(data.workType!=='note')p.fail('Only a note can be rewritten from an article');
+    p.object(data.adaptedFrom,'adaptedFrom');
+    if(!/^[a-z0-9][a-z0-9-]{2,99}$/.test(data.adaptedFrom.articleId||'')||data.adaptedFrom.articleId===data.id)p.fail('Invalid source article for the note');
+    p.integer(data.adaptedFrom.revision,'adaptedFrom revision',1);
+  }
   return data;
 }
 // A draft may add to the work's private record, never replace it: completed runs (for example the agent and
@@ -253,6 +265,11 @@ class RssdEditorial {
       author:e.metadata?.author||'',date:e.metadata?.date||new Date(edition.createdAt).toISOString().slice(0,10),
       category:e.metadata?.category||'',sectionId:row.sectionId,assets};
     if(e.metadata?.record){const id=row.documentId||row.workId;value.record={documentId:id,kind:e.metadata.record.kind,fields:editorRecordFields(e.metadata.record.kind,recordFields(e.metadata.record,material.edition),id,row.sectionId,edition.createdAt)};}
+    if(e.metadata?.workType)value.workType=e.metadata.workType;
+    if(e.metadata?.adaptedFrom){
+      const original=(entries||await this.entries(ctx,workspaceId)).find(r=>r.workId===e.metadata.adaptedFrom.workId&&r.locale==='zh-CN');
+      if(original)value.adaptedFrom={articleId:original.articleId,revision:e.metadata.adaptedFrom.revision};
+    }
     if(e.locale!=='zh-CN')value.locale=e.locale;
     if(e.translationOf){
       const source=(entries||await this.entries(ctx,workspaceId)).find(r=>r.workId===e.translationOf.workId&&r.locale===e.translationOf.locale);
@@ -445,6 +462,14 @@ class RssdEditorial {
       // Preserve the exact previous edition's attachments; omission is not a deletion instruction.
       const attachments=(previousEdition?.media||[]).map(item=>({...item}));let bodyMarkdown=data.markdown;
       for(const asset of data.assets||[]){const bytes=Buffer.from(asset.data,'base64'),manifest=imageManifest(bytes);const upload=await media.upload(ctx,{workspaceId,name:asset.path,...manifest,data:asset.data});if(!attachments.some(item=>item.id===upload.id))attachments.push({id:upload.id,alt:''});bodyMarkdown=bodyMarkdown.replaceAll(asset.path,'/api/rssd/v1/media/'+upload.id+'/raw');}
+      let adaptedFrom=null;
+      if(data.adaptedFrom){
+        const original=await editorial.find(ctx,workspaceId,data.adaptedFrom.articleId,{locale:'zh-CN'});
+        if(!original||original.workId===workId)p.fail('The article this note was rewritten from is not in this workspace',409,'source_conflict');
+        if(data.adaptedFrom.revision>original.revision)p.fail('The source article has no such revision',409,'source_conflict');
+        if((await nested.edition(ctx,original.workId,'zh-CN',original.revision)).payload.metadata?.workType==='note')p.fail('A note can only be rewritten from a long article',409,'source_conflict');
+        adaptedFrom={workId:original.workId,revision:data.adaptedFrom.revision};
+      }
       const route=current?.url||(locale==='en'?(source?'/en/news/'+source.articleId+'/':'/en/news/'+data.id+'/'):'/news/'+data.id+'/');
       const metadata={...(previousEdition?.metadata||{}),author:data.author,date:data.date,category:data.category,
         publication:{...(previousEdition?.metadata?.publication||{}),path:route},editorial:{...(previousEdition?.metadata?.editorial||{}),articleId:data.id,...(data.record?{documentId:data.record.documentId}:{})}};
@@ -455,6 +480,11 @@ class RssdEditorial {
       }
       if(structured)metadata.record={...structured.metadata.record,fields:{...structured.metadata.record.fields,...structured.sections}};
       else if(data.record)metadata.record=record(data.record);
+      // Unstated, a work keeps its type and note link; null clears them, and an article has no source link.
+      if(data.workType===null){delete metadata.workType;delete metadata.adaptedFrom;}
+      else if(data.workType!==undefined)metadata.workType=data.workType;
+      if(data.adaptedFrom===null||metadata.workType!=='note')delete metadata.adaptedFrom;
+      else if(adaptedFrom)metadata.adaptedFrom=adaptedFrom;
       const packet={requestId:'editorial-'+p.hash([workspaceId,input.requestKey]).slice(0,48),workId,workspaceId,sectionId:data.sectionId,baseRevisions:{[locale]:input.expectedVersion},editions:[{locale,title:data.title,summary:data.summary,bodyMarkdown,sources:previousEdition?.sources||[],media:attachments,translationOf,metadata}]};
       const saved=await nested.submit(ctx,packet,{publish:intent==='publish'}),revision=saved.editions[0].revision;
       const publication=intent==='publish'?(await q(db,'SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND revision=$4 AND "destinationId"=$5',ctx.orgId,workId,locale,revision,destinationId))[0]:null;
@@ -584,4 +614,4 @@ class RssdEditorial {
     return {...result,centerManaged:true};
   }
 }
-module.exports={RssdEditorial,archiveBundle,legacyFingerprint,nativePrivateEditorial,privateAppend,appendPrivateRecord};
+module.exports={RssdEditorial,archiveBundle,legacyFingerprint,nativePrivateEditorial,privateAppend,appendPrivateRecord,inputData};
