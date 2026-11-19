@@ -87,8 +87,9 @@ class RssdEditorialActions {
  }
  /**
   * Queues the newest raster card set of a work edition's live revision for its website, once per card set. Nothing
-  * is queued while another website operation for the edition is pending; the follow-up after that operation
-  * queues it instead. `except` is a card set the caller has just sent.
+  * is queued for a note, for a site that is not set up for the workspace, or while another website operation for
+  * the edition is pending; the follow-up after that operation queues it instead. `except` is a card set the caller
+  * has just sent. Returns the action's request key when it queued one.
   */
  async queueCards(orgId,{workspaceId,workId,locale,except=null}){
   const ctx={orgId,admin:true,workspaceIds:null};
@@ -96,22 +97,29 @@ class RssdEditorialActions {
    await lock(db,orgId+':work:'+workId);
    const nested=new RssdStore(db);nested.transaction=fn=>fn(db);const editorial=new this.editorial.constructor(nested,this.media);
    const workspace=await editorial.workspace(ctx,workspaceId),destinationId='site-'+workspace.siteId;
+   const destination=(await q(db,'SELECT * FROM rssd_destinations WHERE "orgId"=$1 AND id=$2',orgId,destinationId))[0];
+   if(!destination||destination.kind!=='site'||!destination.enabled||!destination.workspaceIds.includes(workspaceId))return null;
    const entry=(await editorial.entries(ctx,workspaceId)).find(item=>item.workId===workId&&item.locale===locale);
    if(!entry?.publishedVersion||entry.deletedAt||entry.visibility==='withdrawn')return null;
-   const set=await this.publisher.newestCardSet({orgId,workspaceId,workId,locale,revision:entry.publishedVersion});
+   const edition=(await nested.edition(ctx,workId,locale,entry.publishedVersion)).payload;
+   if(edition.metadata?.workType==='note')return null;
+   const set=await this.publisher.newestCardSet({orgId,workspaceId,workId,locale,revision:entry.publishedVersion},db);
    if(!set||set.id===except)return null;
-   const requestKey='cards-'+set.id;
-   if((await q(db,'SELECT id FROM rssd_editorial_actions WHERE "orgId"=$1 AND "workspaceId"=$2 AND "requestKey"=$3',orgId,workspaceId,requestKey))[0])return null;
    const pending=(await q(db,`SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND state IN ('queued','dispatching')
     UNION ALL SELECT id FROM rssd_editorial_actions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND state IN ('queued','dispatching')`,orgId,workId,locale,destinationId))[0];
    if(pending)return null;
-   const edition=(await nested.edition(ctx,workId,locale,entry.publishedVersion)).payload;
+   const requestKey='cards-'+set.id;
    const payload={articleId:entry.articleId,revision:entry.revision,publicRevision:entry.publishedVersion,sectionId:entry.sectionId,route:entry.url,edition,hash:p.hash(edition),renditionId:set.id,
     previousVisibility:entry.visibility||'active',wasPublished:true,expectedPublishedVersion:entry.publishedVersion,expectedVisibilityGeneration:entry.visibilityGeneration||0,expectedReceiverOperationSequence:null,restoreAsDraft:false,restoreVisibility:'active'};
-   await x(db,`INSERT INTO rssd_editorial_actions ("orgId",id,"workspaceId","requestKey","payloadHash","workId",locale,"destinationId",action,payload)
-    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'cards',$9::jsonb) ON CONFLICT ("orgId","workspaceId","requestKey") DO NOTHING`,orgId,'action-'+p.hash([workspaceId,requestKey]).slice(0,48),workspaceId,requestKey,p.hash([entry.articleId,'cards',set.id]),workId,locale,destinationId,JSON.stringify(payload));
-   return requestKey;
+   const inserted=(await q(db,`INSERT INTO rssd_editorial_actions ("orgId",id,"workspaceId","requestKey","payloadHash","workId",locale,"destinationId",action,payload)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'cards',$9::jsonb) ON CONFLICT ("orgId","workspaceId","requestKey") DO NOTHING RETURNING id`,orgId,'action-'+p.hash([workspaceId,requestKey]).slice(0,48),workspaceId,requestKey,p.hash([entry.articleId,'cards',set.id]),workId,locale,destinationId,JSON.stringify(payload)))[0];
+   return inserted?requestKey:null;
   });
+ }
+ /** queueCards for a follow-up: its failure is logged and never changes the operation that triggered it. */
+ async followUpCards(orgId,edition,cause){
+  try{return await this.queueCards(orgId,edition);}
+  catch(error){console.error('RSSD card update after '+cause+' could not be queued: '+String(error.message||error).slice(0,300));return null;}
  }
  async assertBase(db,row){
   if(!Object.hasOwn(row.payload,'expectedPublishedVersion')||!Object.hasOwn(row.payload,'expectedVisibilityGeneration'))p.fail('Original action base is missing; reconcile its retained request before retry',409,'action_base_missing');
@@ -166,10 +174,10 @@ class RssdEditorialActions {
    await x(db,`UPDATE rssd_editorial_actions SET state=$3,receipt=$4::jsonb,error=$5,packet=$6::jsonb,"leaseToken"=NULL,"leaseUntil"=NULL,"nextAttemptAt"=CURRENT_TIMESTAMP+($7*interval '1 millisecond'),"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2`,row.orgId,row.id,state,JSON.stringify(receipt),error,packet?JSON.stringify(packet):null,delay);
    return {id:row.id,state,error};
   });
-  // A card set saved while a shown edition's operation was pending goes out after it.
-  if(finished.state==='published'&&['publish','restore','cards'].includes(row.action)&&!receipt.localOnly)
-   try{await this.queueCards(row.orgId,{workspaceId:row.workspaceId,workId:row.workId,locale:row.locale,except:row.payload.renditionId||null});}
-   catch(error){console.error('RSSD card update after action '+row.id+' could not be queued: '+String(error.message||error).slice(0,300));}
+  // A card set saved while a shown edition's operation was pending goes out after it, whether that operation
+  // published or was superseded.
+  if(['published','superseded'].includes(finished.state)&&['publish','restore','cards'].includes(row.action)&&!receipt.localOnly)
+   await this.followUpCards(row.orgId,{workspaceId:row.workspaceId,workId:row.workId,locale:row.locale,except:row.payload.renditionId||row.payload.cardSetId||null},'action '+row.id);
   return finished;
  }
  async dispatch(row){
@@ -203,8 +211,10 @@ class RssdEditorialActions {
    if(row.action==='cards'){
     // The receiver must take card updates, and its live packet must be the edition this card set was made from.
     if(!head)p.fail('Published receiver identity is missing; reconcile its original release before changing its cards',409,'receiver_head_missing');
-    if(!(await this.publisher.receiverCapabilities(config,token)).includes(CARD_UPDATES_CAPABILITY))return this.finish(row,{state:'superseded',error:'The website does not take card updates yet; the card set goes out with the next revision'});
-    const live=await this.publisher.request(config.origin+'/rssd-content/'+contentKey(row)+'.json');
+    // An edition the receiver only knows from its migration baseline has no packet to send back.
+    if(head.state==='legacy'||!head.contentHash)return this.finish(row,{state:'superseded',error:'This edition was published before card sets were sent; its card set goes out with the next revision'});
+    if(!(await this.publisher.receiverCapabilities(config,token)).includes(CARD_UPDATES_CAPABILITY))return this.finish(row,{state:'superseded',error:'The website did not confirm it takes card updates; the card set goes out with the next revision'});
+    let live;try{live=await this.publisher.request(config.origin+'/rssd-content/'+contentKey(row)+'.json');}catch(error){if(error.status===404)p.fail('The live edition has no public record to update',409,'receiver_head_conflict');throw error;}
     if(!visible(live)||live.workId!==row.workId||live.locale!==row.locale||live.revision!==head.revision||live.contentHash!==row.payload.hash)p.fail('The live edition differs from the one this card set was made from',409,'receiver_head_conflict');
     const {cards}=await this.publisher.cardSet({...row,revision:head.revision},row.payload.renditionId);
     if(p.hash(live.cards||null)===p.hash(cards))return this.finish(row,{state:'superseded',error:'This card set is already on the website'});
@@ -225,14 +235,17 @@ class RssdEditorialActions {
     this.publisher.receiverContent(content,capable);
     const set=capable&&content.metadata.workType!=='note'?await this.publisher.newestCardSet({...row,revision}):null;
     const cards=set?(await this.publisher.cardSet({...row,revision},set.id)).cards:null;
+    row.payload.cardSetId=set?.id??null;
     packet=publication({version:1,requestId:row.id,siteId:config.siteId,workspaceId:row.workspaceId,sectionId:row.payload.sectionId,workId:row.workId,locale:row.locale,
      revision,contentHash:hash,route:head?.route||row.payload.route,
      operationSequence:(head?.operationSequence||0)+1,
      ...(operation?{operation,operationSequence:(head?.operationSequence||0)+1,expectedOperationSequence:head?.operationSequence||0,expectedRevision:head?.revision||0}:{}),
      ...(shown?{content,...(prepared.assets.length?{assets:prepared.assets}:{}),...(cards?{cards}:{})}:{})});
    }
-   const changed=await x(this.store.db,'UPDATE rssd_editorial_actions SET packet=$4::jsonb WHERE "orgId"=$1 AND id=$2 AND "leaseToken"=$3',row.orgId,row.id,row.leaseToken,JSON.stringify(packet));
-   if(!changed)return {id:row.id,state:'lease_lost'};row.packet=packet;
+   // The card set a shown packet carries is kept with the action, so its follow-up does not queue it again.
+   const carried=row.action==='cards'?{}:{cardSetId:packet.cards?row.payload.cardSetId??null:null};
+   const changed=await x(this.store.db,'UPDATE rssd_editorial_actions SET packet=$4::jsonb,payload=payload || $5::jsonb WHERE "orgId"=$1 AND id=$2 AND "leaseToken"=$3',row.orgId,row.id,row.leaseToken,JSON.stringify(packet),JSON.stringify(carried));
+   if(!changed)return {id:row.id,state:'lease_lost'};row.packet=packet;Object.assign(row.payload,carried);
   }
   if(!packet)p.fail('Original action packet is missing; retain its receiver receipt',409,'receipt_conflict');
   if(!receipt){

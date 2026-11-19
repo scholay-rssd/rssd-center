@@ -592,8 +592,7 @@ class RssdEditorial {
         result=await renditions.save(ctx,workspaceId,input);
         // A picture card set for the live revision goes to the website without waiting for the next revision. The
         // save stands even if queuing fails; the next website operation on the edition queues it again.
-        if(this.actions&&input.representation==='raster')try{await this.actions.queueCards(ctx.orgId,{workspaceId,workId:input.workId,locale:input.locale});}
-        catch(error){console.error('RSSD card update for rendition '+result.id+' could not be queued: '+String(error.message||error).slice(0,300));}
+        if(this.actions&&input.representation==='raster')await this.actions.followUpCards(ctx.orgId,{workspaceId,workId:input.workId,locale:input.locale},'rendition '+result.id);
       }
       else p.fail('Unknown rendition operation',404,'not_found');
     }else if(method==='GET'&&parts.length===1&&first==='site'){

@@ -73,7 +73,7 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
     });
     this.publisher = new RssdPublisher(this.store, {secret: process.env.RSSD_ENCRYPTION_KEY || process.env.JWT_SECRET, media: this.media, postiz: this.postiz,
       // A card set saved while the publication was pending goes to the website after it.
-      afterPublish: (row: any) => this.editorial.actions.queueCards(row.orgId, {workspaceId: row.workspaceId, workId: row.workId, locale: row.locale, except: row.payload?.sitePacket?.cardSetId || null})});
+      afterPublish: (row: any) => this.editorial.actions.followUpCards(row.orgId, {workspaceId: row.workspaceId, workId: row.workId, locale: row.locale, except: row.payload?.sitePacket?.cardSetId || null}, 'publication ' + row.id)});
     this.editorial.actions = new RssdEditorialActions(this.store, this.media, this.publisher, this.editorial);
   }
   onModuleInit() {

@@ -59,13 +59,17 @@ A raster card set saved after its revision went live reaches the website as a
 `cards` action, without a new content revision. It is queued automatically
 once per card set, keyed `cards-<renditionId>`: when the rendition is saved for
 the live revision, and after a publication or a publish, restore or card action
-of the edition succeeds, so a set saved while another website operation was
-pending follows it. Nothing is queued while another operation for the edition
-is pending. The action sends the live packet back with the new card set and the
-receiver's next operation sequence; a later draft does not stop it, but a newer
-live revision, a withdrawal or a deletion supersedes it. A receiver that does
-not advertise `card-updates-v1`, or already shows that card set, supersedes the
-action without a submission, and the card set goes with the next revision.
+of the edition has published or been superseded, so a set saved while another
+website operation was pending follows it. Nothing is queued for a note, for a
+site destination that is disabled or not set up for the workspace, or while
+another operation for the edition is pending. A pending card update does not
+stop draft saves; it does make publishing and confirmed actions wait, as any
+website operation does. The action sends the live packet back with the new card
+set and the receiver's next operation sequence. A newer live revision, a
+withdrawal or a deletion supersedes it. So does an edition the receiver only
+knows from its migration baseline, a receiver that does not advertise
+`card-updates-v1`, or one that already shows that card set; these end without
+a submission, and the card set goes with the next revision.
 
 Native claim-submit receipts (`GET /submissions/:requestId` / `rssd_receipt`)
 return `publicationIds`. Those ids are the website `job.id` values for site

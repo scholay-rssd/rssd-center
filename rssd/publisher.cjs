@@ -101,9 +101,9 @@ class RssdPublisher {
     return content;
   }
   /** The newest raster card set saved for an edition revision. Layout sets are left out: a site shows pictures only. */
-  async newestCardSet({orgId,workspaceId,workId,locale,revision}){
+  async newestCardSet({orgId,workspaceId,workId,locale,revision},db=this.db){
     if(!this.media)return null;
-    return one(this.db,`SELECT id FROM rssd_renditions WHERE "orgId"=$1 AND "workspaceId"=$2 AND "workId"=$3 AND locale=$4 AND revision=$5
+    return one(db,`SELECT id FROM rssd_renditions WHERE "orgId"=$1 AND "workspaceId"=$2 AND "workId"=$3 AND locale=$4 AND revision=$5
       AND summary->>'representation'='raster' ORDER BY "createdAt" DESC,id DESC LIMIT 1`,orgId,workspaceId,workId,locale,revision);
   }
   /** A stored card set as a packet carries it, made from that revision, with the media the receiver needs. */

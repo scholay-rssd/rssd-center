@@ -159,10 +159,10 @@ const cardEdition={locale:'zh-CN',title:'缅因猫',bodyMarkdown:'正文。',sum
 const livePacket=extra=>publication({version:1,requestId:'publication-1',siteId:'pets',workspaceId:'pets',sectionId:'daily-cat',workId:'maine-coon',locale:'zh-CN',revision:2,
   contentHash:p.hash(cardEdition),content:publicContent(cardEdition),route:'/news/maine-coon/',...extra});
 
-function cardsFixture({status=['work-types-v1','card-updates-v1'],live=livePacket(),newest='rendition-1',pending=false,existing=false}={}){
+function cardsFixture({status=['work-types-v1','card-updates-v1'],live=livePacket(),newest='rendition-1',pending=false,existing=false,edition=cardEdition,headState='success',enabled=true}={}){
   const cipher=new CredentialCipher(secret),writes=[],stored=new Map();
-  const destination={id:destinationId,orgId,kind:'site',enabled:true,workspaceIds:['pets'],config:{origin:'https://pet.example',siteId:'pets',sealedToken:cipher.seal('site-token',orgId+':'+destinationId)}};
-  const site={head:{siteId:'pets',workId:'maine-coon',locale:'zh-CN',revision:2,route:'/news/maine-coon/',operation:'publish',operationSequence:1,contentHash:p.hash(cardEdition),state:'success'},live,receipts:new Map()};
+  const destination={id:destinationId,orgId,kind:'site',enabled,workspaceIds:['pets'],config:{origin:'https://pet.example',siteId:'pets',sealedToken:cipher.seal('site-token',orgId+':'+destinationId)}};
+  const site={head:{siteId:'pets',workId:'maine-coon',locale:'zh-CN',revision:2,route:'/news/maine-coon/',operation:'publish',operationSequence:1,contentHash:p.hash(cardEdition),state:headState},live,receipts:new Map()};
   const receipt=value=>({requestId:value.requestId,siteId:value.siteId,workId:value.workId,locale:value.locale,revision:value.revision,contentHash:value.contentHash,packetHash:p.hash(value),operation:value.operation||'publish',operationSequence:value.operationSequence,state:'success',release:'release-2'});
   const fetchImpl=async(url,{method='GET',body}={})=>{
     const path=new URL(url).pathname;
@@ -190,12 +190,12 @@ function cardsFixture({status=['work-types-v1','card-updates-v1'],live=livePacke
       if(/FROM rssd_renditions/.test(sql)&&/ id=\$3/.test(sql))return renditions[values[2]]?[{payload:renditions[values[2]]}]:[];
       if(/FROM rssd_renditions/.test(sql))return newest?[{id:newest}]:[];
       if(/UNION ALL SELECT id FROM rssd_editorial_actions/.test(sql))return pending?[{id:'publication-9'}]:[];
-      if(/FROM rssd_editorial_actions WHERE "orgId"=\$1 AND "workspaceId"=\$2 AND "requestKey"=\$3/.test(sql))return existing?[{id:'action-old'}]:[];
+      if(/INSERT INTO rssd_editorial_actions/.test(sql)){if(existing)return [];inserted={requestKey:values[3],payload:JSON.parse(values[8])};return [{id:values[1]}];}
       if(/FROM rssd_editorial_actions WHERE "orgId"=\$1 AND id=\$2 FOR UPDATE/.test(sql))return [{leaseToken:'lease'}];
       if(/FROM rssd_works/.test(sql))return [{id:'maine-coon',workspaceId:'pets',sectionId:'daily-cat'}];
-      if(/FROM rssd_editions/.test(sql))return [{locale:'zh-CN',revision:2,payload:cardEdition,hash:p.hash(cardEdition)}];
+      if(/FROM rssd_editions/.test(sql))return [{locale:'zh-CN',revision:2,payload:edition,hash:p.hash(edition)}];
       return [];},
-    $executeRawUnsafe:async(sql,...values)=>{writes.push({sql,values});if(/INSERT INTO rssd_editorial_actions/.test(sql))inserted={requestKey:values[3],payload:JSON.parse(values[8])};return 1;},
+    $executeRawUnsafe:async(sql,...values)=>{writes.push({sql,values});return 1;},
   };
   const store={db,transaction:fn=>fn(db),async edition(){return {payload:cardEdition,hash:p.hash(cardEdition)};}};
   const mediaStore={row:async(ctx,id)=>({id,workspaceId:'pets',manifest:media[id.slice(6)]}),bytes:async(ctx,id)=>({bytes:Buffer.from('png '+id)})};
@@ -236,6 +236,16 @@ test('a card set saved for the live revision is queued once and reaches the webs
   assert.equal(JSON.parse(upsert.values[8]).operationSequence,2);
 });
 
+test('no card update for a note, a site that is not set up, or an edition published before card sets were sent',async()=>{
+  const queue=f=>f.actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN'});
+  assert.equal(await queue(cardsFixture({edition:{...cardEdition,metadata:{date:'2026-11-19',workType:'note'}}})),null);
+  assert.equal(await queue(cardsFixture({enabled:false})),null);
+  // A head the receiver only knows from its migration baseline has no packet to send back: dropped, not retried.
+  const legacy=cardsFixture({headState:'legacy'});await queue(legacy);
+  assert.equal((await legacy.actions.dispatch(legacy.row())).state,'superseded');
+  assert.match(actionState(legacy)[4],/published before card sets were sent/);
+});
+
 test('a card update waits for a quiet edition, is queued once per card set, and skips a set just sent',async()=>{
   assert.equal(await cardsFixture({pending:true}).actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN'}),null);
   assert.equal(await cardsFixture({existing:true}).actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN'}),null);
@@ -246,7 +256,7 @@ test('a card update waits for a quiet edition, is queued once per card set, and 
 test('a card update is dropped for a receiver without card updates, or when the set is already live',async()=>{
   const old=cardsFixture({status:['work-types-v1']});await old.actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN'});
   assert.equal((await old.actions.dispatch(old.row())).state,'superseded');
-  assert.match(actionState(old)[4],/does not take card updates/);
+  assert.match(actionState(old)[4],/did not confirm it takes card updates/);
   assert.equal(old.site.live.operation,undefined);
   const cards={revision:2,pages:[{...media.a,width:1080,height:1440},{...media.b,width:1080,height:1440}],cover:media.c};
   const same=cardsFixture({live:livePacket({cards})});await same.actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN'});
