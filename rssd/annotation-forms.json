@@ -1,0 +1,899 @@
+{
+ "schemaVersion": 1,
+ "version": "1",
+ "locale": "zh-CN",
+ "note": "Version 1. A change of wording that changes what an item means, an added or removed item, or a changed option is a new version; answers always name the version they were given for.",
+ "sections": [
+  {
+   "id": "article-facts",
+   "title": "事实与来源",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ]
+   },
+   "items": [
+    {
+     "id": "fact-spot-check",
+     "type": "check",
+     "text": "任选正文里一处具体事实（数字、日期、名称、结论），能在文末列出的来源里找到依据。",
+     "note": true
+    },
+    {
+     "id": "unsupported-claims",
+     "type": "choice",
+     "text": "正文里有没有读起来没有依据的断言？",
+     "options": [
+      {
+       "id": "none",
+       "label": "没有"
+      },
+      {
+       "id": "few",
+       "label": "有一两处"
+      },
+      {
+       "id": "many",
+       "label": "有多处"
+      }
+     ]
+    },
+    {
+     "id": "references-match",
+     "type": "check",
+     "text": "文末参考来源与正文引用对得上：没有只列不引的，也没有引了却没列的。"
+    }
+   ]
+  },
+  {
+   "id": "article-answer",
+   "title": "是否回答了问题",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ]
+   },
+   "items": [
+    {
+     "id": "question-answered",
+     "type": "scale",
+     "text": "读完之后，标题提出的问题得到了回答。",
+     "anchors": {
+      "1": "完全没有回答",
+      "3": "回答了一部分",
+      "5": "完整回答"
+     }
+    },
+    {
+     "id": "title-fit",
+     "type": "choice",
+     "text": "标题和内容的关系是：",
+     "options": [
+      {
+       "id": "accurate",
+       "label": "准确概括了内容"
+      },
+      {
+       "id": "too-broad",
+       "label": "标题比内容大或泛"
+      },
+      {
+       "id": "mismatch",
+       "label": "标题与内容不符"
+      },
+      {
+       "id": "two-part",
+       "label": "标题分成了两截（前半点题、后半解释）"
+      }
+     ]
+    },
+    {
+     "id": "density",
+     "type": "scale",
+     "text": "信息密度。",
+     "anchors": {
+      "1": "大量空话和套话",
+      "3": "有内容但注水",
+      "5": "每一段都有新信息"
+     }
+    }
+   ]
+  },
+  {
+   "id": "article-prose",
+   "title": "表达",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ]
+   },
+   "items": [
+    {
+     "id": "voice",
+     "type": "scale",
+     "text": "读起来像一个懂行的人在讲，而不是模板拼出来的。",
+     "anchors": {
+      "1": "明显的模板腔",
+      "3": "时好时坏",
+      "5": "自然，有人的语气"
+     }
+    },
+    {
+     "id": "main-flaw",
+     "type": "choice",
+     "text": "最明显的一个问题是：",
+     "options": [
+      {
+       "id": "none",
+       "label": "没有明显问题"
+      },
+      {
+       "id": "filler",
+       "label": "套话或空泛的总结"
+      },
+      {
+       "id": "repetition",
+       "label": "重复、啰嗦"
+      },
+      {
+       "id": "disclaimer",
+       "label": "把核验说明写进了正文（如“未实测”“以官网为准”）"
+      },
+      {
+       "id": "structure",
+       "label": "结构混乱，找不到重点"
+      },
+      {
+       "id": "jargon",
+       "label": "术语不解释，读不懂"
+      }
+     ]
+    },
+    {
+     "id": "notes-in-body",
+     "type": "check",
+     "text": "正文里出现了本该放在作者备注里的内容（核验过程、免责声明、写作说明）。",
+     "note": true
+    }
+   ]
+  },
+  {
+   "id": "article-images",
+   "title": "配图",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ]
+   },
+   "items": [
+    {
+     "id": "image-role",
+     "type": "choice",
+     "text": "配图和正文的关系是：",
+     "options": [
+      {
+       "id": "helps",
+       "label": "有助于理解内容"
+      },
+      {
+       "id": "decorative",
+       "label": "只是装饰"
+      },
+      {
+       "id": "misleading",
+       "label": "与内容不符或有误导"
+      },
+      {
+       "id": "none",
+       "label": "没有配图"
+      }
+     ]
+    },
+    {
+     "id": "captions",
+     "type": "check",
+     "text": "图注合乎规则：有图题、作者或机构、来源；AI 生成的图有标识。",
+     "optional": true
+    }
+   ]
+  },
+  {
+   "id": "article-overall",
+   "title": "整体判断",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ]
+   },
+   "items": [
+    {
+     "id": "would-share",
+     "type": "scale",
+     "text": "你愿意把这篇转给对这个话题感兴趣的朋友。",
+     "anchors": {
+      "1": "不会",
+      "3": "看情况",
+      "5": "很愿意"
+     }
+    },
+    {
+     "id": "topic-worth",
+     "type": "choice",
+     "text": "只看选题本身（不管写得好坏）：",
+     "options": [
+      {
+       "id": "worth",
+       "label": "值得写"
+      },
+      {
+       "id": "average",
+       "label": "一般"
+      },
+      {
+       "id": "not-worth",
+       "label": "不值得写"
+      },
+      {
+       "id": "duplicate",
+       "label": "和本站已有内容重复"
+      }
+     ]
+    },
+    {
+     "id": "disposition",
+     "type": "choice",
+     "text": "如果由你决定，这篇：",
+     "options": [
+      {
+       "id": "publish",
+       "label": "可以直接发布"
+      },
+      {
+       "id": "minor",
+       "label": "小改后发布"
+      },
+      {
+       "id": "rewrite",
+       "label": "需要重写"
+      },
+      {
+       "id": "drop",
+       "label": "这个题不该写"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "article-cards",
+   "title": "卡片页",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ],
+    "cards": true
+   },
+   "items": [
+    {
+     "id": "cards-standalone",
+     "type": "scale",
+     "text": "只看卡片、不看正文，能明白这篇讲了什么。",
+     "anchors": {
+      "1": "看不明白",
+      "3": "大概明白",
+      "5": "完全明白"
+     }
+    },
+    {
+     "id": "cards-paging",
+     "type": "choice",
+     "text": "分页是否合理：",
+     "options": [
+      {
+       "id": "good",
+       "label": "合理"
+      },
+      {
+       "id": "crowded",
+       "label": "有的页太挤"
+      },
+      {
+       "id": "sparse",
+       "label": "有的页太空"
+      },
+      {
+       "id": "bad-break",
+       "label": "断在了不该断的地方"
+      }
+     ]
+    },
+    {
+     "id": "cards-faithful",
+     "type": "check",
+     "text": "卡片内容与正文一致，没有正文里没有的说法。",
+     "note": true
+    }
+   ]
+  },
+  {
+   "id": "note-common",
+   "title": "笔记",
+   "appliesTo": {
+    "workTypes": [
+     "note"
+    ]
+   },
+   "items": [
+    {
+     "id": "note-hook",
+     "type": "scale",
+     "text": "首图和标题让人想点开。",
+     "anchors": {
+      "1": "不想点",
+      "3": "一般",
+      "5": "很想点"
+     }
+    },
+    {
+     "id": "note-pictures",
+     "type": "scale",
+     "text": "图片本身就是内容，而不是文字的装饰。",
+     "anchors": {
+      "1": "图可有可无",
+      "3": "图有帮助",
+      "5": "没有图就不成立"
+     }
+    },
+    {
+     "id": "note-length",
+     "type": "choice",
+     "text": "文字的长度：",
+     "options": [
+      {
+       "id": "right",
+       "label": "恰好"
+      },
+      {
+       "id": "too-long",
+       "label": "太长，像一篇短文章"
+      },
+      {
+       "id": "too-short",
+       "label": "太短，没说清楚"
+      }
+     ]
+    },
+    {
+     "id": "note-fact",
+     "type": "check",
+     "text": "任选一处具体事实，能找到依据。",
+     "note": true
+    },
+    {
+     "id": "note-tags",
+     "type": "choice",
+     "text": "标签：",
+     "options": [
+      {
+       "id": "fit",
+       "label": "贴切"
+      },
+      {
+       "id": "broad",
+       "label": "过泛"
+      },
+      {
+       "id": "off",
+       "label": "与内容无关"
+      },
+      {
+       "id": "none",
+       "label": "没有标签"
+      }
+     ]
+    },
+    {
+     "id": "note-voice",
+     "type": "scale",
+     "text": "读起来像人写的平台笔记，而不是文章摘要。",
+     "anchors": {
+      "1": "像摘要",
+      "3": "介于两者之间",
+      "5": "像真人笔记"
+     }
+    },
+    {
+     "id": "note-share",
+     "type": "scale",
+     "text": "你愿意收藏或转发这篇笔记。",
+     "anchors": {
+      "1": "不会",
+      "3": "看情况",
+      "5": "很愿意"
+     }
+    },
+    {
+     "id": "note-disposition",
+     "type": "choice",
+     "text": "如果由你决定，这篇：",
+     "options": [
+      {
+       "id": "publish",
+       "label": "可以直接发布"
+      },
+      {
+       "id": "minor",
+       "label": "小改后发布"
+      },
+      {
+       "id": "rewrite",
+       "label": "需要重写"
+      },
+      {
+       "id": "drop",
+       "label": "这个题不该写"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "note-adapted",
+   "title": "改写自长文",
+   "appliesTo": {
+    "workTypes": [
+     "note"
+    ],
+    "adapted": true
+   },
+   "items": [
+    {
+     "id": "adapted-faithful",
+     "type": "check",
+     "text": "笔记里没有出现原文没有的说法。",
+     "note": true
+    },
+    {
+     "id": "adapted-own",
+     "type": "scale",
+     "text": "它是为平台重新写的，而不是把原文截短。",
+     "anchors": {
+      "1": "只是截短",
+      "3": "部分重写",
+      "5": "完全重写"
+     }
+    }
+   ]
+  },
+  {
+   "id": "family-animal",
+   "title": "动物档案",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ],
+    "families": [
+     "animal"
+    ]
+   },
+   "items": [
+    {
+     "id": "animal-identify",
+     "type": "scale",
+     "text": "识别特征写得足以把它和相近的品种或物种区分开。",
+     "anchors": {
+      "1": "分不出来",
+      "3": "能分出一部分",
+      "5": "能明确区分"
+     }
+    },
+    {
+     "id": "animal-care",
+     "type": "scale",
+     "text": "照护建议具体、可执行，而不是“多陪伴”“注意健康”这类话。",
+     "anchors": {
+      "1": "全是空话",
+      "3": "部分具体",
+      "5": "都能照着做"
+     }
+    },
+    {
+     "id": "animal-picture",
+     "type": "check",
+     "text": "配图确实是这个品种或物种。",
+     "note": true
+    }
+   ]
+  },
+  {
+   "id": "family-method",
+   "title": "方法与统计",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ],
+    "families": [
+     "method"
+    ]
+   },
+   "items": [
+    {
+     "id": "method-followable",
+     "type": "scale",
+     "text": "步骤完整到读者可以照着做。",
+     "anchors": {
+      "1": "无法照做",
+      "3": "缺关键步骤",
+      "5": "可以照做"
+     }
+    },
+    {
+     "id": "method-example",
+     "type": "check",
+     "text": "例子里的数字或计算可以核对，结果是对的。",
+     "note": true
+    },
+    {
+     "id": "method-conditions",
+     "type": "check",
+     "text": "说明了这个方法适用和不适用的条件。"
+    }
+   ]
+  },
+  {
+   "id": "family-procedure",
+   "title": "操作步骤",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ],
+    "families": [
+     "procedure"
+    ]
+   },
+   "items": [
+    {
+     "id": "procedure-works",
+     "type": "choice",
+     "text": "按文中步骤操作：",
+     "options": [
+      {
+       "id": "tried-ok",
+       "label": "我试了，可行"
+      },
+      {
+       "id": "tried-fail",
+       "label": "我试了，不可行"
+      },
+      {
+       "id": "complete",
+       "label": "没有试，但步骤完整"
+      },
+      {
+       "id": "gaps",
+       "label": "步骤有缺失"
+      }
+     ],
+     "note": true
+    },
+    {
+     "id": "procedure-version",
+     "type": "check",
+     "text": "标明了平台和版本。"
+    }
+   ]
+  },
+  {
+   "id": "family-progress",
+   "title": "新进展",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ],
+    "families": [
+     "progress"
+    ]
+   },
+   "items": [
+    {
+     "id": "progress-new",
+     "type": "scale",
+     "text": "说清了“新在哪里”，以及和已有做法的区别。",
+     "anchors": {
+      "1": "没说",
+      "3": "说得模糊",
+      "5": "说得清楚"
+     }
+    },
+    {
+     "id": "progress-attribution",
+     "type": "check",
+     "text": "原始材料说了什么、作者怎么解读，两者分得清。"
+    }
+   ]
+  },
+  {
+   "id": "family-briefing",
+   "title": "简报",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ],
+    "families": [
+     "briefing"
+    ]
+   },
+   "items": [
+    {
+     "id": "briefing-independent",
+     "type": "check",
+     "text": "各条之间相互独立，没有重复。"
+    },
+    {
+     "id": "briefing-why",
+     "type": "scale",
+     "text": "每一条都交代了为什么值得知道。",
+     "anchors": {
+      "1": "都没有",
+      "3": "部分有",
+      "5": "每条都有"
+     }
+    }
+   ]
+  },
+  {
+   "id": "family-dated",
+   "title": "日程与历史",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ],
+    "families": [
+     "dated"
+    ]
+   },
+   "items": [
+    {
+     "id": "dated-accurate",
+     "type": "check",
+     "text": "日期和年份准确。",
+     "note": true
+    },
+    {
+     "id": "dated-custom",
+     "type": "check",
+     "text": "区分了每年的惯例和当年的具体安排。",
+     "optional": true
+    }
+   ]
+  },
+  {
+   "id": "family-legal",
+   "title": "法律",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ],
+    "families": [
+     "legal"
+    ]
+   },
+   "items": [
+    {
+     "id": "legal-jurisdiction",
+     "type": "check",
+     "text": "标明了法域和时点。"
+    },
+    {
+     "id": "legal-structure",
+     "type": "scale",
+     "text": "事实、争点、结论分得清楚。",
+     "anchors": {
+      "1": "混在一起",
+      "3": "大致能分",
+      "5": "清楚分开"
+     }
+    },
+    {
+     "id": "legal-no-advice",
+     "type": "check",
+     "text": "没有给出像针对个案的法律意见那样的建议。"
+    }
+   ]
+  },
+  {
+   "id": "family-resource",
+   "title": "资源与入口",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ],
+    "families": [
+     "resource"
+    ]
+   },
+   "items": [
+    {
+     "id": "resource-reachable",
+     "type": "choice",
+     "text": "文中给出的入口：",
+     "options": [
+      {
+       "id": "works",
+       "label": "打开可用"
+      },
+      {
+       "id": "broken",
+       "label": "打不开或已失效"
+      },
+      {
+       "id": "untested",
+       "label": "我没有试"
+      }
+     ],
+     "note": true
+    },
+    {
+     "id": "resource-audience",
+     "type": "scale",
+     "text": "说清了适合谁、不适合谁。",
+     "anchors": {
+      "1": "没说",
+      "3": "说得笼统",
+      "5": "说得具体"
+     }
+    }
+   ]
+  },
+  {
+   "id": "family-time-sensitive",
+   "title": "有时效的信息",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ],
+    "families": [
+     "time-sensitive"
+    ]
+   },
+   "items": [
+    {
+     "id": "timely-valid",
+     "type": "choice",
+     "text": "文中的有效期、费用或条件：",
+     "options": [
+      {
+       "id": "valid",
+       "label": "写明了，现在仍有效"
+      },
+      {
+       "id": "expired",
+       "label": "已过期或已变化"
+      },
+      {
+       "id": "missing",
+       "label": "没有写明"
+      },
+      {
+       "id": "unknown",
+       "label": "无法判断"
+      }
+     ],
+     "note": true
+    },
+    {
+     "id": "timely-steps",
+     "type": "check",
+     "text": "取得或报名的步骤完整。"
+    }
+   ]
+  },
+  {
+   "id": "family-visual",
+   "title": "视觉作品",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ],
+    "families": [
+     "visual"
+    ]
+   },
+   "items": [
+    {
+     "id": "visual-specific",
+     "type": "scale",
+     "text": "分析落在看得见的具体细节上（布局、字体、色彩、交互）。",
+     "anchors": {
+      "1": "只有形容词",
+      "3": "部分具体",
+      "5": "处处具体"
+     }
+    },
+    {
+     "id": "visual-credit",
+     "type": "check",
+     "text": "作者和来源标注清楚。"
+    }
+   ]
+  },
+  {
+   "id": "family-classical",
+   "title": "经典与解读",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ],
+    "families": [
+     "classical"
+    ]
+   },
+   "items": [
+    {
+     "id": "classical-source",
+     "type": "check",
+     "text": "原文与译解分开呈现，出处可查。",
+     "note": true
+    },
+    {
+     "id": "classical-commentary",
+     "type": "scale",
+     "text": "评论没有被当成原文的意思。",
+     "anchors": {
+      "1": "混为一谈",
+      "3": "偶有混淆",
+      "5": "界限清楚"
+     }
+    }
+   ]
+  },
+  {
+   "id": "family-owner",
+   "title": "作者自有材料",
+   "appliesTo": {
+    "workTypes": [
+     "article"
+    ],
+    "families": [
+     "owner"
+    ]
+   },
+   "items": [
+    {
+     "id": "owner-grounded",
+     "type": "scale",
+     "text": "内容来自作者真实的项目和材料，而不是泛泛而谈。",
+     "anchors": {
+      "1": "泛泛而谈",
+      "3": "部分有实料",
+      "5": "全是实料"
+     }
+    },
+    {
+     "id": "owner-invented",
+     "type": "choice",
+     "text": "有没有看起来像是编造的经历或成果？",
+     "options": [
+      {
+       "id": "no",
+       "label": "没有"
+      },
+      {
+       "id": "suspect",
+       "label": "有可疑之处"
+      },
+      {
+       "id": "yes",
+       "label": "有"
+      },
+      {
+       "id": "unknown",
+       "label": "无法判断"
+      }
+     ],
+     "note": true
+    }
+   ]
+  }
+ ]
+}
