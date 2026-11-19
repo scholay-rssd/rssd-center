@@ -11,7 +11,7 @@ const {record,recordFields}=require('./rssd-record.cjs');
 const {StagedDrafts}=require('./staged-drafts.cjs');
 const {RssdRenditions}=require('./renditions.cjs');
 const {prepareStructuredDraft}=require('./structured-draft.cjs');
-const {CHOSEN_WORK_TYPES}=require('./publication.cjs');
+const {CHOSEN_WORK_TYPES,MAX_WORK_TAGS,MAX_TAG_LENGTH}=require('./publication.cjs');
 const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args);
 const x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
 const digest=value=>createHash('sha256').update(value).digest('hex');
@@ -84,6 +84,12 @@ function inputData(input,{allowOptionalBlanks=false}={}){
     if(Object.keys(data.adaptedFrom).some(key=>!['articleId','revision'].includes(key)))p.fail('adaptedFrom names an article and the revision it was written from');
     if(!/^[a-z0-9][a-z0-9-]{2,99}$/.test(data.adaptedFrom.articleId||'')||data.adaptedFrom.articleId===data.id)p.fail('Invalid source article for the note');
     p.integer(data.adaptedFrom.revision,'adaptedFrom revision',1);
+  }
+  // A work's own #tags, kept in the form the site packet carries: trimmed, without the leading #, each once.
+  if(data.tags!=null){
+    const tags=[...new Set(p.array(data.tags,'tags',MAX_WORK_TAGS*2).map(tag=>(typeof tag==='string'?tag:'').trim().replace(/^#+/,'').trim()).filter(Boolean))];
+    if(tags.length>MAX_WORK_TAGS||tags.some(tag=>tag.length>MAX_TAG_LENGTH||/[\x00-\x1f]/.test(tag)))p.fail('A work has at most '+MAX_WORK_TAGS+' tags of up to '+MAX_TAG_LENGTH+' characters');
+    data.tags=tags;
   }
   return data;
 }
@@ -267,6 +273,7 @@ class RssdEditorial {
       category:e.metadata?.category||'',sectionId:row.sectionId,assets};
     if(e.metadata?.record){const id=row.documentId||row.workId;value.record={documentId:id,kind:e.metadata.record.kind,fields:editorRecordFields(e.metadata.record.kind,recordFields(e.metadata.record,material.edition),id,row.sectionId,edition.createdAt)};}
     if(e.metadata?.workType)value.workType=e.metadata.workType;
+    if(e.metadata?.tags?.length)value.tags=[...e.metadata.tags];
     if(e.metadata?.adaptedFrom){
       const original=(entries||await this.entries(ctx,workspaceId)).find(r=>r.workId===e.metadata.adaptedFrom.workId&&r.locale==='zh-CN');
       if(original)value.adaptedFrom={articleId:original.articleId,revision:e.metadata.adaptedFrom.revision};
@@ -487,6 +494,7 @@ class RssdEditorial {
       else if(data.workType!==undefined)metadata.workType=data.workType;
       if(data.adaptedFrom===null||metadata.workType!=='note')delete metadata.adaptedFrom;
       else if(adaptedFrom)metadata.adaptedFrom=adaptedFrom;
+      if(data.tags!==undefined){if(data.tags?.length)metadata.tags=data.tags;else delete metadata.tags;}
       const packet={requestId:'editorial-'+p.hash([workspaceId,input.requestKey]).slice(0,48),workId,workspaceId,sectionId:data.sectionId,baseRevisions:{[locale]:input.expectedVersion},editions:[{locale,title:data.title,summary:data.summary,bodyMarkdown,sources:previousEdition?.sources||[],media:attachments,translationOf,metadata}]};
       const saved=await nested.submit(ctx,packet,{publish:intent==='publish'}),revision=saved.editions[0].revision;
       const publication=intent==='publish'?(await q(db,'SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND revision=$4 AND "destinationId"=$5',ctx.orgId,workId,locale,revision,destinationId))[0]:null;

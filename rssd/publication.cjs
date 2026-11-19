@@ -6,8 +6,10 @@ const {record,recordFields}=require('./rssd-record.cjs');
 const CHOSEN_WORK_TYPES=['article','note'];
 // A card set has at most as many pages as the Center stores for one rendition.
 const MAX_CARD_PAGES=500;
-// A receiver that understands work types, note links and card sets says so in its status; a sender includes
-// them only for such a receiver, because a receiver that drops a field returns a different packet hash.
+// A work's own #tags: MAX_WORK_TAGS and MAX_TAG_LENGTH in work-types.mjs, which a test keeps equal.
+const MAX_WORK_TAGS=10,MAX_TAG_LENGTH=40;
+// A receiver that understands work types, note links, work tags and card sets says so in its status; a sender
+// includes them only for such a receiver, because a receiver that drops a field returns a different packet hash.
 const WORK_TYPES_CAPABILITY='work-types-v1';
 function route(value) {
   if(typeof value!=='string'||!/^\/(?:[A-Za-z0-9_\-\u0080-\uFFFF]+\/)+$/.test(value)||value.length>1000)p.fail('Invalid public article route');
@@ -26,6 +28,12 @@ function publicContent(edition) {
     if(metadata.workType!=='note')p.fail('Only a note can be rewritten from an article');
     const source=p.object(e.metadata.adaptedFrom,'adaptedFrom');
     metadata.adaptedFrom={workId:p.id(source.workId,'adaptedFrom workId'),revision:p.integer(source.revision,'adaptedFrom revision',1)};
+  }
+  // A work's own #tags, in order, each once and without the leading #.
+  if(e.metadata.tags!=null){
+    const tags=p.array(e.metadata.tags,'tags',MAX_WORK_TAGS);
+    if(tags.some(tag=>typeof tag!=='string'||!tag||tag!==tag.trim()||tag.length>MAX_TAG_LENGTH||tag.startsWith('#')||/[\x00-\x1f]/.test(tag))||new Set(tags).size!==tags.length)p.fail('Invalid work tags');
+    if(tags.length)metadata.tags=[...tags];
   }
   return {locale:e.locale,title:e.title,bodyMarkdown:e.bodyMarkdown,summary:e.summary,sources:e.sources,metadata};
 }
@@ -59,4 +67,4 @@ const visible=value=>['publish','restore'].includes(operation(value));
 const contentKey=value=>p.hash([value.workId,value.locale]);
 /** Every media file a packet places on the site: the article's own and its card set's. */
 const packetMedia=value=>[...(value.assets||[]),...(value.cards?[...value.cards.pages,...(value.cards.cover?[value.cards.cover]:[])]:[])];
-module.exports={publication,publicContent,contentKey,route,operation,visible,packetMedia,CHOSEN_WORK_TYPES,MAX_CARD_PAGES,WORK_TYPES_CAPABILITY};
+module.exports={publication,publicContent,contentKey,route,operation,visible,packetMedia,CHOSEN_WORK_TYPES,MAX_CARD_PAGES,MAX_WORK_TAGS,MAX_TAG_LENGTH,WORK_TYPES_CAPABILITY};

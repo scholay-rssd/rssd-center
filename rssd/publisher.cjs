@@ -90,10 +90,10 @@ class RssdPublisher {
     let status;try{status=await this.request(origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/status',{token});}catch(error){if([401,404].includes(error.status))return false;throw error;}
     return Array.isArray(status?.capabilities)&&status.capabilities.includes(WORK_TYPES_CAPABILITY);
   }
-  /** Public content as a receiver can take it. One that does not understand work types would drop them and return
-   * a different packet hash, so it gets the content it always had. */
+  /** Public content as a receiver can take it. One that does not understand work types (and with them note links
+   * and work tags) would drop them and return a different packet hash, so it gets the content it always had. */
   receiverContent(content,capable){
-    if(!capable){delete content.metadata.workType;delete content.metadata.adaptedFrom;}
+    if(!capable){delete content.metadata.workType;delete content.metadata.adaptedFrom;delete content.metadata.tags;}
     return content;
   }
   /** The newest raster card set saved for an edition revision. Layout sets are left out: a site shows pictures only. */

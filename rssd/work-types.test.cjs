@@ -84,11 +84,11 @@ test('a retry sends the card set chosen first, even after a newer one is saved',
   assert.deepEqual(f.site.packets.get('publication-1').cards.pages.map(page=>page.sha256),[media.a.sha256,media.b.sha256]);
 });
 
-test('a note reaches a capable site with its source link and no card set',async()=>{
-  const f=fixture({metadata:{workType:'note',adaptedFrom:{workId:'maine-coon-article',revision:3}}});await f.publisher.dispatch(f.row);
+test('a note reaches a capable site with its source link and tags, and no card set',async()=>{
+  const f=fixture({metadata:{workType:'note',adaptedFrom:{workId:'maine-coon-article',revision:3},tags:['缅因猫','长毛猫']}});await f.publisher.dispatch(f.row);
   assert.equal(outcome(f),'published');
   const packet=f.site.packets.get('publication-1');
-  assert.deepEqual(packet.content.metadata,{date:'2026-11-19',workType:'note',adaptedFrom:{workId:'maine-coon-article',revision:3}});
+  assert.deepEqual(packet.content.metadata,{date:'2026-11-19',workType:'note',adaptedFrom:{workId:'maine-coon-article',revision:3},tags:['缅因猫','长毛猫']});
   assert.equal(packet.cards,undefined);
   assert.ok(!f.queries.some(q=>/FROM rssd_renditions/.test(q.sql)));
 });
@@ -97,7 +97,7 @@ test('a receiver that does not advertise work types gets the packet it always ha
   // An empty list, no list, a receiver from before the status endpoint (404), and one whose credential check
   // answers first for routes it does not know (401).
   for(const status of [[],null,'no-status','old-receiver']){
-    const f=fixture({status,metadata:{workType:'note',adaptedFrom:{workId:'maine-coon-article',revision:3}}});await f.publisher.dispatch(f.row);
+    const f=fixture({status,metadata:{workType:'note',adaptedFrom:{workId:'maine-coon-article',revision:3},tags:['缅因猫']}});await f.publisher.dispatch(f.row);
     assert.equal(outcome(f),'published',String(status));
     const packet=f.site.packets.get('publication-1');
     assert.deepEqual(packet.content.metadata,{date:'2026-11-19'});
@@ -143,6 +143,12 @@ test('the editorial intake checks a stated work type and note link',()=>{
   assert.throws(()=>inputData({data:{...data,workType:'note',adaptedFrom:{articleId:'maine-coon-signs',revision:2}}}),/Invalid source article/);
   assert.throws(()=>inputData({data:{...data,workType:'note',adaptedFrom:{articleId:'maine-coon'}}}),/adaptedFrom revision/);
   assert.throws(()=>inputData({data:{...data,workType:'note',adaptedFrom:{articleId:'maine-coon',revision:2,workId:'x'}}}),/names an article and the revision/);
+  // Tags are kept as the packet carries them: trimmed, without the leading #, each once; [] clears them.
+  assert.deepEqual(inputData({data:{...data,tags:['#缅因猫',' 长毛猫 ','缅因猫','',' # ']}}).tags,['缅因猫','长毛猫']);
+  assert.deepEqual(inputData({data:{...data,tags:[]}}).tags,[]);
+  assert.throws(()=>inputData({data:{...data,tags:Array.from({length:11},(_,i)=>'tag'+i)}}),/at most 10 tags/);
+  assert.throws(()=>inputData({data:{...data,tags:['猫'.repeat(41)]}}),/at most 10 tags of up to 40/);
+  assert.throws(()=>inputData({data:{...data,tags:'缅因猫'}}),/Invalid tags/);
   const documentId='123e4567-e89b-42d3-a456-426614174000';
   assert.throws(()=>inputData({data:{...data,id:'record-'+documentId,markdown:'# 日程\n\n## 摘要\n\n一句话。\n\n## 正文\n\n正文。',workType:'article',record:{kind:'year',documentId,fields:{}}}}),/structured record keeps/);
 });
