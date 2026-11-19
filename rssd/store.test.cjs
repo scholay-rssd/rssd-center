@@ -410,6 +410,24 @@ test('editorial legacy drafts preserve existing attachment metadata, hidden asse
  await f.service.submit(f.ctx,'research',third,{intent:'draft'});
  const next=(await store.edition(f.ctx,workId,'zh-CN',3)).payload,newId=mediaProtocol.mediaId('research',newManifest.sha256);
  assert.deepEqual(next.media,[{id:inline.id,alt:'Important inline alt'},{id:hidden.id,alt:'Hidden attachment alt'},{id:newId,alt:''}]);
+ // Images the work already stores can be named by path alone; only new bytes count toward the 2 MiB.
+ assert.equal(again.reusesStoredMediaOnSave,true);
+ const big=await image(Buffer.concat([png,Buffer.alloc(2200*1024,7)]),'large.png');
+ const current=(await store.edition(f.ctx,workId,'zh-CN',3)).payload;
+ await store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',baseRevisions:{'zh-CN':3},editions:[{...current,locale:'zh-CN',bodyMarkdown:current.bodyMarkdown+' ![large]('+big.url+')',media:[...current.media,{id:big.id,alt:'Large alt'}]}]},{publish:false});
+ const four=await f.service.detail(f.ctx,'research','synthetic-manuscript');
+ const tooLarge={requestKey:randomUUID(),expectedVersion:4,expectedPublishedVersion:null,data:{...four.data,markdown:four.data.markdown+' bigger'}};
+ await assert.rejects(f.service.submit(f.ctx,'research',tooLarge,{intent:'draft'}),/Invalid image bytes|exceeds 2 MiB/);
+ const reused={...tooLarge,requestKey:randomUUID(),data:{...tooLarge.data,assets:four.data.assets.map(a=>a.path===big.manifest.path||a.path===inline.manifest.path?{path:a.path}:a)}};
+ const reusedSave=await f.service.submit(f.ctx,'research',reused,{intent:'draft'});assert.equal(reusedSave.revision,5);
+ const fifth=(await store.edition(f.ctx,workId,'zh-CN',5)).payload;
+ assert.deepEqual(fifth.media,current.media.concat({id:big.id,alt:'Large alt'}));
+ assert(fifth.bodyMarkdown.includes('/api/rssd/v1/media/'+big.id+'/raw')&&fifth.bodyMarkdown.includes('/api/rssd/v1/media/'+inline.id+'/raw')&&!fifth.bodyMarkdown.includes('/article-media/'));
+ assert.equal((await f.service.submit(f.ctx,'research',reused,{intent:'draft'})).revision,5);
+ const unknown=mediaProtocol.imageManifest(Buffer.concat([png,Buffer.from([3])]));
+ const missing={requestKey:randomUUID(),expectedVersion:5,expectedPublishedVersion:null,data:{...tooLarge.data,markdown:tooLarge.data.markdown+' ![x]('+unknown.path+')',assets:[...reused.data.assets,{path:unknown.path}]}};
+ await assert.rejects(f.service.submit(f.ctx,'research',missing,{intent:'draft'}),{code:'stored_media_missing'});
+ await assert.rejects(f.service.submit(f.ctx,'research',{...missing,requestKey:randomUUID(),data:{...missing.data,assets:[...reused.data.assets,{path:unknown.path,name:'x'}]}},{intent:'draft'}),/Invalid stored image reference/);
 });
 
 test('editorial detail and private save distinguish locales sharing an article identity',async()=>{

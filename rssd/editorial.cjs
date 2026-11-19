@@ -48,7 +48,7 @@ function legacyFingerprint(data){
   const content=Object.fromEntries(['id','title','summary','markdown','date','category','author','sectionId'].filter(k=>data[k]!==undefined).map(k=>[k,data[k]]));
   content.assets=(data.assets||[]).map(x=>x.path).sort();return digest(JSON.stringify(content));
 }
-function inputData(input,{allowOptionalBlanks=false}={}){
+function inputData(input,{allowOptionalBlanks=false,allowStoredMedia=false}={}){
   p.object(input,'editorial request');const data=p.object(input.data,'manuscript');
   if(!/^[a-z0-9][a-z0-9-]{2,99}$/.test(data.id||''))p.fail('Invalid manuscript identity');
   for(const [field,max] of [['title',500],['summary',4000],['markdown',160000],['author',100],['category',80]]){
@@ -60,7 +60,14 @@ function inputData(input,{allowOptionalBlanks=false}={}){
   p.locale(data.locale||'zh-CN');p.id(data.sectionId,'sectionId');
   const assets=p.array(data.assets||[],'assets',12);let total=0;
   for(const asset of assets){
-    p.object(asset,'asset');if(typeof asset.data!=='string'||asset.data.length>2800000)p.fail('Invalid image bytes');
+    p.object(asset,'asset');
+    // A private save may name an image the work already stores by its path alone, without resending its bytes;
+    // the save checks it against the base edition. Only new images count toward the 2 MiB.
+    if(allowStoredMedia&&asset.data===undefined){
+      if(Object.keys(asset).length!==1||typeof asset.path!=='string'||!/^\/article-media\/[a-f0-9]{64}\.(?:png|jpg|webp)$/.test(asset.path))p.fail('Invalid stored image reference');
+      continue;
+    }
+    if(typeof asset.data!=='string'||asset.data.length>2800000)p.fail('Invalid image bytes');
     const bytes=Buffer.from(asset.data,'base64'),manifest=imageManifest(bytes);total+=bytes.length;
     if(bytes.toString('base64')!==asset.data||asset.path!==manifest.path||total>2*1024*1024)p.fail('Manuscript media checksum mismatch or exceeds 2 MiB');
   }
@@ -304,7 +311,7 @@ class RssdEditorial {
     const options=media==='referenced'?{referencedOnly:true}:{};
     const data=await this.data(ctx,workspaceId,row,revision,undefined,options);
     return {id:row.documentId||row.workId,articleId:row.articleId,workId:row.workId,locale:row.locale,
-      preservesEditorialFieldsOnSave:true,preservesLegacyOptionalBlanksOnSave:true,preservesStructuredDraftsOnSave:true,acceptsPrivateAppendOnSave:true,...(media==='referenced'?{boundedMediaReads:true}:{}),version:row.revision,revision,publishedVersion:row.publishedVersion,url:row.url,data,
+      preservesEditorialFieldsOnSave:true,preservesLegacyOptionalBlanksOnSave:true,preservesStructuredDraftsOnSave:true,acceptsPrivateAppendOnSave:true,reusesStoredMediaOnSave:true,...(media==='referenced'?{boundedMediaReads:true}:{}),version:row.revision,revision,publishedVersion:row.publishedVersion,url:row.url,data,
       ...(scope==='status'?{published:row.publishedVersion?await this.data(ctx,workspaceId,row,row.publishedVersion,undefined,options):null}:{})};
   }
   // Read small batches without exposing private archives. Resolve the complete identity map
@@ -329,7 +336,7 @@ class RssdEditorial {
         if(row.deletedAt)p.fail('This historical manuscript was deleted',410,'edition_deleted');
         const data=await this.data(ctx,workspaceId,row,row.revision,entries,media==='referenced'?{referencedOnly:true,batchBytes:Math.floor(budget*3/4)}:{});
         const detail={id:row.documentId||row.workId,articleId:row.articleId,workId:row.workId,locale:row.locale,
-          preservesEditorialFieldsOnSave:true,preservesLegacyOptionalBlanksOnSave:true,preservesStructuredDraftsOnSave:true,acceptsPrivateAppendOnSave:true,...(media==='referenced'?{boundedMediaReads:true}:{}),version:row.revision,revision:row.revision,publishedVersion:row.publishedVersion,url:row.url,data};
+          preservesEditorialFieldsOnSave:true,preservesLegacyOptionalBlanksOnSave:true,preservesStructuredDraftsOnSave:true,acceptsPrivateAppendOnSave:true,reusesStoredMediaOnSave:true,...(media==='referenced'?{boundedMediaReads:true}:{}),version:row.revision,revision:row.revision,publishedVersion:row.publishedVersion,url:row.url,data};
         item={articleId,ok:true,detail};
         const bytes=Buffer.byteLength(JSON.stringify(item));
         if(bytes>budget)item={articleId,ok:false,error:{code:'batch_response_limit',status:413,message:'Read this work individually'}};
@@ -411,7 +418,7 @@ class RssdEditorial {
   }
   async submit(ctx,workspaceId,input,{intent='publish'}={}){
     if(!['publish','draft'].includes(intent))p.fail('Invalid editorial submission intent');
-    const data=inputData(input,{allowOptionalBlanks:intent==='draft'});if(!/^[a-zA-Z0-9_-]{12,128}$/.test(input.requestKey||''))p.fail('Provide the original stable editorial request key');
+    const data=inputData(input,{allowOptionalBlanks:intent==='draft',allowStoredMedia:true});if(!/^[a-zA-Z0-9_-]{12,128}$/.test(input.requestKey||''))p.fail('Provide the original stable editorial request key');
     p.integer(input.expectedVersion,'expectedVersion',0);
     if(input.expectedPublishedVersion!==null)p.integer(input.expectedPublishedVersion,'expectedPublishedVersion',1);
     const fingerprint=p.hash({intent,data,expectedVersion:input.expectedVersion,expectedPublishedVersion:input.expectedPublishedVersion});
@@ -470,7 +477,18 @@ class RssdEditorial {
       // Legacy editor envelopes contain only some attachments and do not carry alt metadata.
       // Preserve the exact previous edition's attachments; omission is not a deletion instruction.
       const attachments=(previousEdition?.media||[]).map(item=>({...item}));let bodyMarkdown=data.markdown;
-      for(const asset of data.assets||[]){const bytes=Buffer.from(asset.data,'base64'),manifest=imageManifest(bytes);const upload=await media.upload(ctx,{workspaceId,name:asset.path,...manifest,data:asset.data});if(!attachments.some(item=>item.id===upload.id))attachments.push({id:upload.id,alt:''});bodyMarkdown=bodyMarkdown.replaceAll(asset.path,'/api/rssd/v1/media/'+upload.id+'/raw');}
+      const stored=new Map();
+      if(data.assets?.some(asset=>asset.data===undefined))for(const id of new Set([...attachments.map(item=>item.id),...p.referencedMediaIds(previousEdition?.bodyMarkdown||'')])){
+        const row=await media.row(ctx,id);if(row.workspaceId===workspaceId)stored.set(row.manifest.path,row.id);
+      }
+      for(const asset of data.assets||[]){
+        if(asset.data!==undefined)continue;
+        const id=stored.get(asset.path);
+        if(!id)p.fail('This image is not stored with the work; send its bytes',400,'stored_media_missing');
+        if(!attachments.some(item=>item.id===id))attachments.push({id,alt:''});
+        bodyMarkdown=bodyMarkdown.replaceAll(asset.path,'/api/rssd/v1/media/'+id+'/raw');
+      }
+      for(const asset of (data.assets||[]).filter(asset=>asset.data!==undefined)){const bytes=Buffer.from(asset.data,'base64'),manifest=imageManifest(bytes);const upload=await media.upload(ctx,{workspaceId,name:asset.path,...manifest,data:asset.data});if(!attachments.some(item=>item.id===upload.id))attachments.push({id:upload.id,alt:''});bodyMarkdown=bodyMarkdown.replaceAll(asset.path,'/api/rssd/v1/media/'+upload.id+'/raw');}
       let adaptedFrom=null;
       if(data.adaptedFrom){
         const original=await editorial.find(ctx,workspaceId,data.adaptedFrom.articleId,{locale:'zh-CN'});
