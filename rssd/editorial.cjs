@@ -588,7 +588,12 @@ class RssdEditorial {
       if(method==='GET'&&parts.length===1)result=await renditions.list(ctx,workspaceId,query);
       else if(method==='GET'&&parts.length===2&&id==='source')result=await renditions.source(this.store.db,ctx,workspaceId,query.workId,query.locale,Number(query.revision));
       else if(method==='GET'&&parts.length===2)result=await renditions.detail(ctx,workspaceId,id);
-      else if(method==='POST'&&parts.length===1)result=await renditions.save(ctx,workspaceId,input);
+      else if(method==='POST'&&parts.length===1){
+        result=await renditions.save(ctx,workspaceId,input);
+        // A picture card set for the live revision goes to the website without waiting for the next revision. The
+        // save stands even if queuing fails; the next website operation on the edition queues it again.
+        if(this.actions&&input.representation==='raster')await this.actions.followUpCards(ctx.orgId,{workspaceId,workId:input.workId,locale:input.locale},'rendition '+result.id);
+      }
       else p.fail('Unknown rendition operation',404,'not_found');
     }else if(method==='GET'&&parts.length===1&&first==='site'){
       const workspace=await this.workspace(ctx,workspaceId);

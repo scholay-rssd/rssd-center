@@ -477,7 +477,8 @@ class RssdStore {
       const result={requestId:value.requestId,workId:value.workId,workspaceId:value.workspaceId,status:(writePublications||storeOnlyDemand)?'accepted':'draft_saved',editions:[],publicationIds:[],...(storeOnlyDemand?{storeOnly:true,storeOnlyWorkerId:ctx.workerId}:{})};
       for(const edition of value.editions){
         if(writePublications&&demand?.payload?.writingDefaults)validateWritingDelivery(edition,demand.payload.writingDefaults);
-        const action=await one(db,`SELECT id FROM rssd_editorial_actions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND state IN ('queued','dispatching') LIMIT 1`,ctx.orgId,value.workId,edition.locale);
+        // A pending card update changes only the live revision's card set, so a draft may be saved beside it.
+        const action=await one(db,`SELECT id FROM rssd_editorial_actions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND state IN ('queued','dispatching') AND (action<>'cards' OR $4::boolean) LIMIT 1`,ctx.orgId,value.workId,edition.locale,writePublications);
         if(action)p.fail('A website visibility action is in progress; retain the local result until its receipt settles',409,'publication_pending');
         const visibility=await one(db,'SELECT visibility FROM rssd_editorial_states WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3',ctx.orgId,value.workId,edition.locale);
         if(visibility?.visibility==='deleted')p.fail('This edition was deleted; restore it explicitly before editing',409,'edition_deleted');

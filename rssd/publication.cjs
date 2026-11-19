@@ -11,6 +11,11 @@ const MAX_WORK_TAGS=10,MAX_TAG_LENGTH=40;
 // A receiver that understands work types, note links, work tags and card sets says so in its status; a sender
 // includes them only for such a receiver, because a receiver that drops a field returns a different packet hash.
 const WORK_TYPES_CAPABILITY='work-types-v1';
+// A receiver that accepts the `cards` operation says so in its status: a card set made after its revision went
+// live is sent with the live content unchanged instead of waiting for the next revision.
+const CARD_UPDATES_CAPABILITY='card-updates-v1';
+// The operations a packet may carry. `cards` replaces only the card set of the live revision.
+const OPERATIONS=['publish','withdraw','delete','restore','cards'],VISIBLE=['publish','restore','cards'];
 function route(value) {
   if(typeof value!=='string'||!/^\/(?:[A-Za-z0-9_\-\u0080-\uFFFF]+\/)+$/.test(value)||value.length>1000)p.fail('Invalid public article route');
   if(/^\/(?:manage|api|rssd-content|article-media|downloads|assets|fonts)\//.test(value))p.fail('Reserved public route');
@@ -49,8 +54,8 @@ function cardSet(input,revision,content){
 }
 function publication(input) {
   p.object(input,'publication');if(input.version!==1)p.fail('Unsupported publication version');
-  const operation=input.operation||'publish';if(!['publish','withdraw','delete','restore'].includes(operation))p.fail('Unsupported publication operation');
-  const visible=operation==='publish'||operation==='restore',content=visible?publicContent(input.content):null;
+  const operation=input.operation||'publish';if(!OPERATIONS.includes(operation))p.fail('Unsupported publication operation');
+  const visible=VISIBLE.includes(operation),content=visible?publicContent(input.content):null;
   const value={version:1,requestId:p.id(input.requestId),siteId:p.id(input.siteId),workspaceId:p.id(input.workspaceId),sectionId:p.id(input.sectionId),
     workId:p.id(input.workId),locale:p.locale(input.locale),revision:p.integer(input.revision,'revision',visible?1:0),
     contentHash:p.text(input.contentHash,'contentHash',64),...(visible?{content}:{}),route:route(input.route)};
@@ -60,11 +65,12 @@ function publication(input) {
   else if(input.operationSequence!==undefined)value.operationSequence=p.integer(input.operationSequence,'operationSequence',1);
   if(visible&&input.assets!==undefined){value.assets=p.array(input.assets,'public media',500).map(mediaManifest);if(new Set(value.assets.map(a=>a.sha256)).size!==value.assets.length)p.fail('Duplicate public media');}
   if(visible&&input.cards!==undefined)value.cards=cardSet(input.cards,value.revision,content);
+  if(operation==='cards'&&!value.cards)p.fail('A card update needs a card set');
   return value;
 }
 const operation=value=>value.operation||'publish';
-const visible=value=>['publish','restore'].includes(operation(value));
+const visible=value=>VISIBLE.includes(operation(value));
 const contentKey=value=>p.hash([value.workId,value.locale]);
 /** Every media file a packet places on the site: the article's own and its card set's. */
 const packetMedia=value=>[...(value.assets||[]),...(value.cards?[...value.cards.pages,...(value.cards.cover?[value.cards.cover]:[])]:[])];
-module.exports={publication,publicContent,contentKey,route,operation,visible,packetMedia,CHOSEN_WORK_TYPES,MAX_CARD_PAGES,MAX_WORK_TAGS,MAX_TAG_LENGTH,WORK_TYPES_CAPABILITY};
+module.exports={publication,publicContent,contentKey,route,operation,visible,packetMedia,CHOSEN_WORK_TYPES,MAX_CARD_PAGES,MAX_WORK_TAGS,MAX_TAG_LENGTH,WORK_TYPES_CAPABILITY,CARD_UPDATES_CAPABILITY};
