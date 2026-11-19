@@ -1493,6 +1493,11 @@ test('a write demand may state a work type, the article a note is rewritten from
  await assert.rejects(store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',title:'No such work',workType:'note',adaptedFrom:{workId:randomUUID(),revision:1}}),{code:'source_conflict'});
  await assert.rejects(store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',title:'Unknown type',workType:'video'}),/Invalid work type/);
  const claim=await store.claim(f.ctx,{demandId:note.id});assert.equal(claim.payload.workType,'note');assert.deepEqual(claim.payload.adaptedFrom,note.payload.adaptedFrom);
+ // The lead that prompted a topic is kept with the demand and reaches whoever claims it.
+ const led=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Led by a hot board',lead:{provider:'tikhub',platformId:'douyin',term:'trending term',observedAt:'2026-11-19T09:00:00+08:00'}});
+ assert.deepEqual(led.payload.lead,{provider:'tikhub',platformId:'douyin',term:'trending term',observedAt:'2026-11-19T01:00:00.000Z'});
+ assert.deepEqual((await store.demands(f.owner,{search:'Led by a hot board'}))[0].payload.lead,led.payload.lead);
+ await assert.rejects(store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Bad lead',lead:{provider:'tikhub',term:'x',observedAt:'soon'}}),/lead.observedAt/);
 });
 
 test('the demand pool narrows by section, states and work type, counts, and lists changes since an instant',async()=>{
