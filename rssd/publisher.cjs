@@ -178,6 +178,9 @@ class RssdPublisher {
   }finally{this.running=false;}}
 }
 function classifyDestinationError(error){
+  // A Center-side 5xx, such as a transaction that timed out before it could commit, is transient: the original
+  // request is queried before the retry, so a submission the destination already accepted is recovered, not resent.
+  if(error instanceof p.ProtocolError&&error.status>=500)return {blocked:false,code:error.code||'center_unavailable',message:error.message};
   if(error instanceof p.ProtocolError)return {blocked:true,code:error.code||'invalid_request',message:error.message};
   const status=error.status;
   if(status===401||status===403)return {blocked:true,code:'destination_auth',message:'Destination rejected the publication (HTTP '+status+')'};

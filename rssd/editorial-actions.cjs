@@ -277,7 +277,11 @@ class RssdEditorialActions {
  async tick({orgId=null}={}){
   if(this.running)return null;this.running=true;let row;
   try{row=await this.claim(orgId);if(!row)return null;return await this.dispatch(row);}
-  catch(error){if(!row)throw error;const blocked=error instanceof p.ProtocolError||[400,401,403,409,422].includes(error.status);return this.finish(row,{state:blocked?'blocked':'queued',error:blocked?String(error.message).slice(0,1000):'Receiver unavailable; the original action will be queried before retry',delay:30000});}
+  catch(error){
+   if(!row)throw error;
+   // A Center-side 5xx (a transaction timeout) is retried like an unreachable receiver: the next attempt queries the
+   // original request first, so an action the receiver already applied is recovered rather than sent again.
+   const blocked=error instanceof p.ProtocolError?error.status<500:[400,401,403,409,422].includes(error.status);return this.finish(row,{state:blocked?'blocked':'queued',error:blocked?String(error.message).slice(0,1000):'Center or receiver unavailable; the original action will be queried before retry',delay:30000});}
   finally{this.running=false;}
  }
 }
