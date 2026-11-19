@@ -100,11 +100,16 @@ class RssdPublisher {
     if(!capable){delete content.metadata.workType;delete content.metadata.adaptedFrom;delete content.metadata.tags;}
     return content;
   }
-  /** The newest raster card set saved for an edition revision. Layout sets are left out: a site shows pictures only. */
+  /**
+   * The raster card set a website shows for an edition revision. Layout sets are left out: a site shows pictures only.
+   * By method: model-drawn cards (ai-image) first, then 智能排版 (ai-code), then 算法排版 (algorithm), then any other;
+   * the newest of that method.
+   */
   async newestCardSet({orgId,workspaceId,workId,locale,revision},db=this.db){
     if(!this.media)return null;
     return one(db,`SELECT id FROM rssd_renditions WHERE "orgId"=$1 AND "workspaceId"=$2 AND "workId"=$3 AND locale=$4 AND revision=$5
-      AND summary->>'representation'='raster' ORDER BY "createdAt" DESC,id DESC LIMIT 1`,orgId,workspaceId,workId,locale,revision);
+      AND summary->>'representation'='raster'
+      ORDER BY CASE summary->>'variant' WHEN 'ai-image' THEN 0 WHEN 'ai-code' THEN 1 WHEN 'algorithm' THEN 2 ELSE 3 END,"createdAt" DESC,id DESC LIMIT 1`,orgId,workspaceId,workId,locale,revision);
   }
   /** A stored card set as a packet carries it, made from that revision, with the media the receiver needs. */
   async cardSet({orgId,workspaceId,workId,locale,revision},id){
