@@ -14,6 +14,16 @@ function scope(ctx, workspaceId) {
 function admin(ctx) { if (!ctx?.admin || !ctx.orgId) p.fail('Owner access required', 403, 'forbidden'); }
 function safeDemand(row) { if (!row) return null; const {claimToken, ...rest} = row; return rest; }
 const CLAIM_TTL_MS = 24 * 60 * 60 * 1000;
+const DEMAND_STATES = ['queued','claimed','blocked','completed','cancelled'];
+// One implementation decides whether a topic repeats: contracts/topic-repeat.mjs in the rssd repository,
+// copied here unchanged. It is an ES module, so it is loaded once on first use.
+let topicRepeat;
+const loadTopicRepeat = () => topicRepeat || (topicRepeat = import('./topic-repeat.mjs'));
+function allowRepeatAsserted(input) {
+  if (input == null || !Object.prototype.hasOwnProperty.call(input, 'allowRepeat')) return false;
+  if (typeof input.allowRepeat !== 'boolean') p.fail('allowRepeat must be a boolean', 400, 'invalid_request');
+  return input.allowRepeat;
+}
 function localeKey(list) { return [...list].sort().join(','); }
 function uniqueViolation(error) {
   return error?.code==='23505'||error?.code==='P2002'||error?.meta?.code==='23505'
@@ -154,13 +164,24 @@ class RssdStore {
       if(!ctx.workerId)p.fail('Store-only translate requires a device credential',403,'forbidden');
       if(value.kind!=='translate')p.fail('storeOnly is only valid on translate demands',400,'store_only_unsupported');
     }
-    await this.workspace(this.db,ctx,value.workspaceId,value.sectionId);
+    const allowRepeat=allowRepeatAsserted(input);
+    if(allowRepeat&&!ctx.admin)p.fail('Only the owner may queue a repeated topic',403,'forbidden');
+    const {section}=await this.workspace(this.db,ctx,value.workspaceId,value.sectionId);
     await this.writable(this.db,ctx,value.workspaceId);
     if(!value.source){
-      const result=await one(this.db,`INSERT INTO rssd_demands ("orgId",id,"workspaceId","sectionId",kind,title,priority,payload)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT ("orgId",id) DO NOTHING RETURNING *`,ctx.orgId,value.id,value.workspaceId,value.sectionId,value.kind,value.title,value.priority,encoded(value));
-      if(!result)p.fail('Demand identity already exists',409,'identity_conflict');
-      return {...safeDemand(result),status:'created'};
+      // The repeat check and the insert share one lock per section, so two devices cannot queue the same
+      // topic at once. An identity that already exists is reported as before, without a repeat check.
+      return this.transaction(async db=>{
+        await lock(db,'demand-topic:'+ctx.orgId+':'+value.workspaceId+':'+value.sectionId);
+        if(await one(db,'SELECT id FROM rssd_demands WHERE "orgId"=$1 AND id=$2',ctx.orgId,value.id))p.fail('Demand identity already exists',409,'identity_conflict');
+        if(value.adaptedFrom)await this.adaptedSource(db,ctx,value);
+        if(allowRepeat)await audit(db,ctx,'demand.allow-repeat',{id:value.id});
+        else await this.refuseRepeat(db,ctx,value,section);
+        const result=await one(db,`INSERT INTO rssd_demands ("orgId",id,"workspaceId","sectionId",kind,title,priority,payload)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb) ON CONFLICT ("orgId",id) DO NOTHING RETURNING *`,ctx.orgId,value.id,value.workspaceId,value.sectionId,value.kind,value.title,value.priority,encoded(value));
+        if(!result)p.fail('Demand identity already exists',409,'identity_conflict');
+        return {...safeDemand(result),status:'created'};
+      });
     }
     return this.transaction(async db=>{
       await lock(db,ctx.orgId+':work:'+value.source.workId);
@@ -231,13 +252,60 @@ class RssdStore {
     if(open.length)p.fail('An open translate task already exists for this work; wait for expiry, release or completion before rebinding',409,'open_translate_conflict');
     return null;
   }
-  async demands(ctx,{workspaceId,state,search='',limit=100,offset=0}={}) {
+  /**
+   * The article a note demand is to be rewritten from: a work of the same workspace that has that revision.
+   */
+  async adaptedSource(db,ctx,value) {
+    const work=await one(db,'SELECT "workspaceId" FROM rssd_works WHERE "orgId"=$1 AND id=$2',ctx.orgId,value.adaptedFrom.workId);
+    if(!work||work.workspaceId!==value.workspaceId)p.fail('The article this note is to be rewritten from is not in this workspace',409,'source_conflict');
+    const edition=await one(db,'SELECT 1 AS found FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND revision=$3 LIMIT 1',ctx.orgId,value.adaptedFrom.workId,value.adaptedFrom.revision);
+    if(!edition)p.fail('The source article has no such revision',409,'source_conflict');
+  }
+  /**
+   * The earlier work or open demand of the same section that a write demand repeats, or null. A note that is
+   * to be rewritten from an article shares its subject on purpose and is never a repeat. Goal placeholders
+   * carry the goal's title, not a topic, so they are not compared.
+   */
+  async repeatOf(db,ctx,value,section) {
+    if(value.kind!=='write'||value.adaptedFrom)return null;
+    const works=await rows(db,`SELECT DISTINCT ON (e."workId",e.locale) e."workId",e.payload->>'title' AS title FROM rssd_editions e
+      JOIN rssd_works w ON w."orgId"=e."orgId" AND w.id=e."workId"
+      WHERE w."orgId"=$1 AND w."workspaceId"=$2 AND w."sectionId"=$3 ORDER BY e."workId",e.locale,e.revision DESC`,ctx.orgId,value.workspaceId,value.sectionId);
+    const reserved=await rows(db,`SELECT id,title,payload->>'topicKey' AS "topicKey" FROM rssd_demands WHERE "orgId"=$1 AND "workspaceId"=$2 AND "sectionId"=$3
+      AND kind='write' AND state IN ('queued','claimed','blocked') AND id<>$4 AND NOT (payload ? 'goalId') AND NOT (payload ? 'adaptedFrom')`,ctx.orgId,value.workspaceId,value.sectionId,value.id);
+    const {findRepeat}=await loadTopicRepeat();
+    return findRepeat({title:value.title,topicKey:value.topicKey},{works,reserved},{prefixes:section?.name?[section.name]:[]});
+  }
+  async refuseRepeat(db,ctx,value,section) {
+    const repeat=await this.repeatOf(db,ctx,value,section);
+    if(repeat)p.fail('This topic repeats '+(repeat.kind==='work'?'the work ':'the open demand ')+repeat.id+(repeat.title?' ('+repeat.title.slice(0,120)+')':'')+': '+repeat.reason,409,'topic_repeat');
+  }
+  /**
+   * The demand pool. Returns the rows, as before; with `withTotal` it returns {items,total,limit,offset}.
+   * `states` (a list or comma-separated) and the single `state` narrow by state, `sectionId` by section and
+   * `workType` by the type a demand states. With `updatedSince` (an ISO instant) the rows changed after it
+   * come oldest change first, so a client can keep the last `updatedAt` it saw and ask again from there.
+   */
+  async demands(ctx,{workspaceId,sectionId,state,states,workType,updatedSince,withTotal,search='',limit=100,offset=0}={}) {
     if(workspaceId)scope(ctx,p.id(workspaceId));limit=pageNumber(limit,'limit',1,200);offset=pageNumber(offset,'offset',0,1000000);p.text(search,'search',500,true);
-    const found=await rows(this.db,`SELECT * FROM rssd_demands WHERE "orgId"=$1
-      AND ($2::text IS NULL OR "workspaceId"=$2) AND ($3::text IS NULL OR state=$3)
+    if(sectionId)p.id(sectionId,'sectionId');
+    const wanted=[...new Set([...(Array.isArray(states)?states:String(states||'').split(',')),state].map(x=>String(x||'').trim()).filter(Boolean))];
+    if(wanted.some(x=>!DEMAND_STATES.includes(x)))p.fail('Invalid demand state',400,'invalid_request');
+    if(workType&&!p.DEMAND_WORK_TYPES.includes(workType))p.fail('Invalid work type',400,'invalid_request');
+    let since=null;
+    if(updatedSince){const time=Date.parse(updatedSince);if(typeof updatedSince!=='string'||!Number.isFinite(time))p.fail('updatedSince must be an ISO instant',400,'invalid_request');since=new Date(time).toISOString();}
+    const where=`"orgId"=$1
+      AND ($2::text IS NULL OR "workspaceId"=$2) AND ($3::jsonb IS NULL OR state IN (SELECT jsonb_array_elements_text($3::jsonb)))
       AND ($4::jsonb IS NULL OR "workspaceId" IN (SELECT jsonb_array_elements_text($4::jsonb)))
-      AND ($5='' OR title ILIKE '%' || $5 || '%' OR payload->>'brief' ILIKE '%' || $5 || '%') ORDER BY priority DESC,"createdAt",id LIMIT $6 OFFSET $7`,ctx.orgId,workspaceId||null,state||null,ctx.workspaceIds===null?null:encoded(ctx.workspaceIds),search,limit,offset);
-    return found.map(safeDemand);
+      AND ($5='' OR title ILIKE '%' || $5 || '%' OR payload->>'brief' ILIKE '%' || $5 || '%')
+      AND ($6::text IS NULL OR "sectionId"=$6) AND ($7::text IS NULL OR payload->>'workType'=$7)
+      AND ($8::timestamptz IS NULL OR "updatedAt">$8::timestamptz)`;
+    const values=[ctx.orgId,workspaceId||null,wanted.length?encoded(wanted):null,ctx.workspaceIds===null?null:encoded(ctx.workspaceIds),search,sectionId||null,workType||null,since];
+    const found=await rows(this.db,`SELECT * FROM rssd_demands WHERE ${where} ORDER BY ${since?'"updatedAt",id':'priority DESC,"createdAt",id'} LIMIT $9 OFFSET $10`,...values,limit,offset);
+    const items=found.map(safeDemand);
+    if(!(withTotal===true||withTotal==='true'||withTotal==='1'))return items;
+    const total=(await one(this.db,`SELECT count(*)::int AS count FROM rssd_demands WHERE ${where}`,...values)).count;
+    return {items,total,limit,offset};
   }
   async claim(ctx,input={}) {
     if(!ctx.workerId)p.fail('Device authentication required',403);
@@ -305,7 +373,12 @@ class RssdStore {
     return this.transaction(async db=>{
       const demand=await one(db,'SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2 FOR UPDATE',ctx.orgId,id);
       if(!demand)p.fail('Demand not found',404);scope(ctx,demand.workspaceId);
-      if(!ctx.admin && (demand.workerId!==ctx.workerId || demand.claimToken!==input.claimToken))p.fail('Claim no longer belongs to this device',409,'claim_revoked');
+      // A device may withdraw a demand nobody has claimed in a workspace it is authorized for, as it may
+      // create and edit one. A store-only translate stays with the device that created it.
+      const withdraw=input.action==='cancel'&&demand.state==='queued'&&!demand.workerId&&Boolean(ctx.workerId)
+        &&(demand.payload?.storeOnly!==true||demand.payload.storeOnlyWorkerId===ctx.workerId);
+      if(!ctx.admin && !withdraw && (demand.workerId!==ctx.workerId || demand.claimToken!==input.claimToken))p.fail('Claim no longer belongs to this device',409,'claim_revoked');
+      if(withdraw)await this.writable(db,ctx,demand.workspaceId);
       if(['completed','cancelled'].includes(demand.state))p.fail('Demand is already closed',409);
       const clear=['release','cancel'].includes(input.action),state={release:'queued',cancel:'cancelled',blocked:'blocked',resume:'claimed'}[input.action];
       if(!clear&&!demand.workerId)p.fail('Demand is not claimed',409);

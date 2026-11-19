@@ -19,7 +19,7 @@ copyFileSync(join(__dirname,'device-auth.cjs'),join(target,'device-auth.cjs'));
 for(const file of ['protocol.cjs','protocol.source.json','rssd-v1.cjs','rssd-media.cjs','rssd-record.cjs','publication.cjs','store.cjs','coordination.cjs','mcp.cjs','publisher.cjs','discourse.cjs','postiz.cjs','owner-context.cjs','media.cjs','migration.cjs','migration-cli.cjs','health.cjs','guestbook.cjs','guestbook-cli.cjs','schema.sql','existing-site-publish.cjs'])copyFileSync(join(__dirname,file),join(target,file));
 copyFileSync(join(__dirname,'labels.cjs'),join(target,'labels.cjs'));
 copyDirectory(join(__dirname,'legacy-labels'),join(target,'legacy-labels'));
-for(const file of ['community.cjs','community-engine.mjs'])copyFileSync(join(__dirname,file),join(target,file));
+for(const file of ['community.cjs','community-engine.mjs','topic-repeat.mjs'])copyFileSync(join(__dirname,file),join(target,file));
 copyFileSync(join(__dirname,'editorial.cjs'),join(target,'editorial.cjs'));
 copyFileSync(join(__dirname,'renditions.cjs'),join(target,'renditions.cjs'));
 copyFileSync(join(__dirname,'editorial-actions.cjs'),join(target,'editorial-actions.cjs'));
