@@ -11,7 +11,7 @@ const {record,recordFields}=require('./rssd-record.cjs');
 const {StagedDrafts}=require('./staged-drafts.cjs');
 const {RssdRenditions}=require('./renditions.cjs');
 const {prepareStructuredDraft}=require('./structured-draft.cjs');
-const {CHOSEN_WORK_TYPES,WORK_TYPES_CAPABILITY}=require('./publication.cjs');
+const {CHOSEN_WORK_TYPES}=require('./publication.cjs');
 const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args);
 const x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
 const digest=value=>createHash('sha256').update(value).digest('hex');
@@ -81,6 +81,7 @@ function inputData(input,{allowOptionalBlanks=false}={}){
   if(data.adaptedFrom!=null){
     if(data.workType!=='note')p.fail('Only a note can be rewritten from an article');
     p.object(data.adaptedFrom,'adaptedFrom');
+    if(Object.keys(data.adaptedFrom).some(key=>!['articleId','revision'].includes(key)))p.fail('adaptedFrom names an article and the revision it was written from');
     if(!/^[a-z0-9][a-z0-9-]{2,99}$/.test(data.adaptedFrom.articleId||'')||data.adaptedFrom.articleId===data.id)p.fail('Invalid source article for the note');
     p.integer(data.adaptedFrom.revision,'adaptedFrom revision',1);
   }
@@ -427,6 +428,7 @@ class RssdEditorial {
       if(!current&&!source&&await editorial.find(ctx,workspaceId,data.id,{locale:locale==='en'?'zh-CN':'en'}))p.fail('Manuscript identity belongs to another language',409,'identity_conflict');
       if((current?.revision||0)!==input.expectedVersion||(current?.publishedVersion??null)!==input.expectedPublishedVersion)p.fail('Center content or published state changed; preserve local edits and reload',409,'revision_conflict');
       const structuredDraft=Boolean(current&&current.kind!=='news'&&intent==='draft');
+      if(data.workType!=null&&current&&current.kind!=='news')p.fail('A structured record keeps the type of its record kind');
       if(current&&(current.sectionId!==data.sectionId||current.locale!==locale||(!structuredDraft&&current.kind!==(data.record?.kind||'news'))))p.fail('Manuscript identity or section changed',409,'identity_conflict');
       const pending=(await q(db,`SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND "destinationId"=$4 AND state IN ('queued','dispatching') LIMIT 1`,ctx.orgId,workId,locale,'site-'+workspace.siteId))[0];
       if(pending)p.fail('Query the current website publication before submitting another revision',409,'publication_pending');
@@ -467,7 +469,7 @@ class RssdEditorial {
         const original=await editorial.find(ctx,workspaceId,data.adaptedFrom.articleId,{locale:'zh-CN'});
         if(!original||original.workId===workId)p.fail('The article this note was rewritten from is not in this workspace',409,'source_conflict');
         if(data.adaptedFrom.revision>original.revision)p.fail('The source article has no such revision',409,'source_conflict');
-        if((await nested.edition(ctx,original.workId,'zh-CN',original.revision)).payload.metadata?.workType==='note')p.fail('A note can only be rewritten from a long article',409,'source_conflict');
+        if(original.kind!=='news'||original.metadata?.workType==='note')p.fail('A note can only be rewritten from a long article',409,'source_conflict');
         adaptedFrom={workId:original.workId,revision:data.adaptedFrom.revision};
       }
       const route=current?.url||(locale==='en'?(source?'/en/news/'+source.articleId+'/':'/en/news/'+data.id+'/'):'/news/'+data.id+'/');
@@ -582,7 +584,7 @@ class RssdEditorial {
       else p.fail('Unknown rendition operation',404,'not_found');
     }else if(method==='GET'&&parts.length===1&&first==='site'){
       const workspace=await this.workspace(ctx,workspaceId);
-      result={protocol:'scholay-content',version:1,siteId:workspace.siteId,spaceId:workspace.id,origin:workspace.origin,capabilities:['language-editions-v1','rssd-center-v1','staged-drafts-v1','bounded-media-v1','card-renditions-v1',WORK_TYPES_CAPABILITY]};
+      result={protocol:'scholay-content',version:1,siteId:workspace.siteId,spaceId:workspace.id,origin:workspace.origin,capabilities:['language-editions-v1','rssd-center-v1','staged-drafts-v1','bounded-media-v1','card-renditions-v1','work-types-v1']};
     }else if(first==='staged-drafts'){
       const drafts=new StagedDrafts(this,inputData);
       if(method==='GET'&&parts.length===1)result=await drafts.list(ctx,workspaceId,query);

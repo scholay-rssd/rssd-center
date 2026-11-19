@@ -63,7 +63,7 @@ class StagedDrafts {
   p.object(input,'staged draft');p.id(input.articleId);p.locale(input.locale);p.integer(input.baseRevision,'baseRevision',1);p.integer(input.overlayRevision,'overlayRevision',0,2147483646);
   const inputKeys=new Set(['requestKey','articleId','workId','locale','baseRevision','baseHash','basePublishedVersion','overlayRevision','data']);
   if(input.workId!==undefined)p.id(input.workId,'workId');
-  // workType and adaptedFrom: a work's type and the article a note was rewritten from (checked by inputData).
+  // workType and adaptedFrom may be sent back as read; a staged draft refuses a change to them.
   const dataKeys=new Set(['id','title','summary','markdown','author','date','category','sectionId','locale','assets','translationOf','workType','adaptedFrom']);
   if(Object.keys(input).some(k=>!inputKeys.has(k))||!input.data||typeof input.data!=='object'||Array.isArray(input.data)||Object.keys(input.data).some(k=>!dataKeys.has(k)))p.fail('Unknown staged draft field');
   if(Buffer.byteLength(JSON.stringify(input))>4*1024*1024)p.fail('Staged draft request exceeds 4 MiB',413,'payload_too_large');
@@ -99,6 +99,8 @@ class StagedDrafts {
    if((previous?.overlayRevision||0)!==input.overlayRevision)p.fail('The staged draft changed; preserve local edits',409,'revision_conflict');
    const original=await nested.data(ctx,workspace,base.row,base.revision,undefined,{referencedOnly:true});
    if(data.translationOf!==undefined&&p.hash(data.translationOf||null)!==p.hash(original.translationOf||null))p.fail('Translation source cannot be changed during migration',409,'source_conflict');
+   // A staged draft keeps its edition's work type and source article; a canonical draft save changes them.
+   for(const key of ['workType','adaptedFrom'])if(data[key]!==undefined&&p.hash(data[key]??null)!==p.hash(original[key]??null))p.fail('A staged draft keeps the work type and source article of its edition',409,'identity_conflict');
    for(const key of ['summary','author','category']){
     const prior=previous?.data?.[key]??original[key];
     if(!data[key].trim()&&typeof prior==='string'&&prior.trim())p.fail('Only an existing empty '+key+' can remain empty in a private draft');
@@ -135,6 +137,7 @@ class StagedDrafts {
    }
    const payload={id:data.id,title:data.title,summary:data.summary,markdown:data.markdown,author:data.author,date:data.date,category:data.category,sectionId:data.sectionId,
     ...(data.locale?{locale:data.locale}:{}),...(original.translationOf?{translationOf:original.translationOf}:{}),
+    ...(original.workType?{workType:original.workType}:{}),...(original.adaptedFrom?{adaptedFrom:original.adaptedFrom}:{}),
     ...(structured?{record:{...original.record,fields:{...original.record.fields,...structured.sections,title:data.title}}}:{}),assets:[...assets.values()]};
    const revision=input.overlayRevision+1;
    const receipt={articleId:input.articleId,workId:base.row.workId,locale:input.locale,baseRevision:base.revision,baseHash:base.hash,basePublishedVersion:base.publishedVersion,overlayRevision:revision,status:'draft_saved',requestKey:input.requestKey};

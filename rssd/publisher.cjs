@@ -83,31 +83,45 @@ class RssdPublisher {
     const reader=response.body.getReader();let size=0;const chunks=[];try{for(;;){const r=await reader.read();if(r.done)break;size+=r.value.length;if(size>8*1024*1024)throw Error('Destination response is too large');chunks.push(r.value);}}finally{await reader.cancel();}
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   }
-  /** Whether the site's receiver says it understands work types, note links and card sets. A receiver without a
-   * status endpoint does not; any other failure is retried like the submission itself. */
+  /** Whether the site's receiver says it understands work types, note links and card sets. A receiver from before
+   * its status endpoint answers 404, or 401 because its credential check runs first; either way it does not, and
+   * a real credential problem still stops the submission itself. Any other failure is retried. */
   async receiverCapable(config,token){
-    let status;try{status=await this.request(origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/status',{token});}catch(error){if(error.status===404)return false;throw error;}
+    let status;try{status=await this.request(origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/status',{token});}catch(error){if([401,404].includes(error.status))return false;throw error;}
     return Array.isArray(status?.capabilities)&&status.capabilities.includes(WORK_TYPES_CAPABILITY);
   }
-  /**
-   * The card set published with an article edition: the newest raster set made from this exact revision and
-   * saved before the publication was requested, so a retried dispatch builds the same packet. Layout sets are
-   * left out: a site shows pictures only. None when no such set exists or media storage is unavailable.
-   */
-  async cardSet(row){
+  /** Public content as a receiver can take it. One that does not understand work types would drop them and return
+   * a different packet hash, so it gets the content it always had. */
+  receiverContent(content,capable){
+    if(!capable){delete content.metadata.workType;delete content.metadata.adaptedFrom;}
+    return content;
+  }
+  /** The newest raster card set saved for an edition revision. Layout sets are left out: a site shows pictures only. */
+  async newestCardSet({orgId,workspaceId,workId,locale,revision}){
     if(!this.media)return null;
-    const set=await one(this.db,`SELECT payload FROM rssd_renditions WHERE "orgId"=$1 AND "workspaceId"=$2 AND "workId"=$3 AND locale=$4 AND revision=$5
-      AND payload->>'representation'='raster' AND "createdAt"<=$6 ORDER BY "createdAt" DESC,id DESC LIMIT 1`,row.orgId,row.workspaceId,row.workId,row.locale,row.revision,row.createdAt);
-    if(!set)return null;
-    const ctx={orgId:row.orgId,admin:true,workspaceIds:null},uploads=[];
-    const manifest=async id=>{
-      const media=await this.media.row(ctx,id);if(media.workspaceId!==row.workspaceId)p.fail('Card media belongs to a different workspace',403);
+    return one(this.db,`SELECT id FROM rssd_renditions WHERE "orgId"=$1 AND "workspaceId"=$2 AND "workId"=$3 AND locale=$4 AND revision=$5
+      AND summary->>'representation'='raster' ORDER BY "createdAt" DESC,id DESC LIMIT 1`,orgId,workspaceId,workId,locale,revision);
+  }
+  /** A stored card set as a packet carries it, made from that revision, with the media the receiver needs. */
+  async cardSet({orgId,workspaceId,workId,locale,revision},id){
+    const set=await one(this.db,'SELECT payload FROM rssd_renditions WHERE "orgId"=$1 AND "workspaceId"=$2 AND id=$3 AND "workId"=$4 AND locale=$5 AND revision=$6',orgId,workspaceId,id,workId,locale,revision);
+    if(!set||set.payload.representation!=='raster'||!this.media)p.fail('The card set chosen for this publication is unavailable',409,'missing_media');
+    const ctx={orgId,admin:true,workspaceIds:null},uploads=[];
+    const manifest=async mediaId=>{
+      const media=await this.media.row(ctx,mediaId);if(media.workspaceId!==workspaceId)p.fail('Card media belongs to a different workspace',403);
       if(!uploads.some(upload=>upload.manifest.sha256===media.manifest.sha256))uploads.push({manifest:media.manifest,id:media.id});
       return media.manifest;
     };
     const pages=[];for(const page of set.payload.pages)pages.push({...await manifest(page.mediaId),width:set.payload.width,height:set.payload.height});
     const cover=set.payload.coverMediaId?await manifest(set.payload.coverMediaId):null;
-    return {cards:{revision:row.revision,pages,...(cover?{cover}:{})},uploads};
+    return {cards:{revision,pages,...(cover?{cover}:{})},uploads};
+  }
+  /** Keeps a decision about the packet with the publication, under this attempt's lease, so every retry builds the
+   * same packet. The receipt cannot hold it: each attempt's outcome replaces the receipt. */
+  async freeze(row,value){
+    const changed=await execute(this.db,'UPDATE rssd_publications SET payload=payload || $4::jsonb WHERE "orgId"=$1 AND id=$2 AND "leaseToken"=$3',row.orgId,row.id,row.leaseToken,json(value));
+    if(!changed)p.fail('Publication lease changed; reconcile before continuing',409,'lease_revoked');
+    row.payload={...row.payload,...value};
   }
   async dispatch(row){
     const destination=await one(this.db,'SELECT * FROM rssd_destinations WHERE "orgId"=$1 AND id=$2',row.orgId,row.destinationId);
@@ -123,18 +137,24 @@ class RssdPublisher {
     if((row.payload.edition.media?.length||/\/api\/rssd\/v1\/media\//.test(row.payload.edition.bodyMarkdown||''))&&!this.media)p.fail('Media storage is unavailable',400,'missing_media');
     const prepared=this.media?await this.media.publication(row.orgId,row.workspaceId,row.payload.edition):{edition:row.payload.edition,assets:[],uploads:[]};
     const content=publicContent(prepared.edition);if(!content.metadata.date)content.metadata.date=new Date(row.createdAt).toISOString().slice(0,10);
-    // A receiver that does not advertise work types gets the packet it always had: it would drop the new
-    // fields and return a different packet hash.
-    const capable=await this.receiverCapable(config,token);
-    if(!capable){delete content.metadata.workType;delete content.metadata.adaptedFrom;}
-    const cards=capable&&content.metadata.workType!=='note'?await this.cardSet(row):null;
+    const base=origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/submissions';
+    // What the receiver can take, and which card set goes with an article's revision, are decided before the first
+    // submission and kept with the publication, so every retry builds the same packet. A submission the receiver
+    // already holds without that decision was sent by an earlier Center, which sent neither.
+    if(!row.payload.sitePacket){
+      let sent=true;try{await this.request(base+'/'+row.id,{token});}catch(error){if(error.status!==404)throw error;sent=false;}
+      const workTypes=!sent&&await this.receiverCapable(config,token);
+      const set=workTypes&&content.metadata.workType!=='note'?await this.newestCardSet(row):null;
+      await this.freeze(row,{sitePacket:{workTypes,cardSetId:set?.id||null}});
+    }
+    this.receiverContent(content,row.payload.sitePacket.workTypes);
+    const cards=row.payload.sitePacket.cardSetId?await this.cardSet(row,row.payload.sitePacket.cardSetId):null;
     const packet=publication({version:1,requestId:row.id,siteId:config.siteId,workspaceId:row.workspaceId,sectionId:row.payload.sectionId,workId:row.workId,locale:row.locale,revision:row.revision,contentHash:row.payload.hash,content,route:path,...(prepared.assets.length?{assets:prepared.assets}:{}),...(cards?{cards:cards.cards}:{})});
     for(const upload of [...prepared.uploads,...(cards?.uploads||[])]){
       const url=origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/media/'+upload.manifest.sha256;
       let stored;try{stored=await this.request(url,{token});}catch(error){if(error.status!==404)throw error;const {bytes}=await this.media.bytes({orgId:row.orgId,admin:true,workspaceIds:null},upload.id);stored=await this.request(url,{token,method:'POST',body:{...upload.manifest,data:bytes.toString('base64')}});}
       if(p.hash(stored)!==p.hash(upload.manifest))p.fail('Site media receipt mismatch',409,'media_conflict');
     }
-    const base=origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/submissions';
     let receipt;try{receipt=await this.request(base+'/'+row.id,{token});}catch(error){if(error.status!==404)throw error;receipt=await this.request(base,{token,method:'POST',body:packet});}
     if(receipt.state==='failed'&&row.receipt.manualRetry)receipt=await this.request(base+'/'+row.id+'/retry',{token,method:'POST',body:{}});
     if(receipt.requestId!==row.id||receipt.siteId!==config.siteId||receipt.workId!==row.workId||receipt.locale!==row.locale||receipt.revision!==row.revision||receipt.contentHash!==row.payload.hash||receipt.packetHash!==p.hash(packet))return this.finish(row,{state:'blocked',error:'Destination receipt does not match the submitted edition'});
