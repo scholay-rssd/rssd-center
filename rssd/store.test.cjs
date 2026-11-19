@@ -1481,3 +1481,106 @@ test('mixed queues claim ordinary and store-only in parallel without stealing a 
 });
 
 
+
+test('a write demand may state a work type, the article a note is rewritten from and a topic key',async()=>{
+ const f=await fixture();
+ await store.submit(f.ctx,f.packet,{publish:false});
+ const plain=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',title:'Plain demand'});
+ assert.deepEqual(['workType','adaptedFrom','topicKey'].filter(key=>key in plain.payload),[]);
+ const note=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',title:'Note of the original',workType:'note',adaptedFrom:{workId:f.packet.workId,revision:1},topicKey:'original'});
+ assert.equal(note.payload.workType,'note');assert.deepEqual(note.payload.adaptedFrom,{workId:f.packet.workId,revision:1});assert.equal(note.payload.topicKey,'original');
+ await assert.rejects(store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',title:'No such revision',workType:'note',adaptedFrom:{workId:f.packet.workId,revision:2}}),{code:'source_conflict'});
+ await assert.rejects(store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',title:'No such work',workType:'note',adaptedFrom:{workId:randomUUID(),revision:1}}),{code:'source_conflict'});
+ await assert.rejects(store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',title:'Unknown type',workType:'video'}),/Invalid work type/);
+ const claim=await store.claim(f.ctx,{demandId:note.id});assert.equal(claim.payload.workType,'note');assert.deepEqual(claim.payload.adaptedFrom,note.payload.adaptedFrom);
+});
+
+test('the demand pool narrows by section, states and work type, counts, and lists changes since an instant',async()=>{
+ const f=await fixture();
+ await store.saveWorkspace(f.owner,{id:'research',name:'Research',sections:[{id:'methods',name:'Methods',policy:{version:1,targets:[]}},{id:'notes',name:'Notes',policy:{version:1,targets:[]}}]},1);
+ const make=(title,extra={})=>store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title,...extra});
+ const a=await make('Alpha survey'),b=await make('Beta trial',{workType:'note'}),c=await make('Gamma audit',{workType:'article'});
+ const d=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'notes',title:'Delta memo',workType:'note'});
+ await store.changeDemand(f.owner,c.id,{action:'cancel'});
+ const ids=list=>list.map(row=>row.id).sort(),sorted=(...rows)=>rows.map(row=>row.id).sort();
+ assert.ok(Array.isArray(await store.demands(f.owner,{workspaceId:'research'})));
+ assert.deepEqual(ids(await store.demands(f.owner,{sectionId:'methods'})),sorted(a,b,c));
+ assert.deepEqual(ids(await store.demands(f.owner,{workType:'note'})),sorted(b,d));
+ assert.deepEqual(ids(await store.demands(f.owner,{states:'queued,cancelled',sectionId:'methods'})),sorted(a,b,c));
+ assert.deepEqual(ids(await store.demands(f.owner,{states:['cancelled']})),sorted(c));
+ assert.deepEqual(ids(await store.demands(f.owner,{state:'queued',sectionId:'notes'})),sorted(d));
+ const page=await store.demands(f.owner,{states:'queued',withTotal:'true',limit:'2',offset:'0'});
+ assert.equal(page.total,3);assert.equal(page.items.length,2);assert.equal(page.limit,2);assert.equal(page.offset,0);
+ assert.ok(page.items.every(row=>!('claimToken' in row)));
+ await assert.rejects(store.demands(f.owner,{states:'queued,unknown'}),{code:'invalid_request'});
+ await assert.rejects(store.demands(f.owner,{workType:'video'}),{code:'invalid_request'});
+ await assert.rejects(store.demands(f.owner,{updatedSince:'yesterday'}),{code:'invalid_request'});
+ // Changes since an instant come oldest change first: the cancellation of c is the newest change.
+ const mark=(await db.$queryRawUnsafe('SELECT max("updatedAt") AS at FROM rssd_demands WHERE "orgId"=$1',f.owner.orgId))[0].at.toISOString();
+ assert.deepEqual(await store.demands(f.owner,{updatedSince:mark}),[]);
+ await new Promise(resolve=>setTimeout(resolve,5));
+ const claim=await store.claim(f.ctx,{demandId:a.id});
+ await new Promise(resolve=>setTimeout(resolve,5));
+ await store.changeDemand(f.owner,b.id,{action:'cancel'});
+ const changed=await store.demands(f.owner,{updatedSince:mark});
+ assert.deepEqual(changed.map(row=>[row.id,row.state]),[[a.id,'claimed'],[b.id,'cancelled']]);
+ assert.equal(claim.id,a.id);
+ // A device sees only its own workspaces.
+ await store.saveWorkspace(f.owner,{id:'other',name:'Other',sections:[{id:'methods',name:'Methods',policy:{version:1,targets:[]}}]});
+ await store.createDemand(f.owner,{workspaceId:'other',sectionId:'methods',title:'Elsewhere'});
+ assert.equal((await store.demands(f.ctx,{withTotal:true})).total,4);
+ assert.equal((await store.demands(f.owner,{withTotal:true})).total,5);
+});
+
+test('a write demand that repeats a work or an open demand of its section is refused; a rewritten note is not',async()=>{
+ const f=await fixture(),zh=title=>({locale:'zh-CN',title,bodyMarkdown:'正文。'});
+ await store.saveWorkspace(f.owner,{id:'research',name:'Research',sections:[{id:'methods',name:'每日一猫',policy:{version:1,targets:[]}},{id:'notes',name:'Notes',policy:{version:1,targets:[]}}]},1);
+ const workId=randomUUID();
+ await store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',editions:[zh('缅因猫：起源、特征与饲养要点')]},{publish:false});
+ const make=(ctx,title,extra={})=>store.createDemand(ctx,{workspaceId:'research',sectionId:'methods',title,...extra});
+ // Same subject as a work, however the rest of the title reads, and with the section's own name in front.
+ await assert.rejects(make(f.ctx,'缅因猫的来历与性格'),error=>error.code==='topic_repeat'&&error.status===409&&error.message.includes(workId)&&/same-subject/.test(error.message));
+ await assert.rejects(make(f.ctx,'每日一猫｜缅因猫：温柔的巨人'),{code:'topic_repeat'});
+ // A different subject with the same title template is a different topic.
+ const burmese=await make(f.ctx,'缅甸猫：起源、特征与饲养要点',{topicKey:'burmese-cat'});assert.equal(burmese.status,'created');
+ // The open demand now reserves its subject and its topic key.
+ await assert.rejects(make(f.ctx,'缅甸猫：性格与日常照护'),error=>error.code==='topic_repeat'&&error.message.includes(burmese.id));
+ await assert.rejects(make(f.ctx,'一种来自东南亚的短毛猫',{topicKey:'Burmese Cat'}),error=>error.code==='topic_repeat'&&/same-topic-key/.test(error.message));
+ // Another section is another column.
+ assert.equal((await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'notes',title:'缅因猫：起源、特征与饲养要点'})).status,'created');
+ // A note rewritten from the article shares its subject on purpose, and does not reserve it either.
+ const note=await make(f.ctx,'缅因猫：三张图看懂大猫',{workType:'note',adaptedFrom:{workId,revision:1}});assert.equal(note.status,'created');
+ // A repeated identity is reported as an identity conflict, as before.
+ await assert.rejects(make(f.ctx,'缅甸猫：起源、特征与饲养要点',{id:burmese.id}),{code:'identity_conflict'});
+ // Only the owner may queue a repeat on purpose, and it is audited.
+ await assert.rejects(make(f.ctx,'缅因猫再谈',{allowRepeat:true}),{code:'forbidden'});
+ await assert.rejects(make(f.owner,'缅因猫再谈',{allowRepeat:'yes'}),{code:'invalid_request'});
+ const again=await make(f.owner,'缅因猫再谈',{allowRepeat:true});assert.equal(again.status,'created');assert.equal('allowRepeat' in again.payload,false);
+ assert.equal((await db.$queryRawUnsafe(`SELECT count(*)::int AS n FROM rssd_audit WHERE "orgId"=$1 AND action='demand.allow-repeat'`,f.owner.orgId))[0].n,1);
+ // A withdrawn demand frees its subject.
+ await store.changeDemand(f.owner,burmese.id,{action:'cancel'});
+ assert.equal((await make(f.ctx,'缅甸猫：性格与日常照护')).status,'created');
+ // Two devices queueing the same new subject at once: exactly one is accepted.
+ const results=await Promise.allSettled([make(f.ctx,'布偶猫：性格与照护'),make(f.owner,'布偶猫的由来')]);
+ assert.deepEqual(results.map(r=>r.status).sort(),['fulfilled','rejected']);assert.equal(results.find(r=>r.status==='rejected').reason.code,'topic_repeat');
+});
+
+test('a device may withdraw an unclaimed demand of its workspace, and nothing more',async()=>{
+ const f=await fixture(),other=await store.createWorker(f.owner,{name:'Second device',workspaceIds:['research']}),otherCtx=await store.authenticate(other.token);
+ const queued=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Withdraw me'});
+ const gone=await store.changeDemand(f.ctx,queued.id,{action:'cancel'});assert.equal(gone.state,'cancelled');assert.equal(gone.workerId,null);
+ await assert.rejects(store.changeDemand(f.ctx,queued.id,{action:'cancel'}),{code:'claim_revoked'});await assert.rejects(store.changeDemand(f.owner,queued.id,{action:'cancel'}),/already closed/);
+ assert.equal((await db.$queryRawUnsafe(`SELECT actor FROM rssd_audit WHERE "orgId"=$1 AND action='demand.cancel'`,f.owner.orgId)).length,1);
+ // A demand another device has claimed stays with that device; only its own claim or the owner ends it.
+ const held=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Held elsewhere'});
+ const claim=await store.claim(otherCtx,{demandId:held.id});
+ await assert.rejects(store.changeDemand(f.ctx,held.id,{action:'cancel'}),{code:'claim_revoked'});
+ assert.equal((await store.changeDemand(otherCtx,held.id,{action:'cancel',claimToken:claim.claimToken})).state,'cancelled');
+ // Withdrawing is not releasing: an unclaimed demand cannot be released or blocked by a device.
+ const idle=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Idle demand'});
+ await assert.rejects(store.changeDemand(f.ctx,idle.id,{action:'release'}),{code:'claim_revoked'});
+ // Another workspace is out of reach.
+ await store.saveWorkspace(f.owner,{id:'other',name:'Other',sections:[{id:'methods',name:'Methods',policy:{version:1,targets:[]}}]});
+ const far=await store.createDemand(f.owner,{workspaceId:'other',sectionId:'methods',title:'Far away'});
+ await assert.rejects(store.changeDemand(f.ctx,far.id,{action:'cancel'}),{code:'forbidden'});
+});

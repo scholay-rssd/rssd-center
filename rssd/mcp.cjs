@@ -14,7 +14,7 @@ class RssdMcp {
  definitions(ctx){
   const reads={
    rssd_overview:['Read workspace goals, real progress and capabilities',schema({workspaceIds:string}),(a)=>this.coordination.overview(ctx,a)],
-   rssd_demands:['Read the demand pool; preserve generation when editing',schema({workspaceId:string,state:string,search:string,limit:number,offset:number}),(a)=>this.store.demands(ctx,a)],
+   rssd_demands:['Read the demand pool; preserve generation when editing. states is a comma-separated list; updatedSince returns rows changed after that instant, oldest change first; withTotal returns {items,total,limit,offset}',schema({workspaceId:string,sectionId:string,state:string,states:string,workType:string,updatedSince:string,withTotal:{type:'boolean'},search:string,limit:number,offset:number}),(a)=>this.store.demands(ctx,a)],
    rssd_works:['Search accepted works without counting language editions twice',schema({workspaceId:string,search:string,limit:number,offset:number}),(a)=>this.store.works(ctx,a)],
    rssd_work:['Read original work and language revisions',schema({workId:string},['workId']),(a)=>this.store.work(ctx,a.workId)],
    rssd_calendar:['Read original Postiz posts and RSSD publications; source identities are retained',schema({workspaceIds:string,from:string,to:string,limit:number,offset:number}),(a)=>this.coordination.calendar(ctx,a)],
@@ -25,7 +25,7 @@ class RssdMcp {
   };
   const writes={
    rssd_edit_demand:['Edit a queued demand using its generation and a stable requestId; claimed rules are frozen',schema({id:string,baseGeneration:number,requestId:string,changes:object},['id','baseGeneration','requestId','changes']),(a)=>this.coordination.editDemand(ctx,a.id,a)],
-   rssd_create_demand:['Create one queued demand; translation of an existing work binds the source revision and hash, skips locales that already exist, and reuses an open task. storeOnly=true freezes a center-only English continuation that cannot be claimed or published by default consumers',schema({workspaceId:string,sectionId:string,kind:string,title:string,brief:string,requiredLocales:{type:'array',items:string},source:object,priority:number,id:string,storeOnly:{type:'boolean'}},['workspaceId','sectionId','title']),(a)=>this.store.createDemand(ctx,a)],
+   rssd_create_demand:['Create one queued demand; a write demand that repeats a work or open demand of its section is refused with topic_repeat, and may state workType (article or note), adaptedFrom {workId,revision} for a note rewritten from an article, and topicKey; translation of an existing work binds the source revision and hash, skips locales that already exist, and reuses an open task. storeOnly=true freezes a center-only English continuation that cannot be claimed or published by default consumers',schema({workspaceId:string,sectionId:string,kind:string,title:string,brief:string,requiredLocales:{type:'array',items:string},source:object,priority:number,id:string,storeOnly:{type:'boolean'},workType:string,adaptedFrom:object,topicKey:string},['workspaceId','sectionId','title']),(a)=>this.store.createDemand(ctx,a)],
   };
   if(ctx.admin){
    writes.rssd_save_goal=['Save a goal; enabling maintenance creates queued demands only, never claims or publishes',schema({id:string,baseRevision:number,requestId:string,goal:object},['id','baseRevision','requestId','goal']),(a)=>this.coordination.saveGoal(ctx,a)];

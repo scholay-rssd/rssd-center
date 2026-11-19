@@ -60,6 +60,7 @@ CREATE TABLE IF NOT EXISTS rssd_demands (
   "updatedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY ("orgId", id)
 );
 CREATE INDEX IF NOT EXISTS rssd_demands_queue ON rssd_demands ("orgId", state, priority DESC, "createdAt");
+CREATE INDEX IF NOT EXISTS rssd_demands_updated ON rssd_demands ("orgId", "workspaceId", "updatedAt");
 CREATE UNIQUE INDEX IF NOT EXISTS rssd_demands_open_translate_work ON rssd_demands ("orgId", (payload->'source'->>'workId'))
  WHERE kind='translate' AND state IN ('queued','claimed','blocked');
 CREATE TABLE IF NOT EXISTS rssd_works (
