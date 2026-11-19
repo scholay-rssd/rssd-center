@@ -26,6 +26,16 @@ test('demand edits are replayable and concurrent edits conflict; a claim freezes
  await assert.rejects(coord.editDemand(f.ctx,d.id,{...input,baseGeneration:claim.generation,requestId:randomUUID()}),{code:'demand_frozen'});
  const other=await store.createDemand(f.owner,{workspaceId:'b',sectionId:'news',title:'Other'});await assert.rejects(coord.editDemand(f.ctx,other.id,input),{code:'forbidden'});
 });
+test('an edit that turns a queued demand into a repeat is refused, and a cleared work type is cleared',async()=>{
+ const f=await fixture(),make=(title,extra={})=>store.createDemand(f.owner,{workspaceId:'a',sectionId:'news',title,...extra});
+ const first=await make('缅因猫：起源、特征与饲养要点'),second=await make('缅甸猫：起源、特征与饲养要点',{workType:'note',topicKey:'burmese'});
+ const edit=(id,baseGeneration,changes)=>coord.editDemand(f.ctx,id,{baseGeneration,requestId:randomUUID(),changes});
+ await assert.rejects(edit(second.id,0,{title:'缅因猫的来历'}),error=>error.code==='topic_repeat'&&error.message.includes(first.id));
+ // An edit that keeps the subject, or changes something else, is not compared with the demand itself.
+ const kept=await edit(second.id,0,{title:'缅甸猫：性格与照护',priority:5});assert.equal(kept.generation,1);assert.equal(kept.payload.workType,'note');assert.equal(kept.payload.topicKey,'burmese');
+ const cleared=await edit(second.id,1,{workType:null,topicKey:null});assert.equal('workType' in cleared.payload,false);assert.equal('topicKey' in cleared.payload,false);
+ await assert.rejects(edit(second.id,2,{workType:'video'}),/Invalid work type/);
+});
 test('goal maintainer serializes concurrent runs and counts a bilingual work once without publishing',async()=>{
  const f=await fixture(),input={id:'weekly',baseRevision:0,requestId:randomUUID(),goal:{workspaceId:'a',sectionId:'news',period:'week',timezone:'Asia/Tokyo',target:2,title:'Goal brief',brief:'Verified sources required',requiredLocales:['zh-CN','en'],enabled:true}};
  await assert.rejects(coord.saveGoal(f.ctx,input),{code:'forbidden'});await coord.saveGoal(f.owner,input);await coord.saveGoal(f.owner,input);

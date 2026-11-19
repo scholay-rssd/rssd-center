@@ -66,6 +66,8 @@ function workspace(input) {
   return {id: id(value.id, 'workspaceId'), name: text(value.name, 'workspace name', 200),
     siteId: value.siteId ? id(value.siteId, 'siteId') : null, sections};
 }
+// The work types a demand may ask for: CHOSEN_WORK_TYPES in work-types.mjs, which a test keeps equal.
+const DEMAND_WORK_TYPES = ['article', 'note'];
 function demand(input) {
   const value = object(input, 'demand');
   const kind = value.kind || 'write'; if (!['write', 'translate', 'update'].includes(kind)) fail('Invalid demand kind');
@@ -74,10 +76,34 @@ function demand(input) {
   const source = value.source == null ? null : {workId: id(value.source.workId, 'source.workId'),
     locale: locale(value.source.locale), revision: integer(value.source.revision, 'source.revision', 1)};
   if (kind !== 'write' && !source) fail('Translation and update demands require a source edition');
-  return {id: value.id ? id(value.id) : crypto.randomUUID(), workspaceId: id(value.workspaceId, 'workspaceId'),
+  const result = {id: value.id ? id(value.id) : crypto.randomUUID(), workspaceId: id(value.workspaceId, 'workspaceId'),
     sectionId: id(value.sectionId, 'sectionId'), kind, title: text(value.title, 'title', 500),
     brief: text(value.brief ?? '', 'brief', 100000, true), requiredLocales, source,
     priority: integer(value.priority ?? 0, 'priority', -100, 100)};
+  // Optional, and absent from a demand that states none, so earlier demands keep their identity: the type of
+  // work asked for, the article a note is to be rewritten from, the subject key used to notice a repeat, and
+  // the lead that prompted the topic.
+  if (value.workType != null) {
+    if (!DEMAND_WORK_TYPES.includes(value.workType)) fail('Invalid work type');
+    if (kind !== 'write') fail('Only a write demand chooses a work type');
+    result.workType = value.workType;
+  }
+  if (value.adaptedFrom != null) {
+    if (result.workType !== 'note') fail('Only a note can be rewritten from an article');
+    const from = object(value.adaptedFrom, 'adaptedFrom');
+    result.adaptedFrom = {workId: id(from.workId, 'adaptedFrom.workId'), revision: integer(from.revision, 'adaptedFrom.revision', 1)};
+  }
+  if (value.topicKey != null) result.topicKey = text(value.topicKey, 'topicKey', 200);
+  // What prompted the topic, such as a hot-board term: who reported it, what it said and when it was seen.
+  // A lead only suggests a topic. It is never evidence and never a source of the article.
+  if (value.lead != null) {
+    if (kind !== 'write') fail('Only a write demand records a lead');
+    const lead = object(value.lead, 'lead'), seen = typeof lead.observedAt === 'string' ? Date.parse(lead.observedAt) : NaN;
+    if (!Number.isFinite(seen)) fail('Invalid lead.observedAt');
+    result.lead = {provider: id(lead.provider, 'lead.provider'), ...(lead.platformId != null ? {platformId: id(lead.platformId, 'lead.platformId')} : {}),
+      term: text(lead.term, 'lead.term', 200), observedAt: new Date(seen).toISOString(), ...(lead.url != null ? {url: publicUrl(lead.url, 'lead.url')} : {})};
+  }
+  return result;
 }
 const MEDIA_REF = /(?:https?:\/\/[^/\s)"']+)?\/api\/rssd\/v1\/media\/([a-zA-Z0-9._:-]+)\/raw/g;
 function referencedMediaIds(markdown) {
@@ -115,4 +141,4 @@ function submission(input) {
     baseRevisions: bases, editions};
 }
 module.exports = {VERSION, ProtocolError, fail, object, text, id, locale, array, integer, canonical, hash,
-  publicUrl, json, policy, workspace, demand, referencedMediaIds, edition, submission};
+  publicUrl, json, policy, workspace, demand, DEMAND_WORK_TYPES, referencedMediaIds, edition, submission};
