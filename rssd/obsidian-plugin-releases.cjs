@@ -118,20 +118,24 @@ async function publish(source,target,{keyFile=null}={}){
   }else if(highest&&compareVersions(release.version,highest)<0)fail('Release '+release.version+' is older than the published '+highest,409,'plugin_release_order');
   let current=null;
   try{current=await new PluginReleases({directory:target}).latest();}catch(e){if(e.status!==404)throw e;}
-  if(current&&JSON.stringify(current)+'\n'===text)return {version:release.version,unchanged:true};
-  if(current&&compareVersions(release.version,current.version)<0)fail('Release '+release.version+' is older than the published '+current.version,409,'plugin_release_order');
+  const unchanged=current&&JSON.stringify(current)+'\n'===text;
+  if(current&&!unchanged&&compareVersions(release.version,current.version)<0)fail('Release '+release.version+' is older than the published '+current.version,409,'plugin_release_order');
   for(const file of release.files){
    const path=join(target,'files',file.sha256),stored=await readFile(path).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
-   // A file left damaged by an interrupted write is replaced with the verified bytes.
+   // A file left damaged by an interrupted write is replaced with the verified bytes, even on a repeat publish.
    if(!stored||sha256(stored)!==file.sha256)await writeAtomically(path,blobs.get(file.name));
   }
-  if(!versions.includes(release.version))await writeFile(archive,text,{flag:'wx',mode:0o644});
+  if(unchanged)return {version:release.version,unchanged:true};
+  if(!versions.includes(release.version))await writeAtomically(archive,text);
   await writeAtomically(join(target,'latest.json'),text);
-  // Vaults roll back from their own copy, so older releases need not keep their files here.
-  const keep=new Set();
-  for(const version of (await archivedVersions(target)).slice(-KEEP_RELEASES))
-   for(const file of JSON.parse(await readFile(join(target,'releases',version+'.json'),'utf8')).files)keep.add(file.sha256);
-  for(const name of await readdir(join(target,'files')))if(HEX.test(name)&&!keep.has(name))await rm(join(target,'files',name),{force:true});
+  // Vaults roll back from their own copy, so older releases need not keep their files here. Tidying is best
+  // effort: the release is live once latest.json is replaced.
+  try{
+   const keep=new Set();
+   for(const version of (await archivedVersions(target)).slice(-KEEP_RELEASES))
+    for(const file of JSON.parse(await readFile(join(target,'releases',version+'.json'),'utf8')).files)keep.add(file.sha256);
+   for(const name of await readdir(join(target,'files')))if(HEX.test(name)&&!keep.has(name))await rm(join(target,'files',name),{force:true});
+  }catch(e){console.error('Old release files were not removed: '+e.message);}
   return {version:release.version,files:release.files};
  }finally{await rm(lock,{force:true});}
 }

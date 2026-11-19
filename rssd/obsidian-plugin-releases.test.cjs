@@ -91,4 +91,16 @@ test('files are served by hash with caching headers, and errors never reveal pat
  await writeFile(join(target,'latest.json'),'{"not":"a release"}');
  await assert.rejects(service.latest(),e=>e.status===503&&!e.message.includes('/'));
 });
+
+test('a repeat publish repairs a damaged stored file, and a damaged old record does not undo a release',async t=>{
+ const {root,target,keys}=await setup(t),service=new PluginReleases({directory:target}),first=await fixture(root,'0.2.1',{keys});
+ await publish(first.dir,target,{keyFile:first.keyFile});
+ await writeFile(join(target,'files',hash(first.main)),'tampered');
+ assert.deepEqual(await publish(first.dir,target),{version:'0.2.1',unchanged:true});
+ assert.deepEqual((await service.raw(hash(first.main))).body,first.main);
+ await writeFile(join(target,'releases','0.2.1.json'),'{"cut');
+ const second=await fixture(root,'0.2.2',{keys,code:'second'});
+ assert.equal((await publish(second.dir,target)).version,'0.2.2');
+ assert.equal((await service.latest()).version,'0.2.2');
+});
 module.exports={fixture,keyPair};

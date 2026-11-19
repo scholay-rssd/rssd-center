@@ -48,7 +48,9 @@ here. The first publish passes `--key <release-key.pub>` to pin the release key.
 then on, a release must verify against the pinned key, a version is never lowered or
 reused, publishing the same release again changes nothing, and `latest.json` is
 replaced atomically. Files are kept by hash, and only the newest three releases keep
-their files. Set `RSSD_PLUGIN_RELEASES_DIR` for another folder. No database migration
+their files. After the release key is rotated, remove the pinned
+`release-key.pub` from that folder, so the next publish can pin the new key. Set
+`RSSD_PLUGIN_RELEASES_DIR` for another folder. No database migration
 or organization data is involved. The GET-only `/rssd/public/v1/obsidian-plugin/latest`
 and `/files/:sha256` routes serve only that public release without a device credential.
 Vaults verify the signature themselves, against the key compiled into the plugin they
