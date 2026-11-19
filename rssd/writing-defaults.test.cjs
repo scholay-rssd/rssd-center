@@ -40,3 +40,13 @@ test('new baseline checks alt bounds and explicit body budgets while notes canno
  image.alt='𠀀'.repeat(20);n.blocks[0].text='甲';assert.throws(()=>validateWritingDelivery(edition,b),/当前 1/);
  ref.bodyLengthAdjustment.minimum=20;assert.throws(()=>validateWritingDelivery(edition,b),e=>e.code==='writing_defaults_conflict');
 });
+test('a section that takes notes freezes its note form with the claim',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'center-writing-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const {hash,...body}=fixture('fixture.note');body.workspaces[0].sections[0].note={skillIds:['fixture-skill'],requiredElements:['one point']};
+ const input=join(root,'input.json'),active=join(root,'active.json'),service=new WritingDefaults({file:active});
+ await writeFile(input,JSON.stringify({...body,hash:rules.hash(body)}));await publish(input,active);
+ const baseline=await service.freeze({workspaceId:'fixture',sectionId:'section',kind:'write',generation:0,payload:{workType:'note'}});
+ assert.deepEqual(baseline.note.requiredElements,['one point']);assert.match(baseline.note.instructions,/作品类型：笔记/);
+ assert.equal(rules.compose(baseline,{workType:'note'}).workType,'note');
+ assert.equal(rules.compose(baseline).instructions.includes('作品类型：笔记'),false);
+});
