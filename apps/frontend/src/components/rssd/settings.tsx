@@ -10,10 +10,11 @@ import { WorkspacePolicy } from './configuration';
 import { CenterHealth } from './health';
 import { GuestbookModeration } from './guestbook';
 import { CenterLabels } from './labels';
+import { PersonaLibrary } from './persona-voice';
 import './center-admin.css';
 
 type Row = Record<string, any>;
-export const settingsSections = [['devices', '执行设备'], ['workspaces', '工作空间'], ['health', '运行状况'], ['guestbooks', '留言审核'], ['labels', '流量标签'], ['account', '账号']] as const;
+export const settingsSections = [['devices', '执行设备'], ['workspaces', '工作空间'], ['personas', '人格库'], ['health', '运行状况'], ['guestbooks', '留言审核'], ['labels', '流量标签'], ['account', '账号']] as const;
 export type SettingsSection = typeof settingsSections[number][0];
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const stateNames: Record<string, string> = { idle: '空闲', running: '工作中', paused: '已暂停', revoked: '已撤销' };
@@ -133,6 +134,7 @@ export function SettingsPanel({ api, registry, reloadRegistry, initialSection = 
     <div className="cp-filter-row"><div className="cp-state-filters" aria-label="设置分类">{settingsSections.map(([id, name]) => <button key={id} aria-pressed={section === id} onClick={() => setSection(id)}>{name}</button>)}</div></div>
     {section === 'devices' && <Devices api={api} registry={registry} />}
     {section === 'workspaces' && <Workspaces api={api} registry={registry} reload={reloadRegistry} />}
+    {section === 'personas' && <PersonaLibrary api={api} registry={registry} />}
     {section === 'health' && <CenterHealth api={api} />}
     {section === 'guestbooks' && <GuestbookModeration api={api} workspaceId={workspaceId || ''} />}
     {section === 'labels' && <CenterLabels api={api} />}

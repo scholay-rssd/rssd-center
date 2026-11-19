@@ -55,4 +55,9 @@ A decision still pending at submission lapses to the fallback or to none, and th
 
 A section that still uses the earlier `persona` byline, and has no `voiceDecision` on the claim, is checked as before.
 
-Not here yet: editing a section's voice in the owner interface (it is set through `POST /workspaces`), ranges and candidate ranking by persona tags, and other kinds of mount.
+## In the owner interface
+
+- **Settings → 人格库** lists the library (one row per persona, its founder, revisions, the sections that use it, in use or retired), uploads the file `rssd center personas-export` writes, in requests of at most 30 personas and 80 KB, and retires or restores a persona.
+- **Settings → 工作空间 → 栏目规则** has a 人格 setting per section: none, a fixed persona, the writer chooses, a random draw or the least used; for the last three a range (all, or a ticked list) and a fallback; and whether the persona or the site signs. Only personas in use are offered; one the section already names stays listed even when it is retired or missing, so it can be removed. A section that still has the earlier byline-only setting shows it as 只署名（旧设置） and keeps it until another way is chosen.
+
+Not here yet: ranges and candidate ranking by persona tags, and other kinds of mount.
