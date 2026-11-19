@@ -63,7 +63,8 @@ class StagedDrafts {
   p.object(input,'staged draft');p.id(input.articleId);p.locale(input.locale);p.integer(input.baseRevision,'baseRevision',1);p.integer(input.overlayRevision,'overlayRevision',0,2147483646);
   const inputKeys=new Set(['requestKey','articleId','workId','locale','baseRevision','baseHash','basePublishedVersion','overlayRevision','data']);
   if(input.workId!==undefined)p.id(input.workId,'workId');
-  const dataKeys=new Set(['id','title','summary','markdown','author','date','category','sectionId','locale','assets','translationOf']);
+  // workType, adaptedFrom and tags may be sent back as read; a staged draft refuses a change to them.
+  const dataKeys=new Set(['id','title','summary','markdown','author','date','category','sectionId','locale','assets','translationOf','workType','adaptedFrom','tags']);
   if(Object.keys(input).some(k=>!inputKeys.has(k))||!input.data||typeof input.data!=='object'||Array.isArray(input.data)||Object.keys(input.data).some(k=>!dataKeys.has(k)))p.fail('Unknown staged draft field');
   if(Buffer.byteLength(JSON.stringify(input))>4*1024*1024)p.fail('Staged draft request exceeds 4 MiB',413,'payload_too_large');
   if(!hex(input.baseHash))p.fail('Invalid base hash');if(input.basePublishedVersion!==null)p.integer(input.basePublishedVersion,'basePublishedVersion',1);
@@ -98,6 +99,10 @@ class StagedDrafts {
    if((previous?.overlayRevision||0)!==input.overlayRevision)p.fail('The staged draft changed; preserve local edits',409,'revision_conflict');
    const original=await nested.data(ctx,workspace,base.row,base.revision,undefined,{referencedOnly:true});
    if(data.translationOf!==undefined&&p.hash(data.translationOf||null)!==p.hash(original.translationOf||null))p.fail('Translation source cannot be changed during migration',409,'source_conflict');
+   // A staged draft keeps its edition's work type, source article and tags; a canonical draft save changes them.
+   // `check` holds the values as inputData normalized them; no tags and an empty list are the same.
+   const same=(key,value)=>p.hash(value==null||key==='tags'&&!value.length?null:value)===p.hash(original[key]??null);
+   for(const key of ['workType','adaptedFrom','tags'])if(check[key]!==undefined&&!same(key,check[key]))p.fail('A staged draft keeps the work type, source article and tags of its edition',409,'identity_conflict');
    for(const key of ['summary','author','category']){
     const prior=previous?.data?.[key]??original[key];
     if(!data[key].trim()&&typeof prior==='string'&&prior.trim())p.fail('Only an existing empty '+key+' can remain empty in a private draft');
@@ -134,6 +139,7 @@ class StagedDrafts {
    }
    const payload={id:data.id,title:data.title,summary:data.summary,markdown:data.markdown,author:data.author,date:data.date,category:data.category,sectionId:data.sectionId,
     ...(data.locale?{locale:data.locale}:{}),...(original.translationOf?{translationOf:original.translationOf}:{}),
+    ...(original.workType?{workType:original.workType}:{}),...(original.adaptedFrom?{adaptedFrom:original.adaptedFrom}:{}),...(original.tags?{tags:original.tags}:{}),
     ...(structured?{record:{...original.record,fields:{...original.record.fields,...structured.sections,title:data.title}}}:{}),assets:[...assets.values()]};
    const revision=input.overlayRevision+1;
    const receipt={articleId:input.articleId,workId:base.row.workId,locale:input.locale,baseRevision:base.revision,baseHash:base.hash,basePublishedVersion:base.publishedVersion,overlayRevision:revision,status:'draft_saved',requestKey:input.requestKey};

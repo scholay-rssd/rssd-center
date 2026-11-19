@@ -2,7 +2,7 @@
 const {randomUUID}=require('node:crypto');
 const p=require('./protocol.cjs');
 const {RssdStore}=require('./store.cjs');
-const {publication,publicContent,contentKey}=require('./publication.cjs');
+const {publication,publicContent,contentKey,packetMedia}=require('./publication.cjs');
 const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args),x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
 const lock=(db,key)=>x(db,'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',key);
 class RssdEditorialActions {
@@ -167,17 +167,24 @@ class RssdEditorialActions {
     if(head.contentHash)hash=head.contentHash;
     else if(head.revision>0){const archived=await this.store.edition({orgId:row.orgId,admin:true,workspaceIds:null},row.workId,row.locale,head.revision);hash=archived.hash;}
    }
+   // A shown edition carries its work type only to a receiver that understands it, and with it the newest card set
+   // for the revision. The packet is frozen below, so a retry sends the same one.
+   const shown=!['withdraw','delete'].includes(operation),revision=shown?row.payload.publicRevision||row.payload.revision:head.revision;
+   const capable=shown&&await this.publisher.receiverCapable(config,token);
+   this.publisher.receiverContent(content,capable);
+   const set=capable&&content.metadata.workType!=='note'?await this.publisher.newestCardSet({...row,revision}):null;
+   const cards=set?(await this.publisher.cardSet({...row,revision},set.id)).cards:null;
    packet=publication({version:1,requestId:row.id,siteId:config.siteId,workspaceId:row.workspaceId,sectionId:row.payload.sectionId,workId:row.workId,locale:row.locale,
-    revision:['withdraw','delete'].includes(operation)?head.revision:row.payload.publicRevision||row.payload.revision,contentHash:hash,route:head?.route||row.payload.route,
+    revision,contentHash:hash,route:head?.route||row.payload.route,
     operationSequence:(head?.operationSequence||0)+1,
     ...(operation?{operation,operationSequence:(head?.operationSequence||0)+1,expectedOperationSequence:head?.operationSequence||0,expectedRevision:head?.revision||0}:{}),
-    ...(!['withdraw','delete'].includes(operation)?{content,...(prepared.assets.length?{assets:prepared.assets}:{})}:{})});
+    ...(shown?{content,...(prepared.assets.length?{assets:prepared.assets}:{}),...(cards?{cards}:{})}:{})});
    const changed=await x(this.store.db,'UPDATE rssd_editorial_actions SET packet=$4::jsonb WHERE "orgId"=$1 AND id=$2 AND "leaseToken"=$3',row.orgId,row.id,row.leaseToken,JSON.stringify(packet));
    if(!changed)return {id:row.id,state:'lease_lost'};row.packet=packet;
   }
   if(!packet)p.fail('Original action packet is missing; retain its receiver receipt',409,'receipt_conflict');
   if(!receipt){
-   if(!['withdraw','delete'].includes(packet.operation))for(const asset of packet.assets||[]){
+   if(!['withdraw','delete'].includes(packet.operation))for(const asset of new Map(packetMedia(packet).map(({width,height,...manifest})=>[manifest.sha256,manifest])).values()){
     const media=await this.media.row({orgId:row.orgId,admin:true,workspaceIds:null},require('./rssd-media.cjs').mediaId(row.workspaceId,asset.sha256));
     const url=base+'/media/'+asset.sha256;let stored;try{stored=await this.publisher.request(url,{token});}catch(error){if(error.status!==404)throw error;const {bytes}=await this.media.bytes({orgId:row.orgId,admin:true,workspaceIds:null},media.id);stored=await this.publisher.request(url,{token,method:'POST',body:{...asset,data:bytes.toString('base64')}});}
     if(p.hash(stored)!==p.hash(asset))p.fail('Receiver media identity mismatch',409,'media_conflict');

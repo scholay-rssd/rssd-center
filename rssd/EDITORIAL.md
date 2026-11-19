@@ -35,6 +35,26 @@ Migrated request keys can be queried without creating a new request. A POST
 that reuses a migrated key is rejected and instructs the client to recover
 its preserved receipt. Versions and tombstones are never discarded.
 
+Workspaces that advertise `work-types-v1` in `/site` accept three optional
+manuscript fields. `data.workType` is `article` or `note`; a structured record
+keeps the type of its record kind. A note may name
+`data.adaptedFrom: {articleId, revision}`, the Chinese long article in the same
+workspace it was rewritten from and the revision it was written from.
+`data.tags` lists up to 10 of the work's own tags of up to 40 characters; they
+are stored trimmed, without a leading `#` and each once, and an empty list
+clears them. Omitted fields keep the previous edition's values and `null`
+clears them. Reads return all three, with the source by its article ID. Staged
+drafts accept the values they read back and refuse a change to them.
+
+A site publication carries them only when the receiver's status also
+advertises `work-types-v1`; other receivers, including those whose status
+endpoint answers 401 or 404, get the packet they always had. For a long article
+the packet also carries the newest raster card rendition saved for the
+published revision. Both decisions are made before the first submission and
+kept with the publication (`payload.sitePacket`), so every retry sends the same
+packet. Publish and restore actions make the same decisions and freeze them in
+the action packet.
+
 Native claim-submit receipts (`GET /submissions/:requestId` / `rssd_receipt`)
 return `publicationIds`. Those ids are the website `job.id` values for site
 destinations; they are not editorial `requestKey`s. `GET /requests/:key`
