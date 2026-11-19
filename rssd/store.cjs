@@ -120,9 +120,16 @@ class RssdStore {
     const workspaceIds=[...new Set(p.array(input.workspaceIds,'workspaceIds').map(x=>p.id(x)))];
     if(!workspaceIds.length)p.fail('Select at least one workspace');
     for(const workspaceId of workspaceIds)await this.workspace(this.db,ctx,workspaceId);
-    const id=randomUUID(),token='rssd_device_'+randomBytes(36).toString('base64url');
-    await execute(this.db,'INSERT INTO rssd_workers ("orgId",id,name,"tokenHash","workspaceIds") VALUES ($1,$2,$3,$4,$5::jsonb)',ctx.orgId,id,name,p.hash(token),encoded(workspaceIds));
-    return {id,name,workspaceIds,token};
+    // "RSSD Center": the key also opens the Center's own data in Obsidian (topic pool, publications, overview) for
+    // its workspaces. It is a grant like publication scheduling, so it shows and can be revoked with the device.
+    if(input.center!==undefined&&typeof input.center!=='boolean')p.fail('Invalid center option');
+    const id=randomUUID(),token='rssd_device_'+randomBytes(36).toString('base64url'),center=input.center===true;
+    await this.transaction(async db=>{
+      await execute(db,'INSERT INTO rssd_workers ("orgId",id,name,"tokenHash","workspaceIds") VALUES ($1,$2,$3,$4,$5::jsonb)',ctx.orgId,id,name,p.hash(token),encoded(workspaceIds));
+      if(center)await execute(db,`INSERT INTO rssd_worker_grants ("orgId",id,"workerId",operation,"workspaceIds","destinationIds","grantedBy") VALUES ($1,$2,$3,'center',$4::jsonb,'[]'::jsonb,$5)`,
+        ctx.orgId,randomUUID(),id,encoded([...workspaceIds].sort()),ctx.userId||'owner');
+    });
+    return {id,name,workspaceIds,center,token};
   }
   async authenticate(token) {
     if(typeof token!=='string'||!/^rssd_device_[A-Za-z0-9_-]{48}$/.test(token))p.fail('Invalid device credential',401,'unauthorized');

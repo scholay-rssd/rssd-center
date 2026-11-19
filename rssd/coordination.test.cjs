@@ -179,3 +179,20 @@ test('paused and staged goals cannot create new demands and goal updates require
  await assert.rejects(coord.saveGoal(f.owner,{...input,requestId:randomUUID(),baseRevision:1,goal:{...input.goal,enabled:true}}),{code:'migration_staged'});
  assert.equal((await store.demands(f.owner)).length,0);
 });
+
+test('a key made with RSSD Center ticked carries a center grant for its workspaces; others do not',async()=>{
+ const f=await fixture();
+ const center=await store.createWorker(f.owner,{name:'Writer with Center',workspaceIds:['b','a'],center:true});
+ assert.equal(center.center,true);
+ const authed=await store.authenticate(center.token);
+ assert.deepEqual(authed.grants.filter(grant=>grant.operation==='center').map(grant=>grant.workspaceIds),[['a','b']]);
+ const plain=await store.createWorker(f.owner,{name:'Writer',workspaceIds:['a']});
+ assert.equal(plain.center,false);
+ assert.deepEqual((await store.authenticate(plain.token)).grants,[]);
+ await assert.rejects(store.createWorker(f.owner,{name:'Bad',workspaceIds:['a'],center:'yes'}),/Invalid center option/);
+ const listed=(await store.workers(f.owner)).find(worker=>worker.id===center.id);
+ assert.equal(listed.grants[0].operation,'center');
+ // A center grant does not open publication scheduling.
+ assert.equal((await coord.overview(authed,{workspaceIds:'a'})).capabilities.publicationScheduling,false);
+ await store.revokeWorker(f.owner,center.id);await assert.rejects(store.authenticate(center.token),{status:401});
+});

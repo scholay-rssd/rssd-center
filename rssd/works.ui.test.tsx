@@ -91,7 +91,7 @@ test('owner grants a scoped scheduling capability from the device list',async()=
 test('a new device credential is shown once and the list is re-read',async()=>{
   let created=false;
   mockFetch.mockImplementation(async(path:string,options:any)=>{
-    if(path.endsWith('/workers')&&options?.method==='POST'){const body=JSON.parse(options.body);expect(body).toEqual({name:'Mac mini',workspaceIds:['one']});created=true;return response({id:'worker2',token:'rssd_device_fixture'});}
+    if(path.endsWith('/workers')&&options?.method==='POST'){const body=JSON.parse(options.body);expect(body).toEqual({name:'Mac mini',workspaceIds:['one'],center:false});created=true;return response({id:'worker2',token:'rssd_device_fixture'});}
     if(path.endsWith('/workers'))return response(created?[{id:'worker2',name:'Mac mini',workspaceIds:['one'],state:'idle'}]:[]);
     return response([]);
   });
