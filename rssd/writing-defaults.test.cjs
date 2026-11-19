@@ -15,7 +15,11 @@ test('publishing is atomic and retains immutable catalogs; an old claim keeps it
  await writeFile(input,JSON.stringify(fixture('fixture.2')));await publish(input,active);
  assert.notEqual((await service.freeze(demand)).hash,baseline.hash);
  assert.equal((await service.freeze({...demand,generation:1,payload:{writingDefaults:baseline}})).hash,baseline.hash);
- assert.equal(await service.freeze({...demand,generation:1}),null);
+ // Claimed before rules existed, then released or expired with nothing delivered: the next claim freezes the current rules.
+ assert.equal((await service.freeze({...demand,generation:1})).hash,(await service.freeze(demand)).hash);
+ // Part of the demand was delivered without rules; finishing it keeps that contract. Continuations never freeze.
+ assert.equal(await service.freeze({...demand,generation:1,payload:{submittedLocales:['zh-CN'],workId:'work-1'}}),null);
+ assert.equal(await service.freeze({...demand,kind:'translate'}),null);
  assert.equal(JSON.parse(await readFile(join(root,first.catalogHash+'.json'))).hash,first.catalogHash);
  await assert.rejects(service.resolve('fixture','retired'),e=>e.status===404);
 });

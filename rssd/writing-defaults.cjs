@@ -16,9 +16,12 @@ class WritingDefaults {
   catch(e){if(e.status)throw e;throw new ProtocolError('Enabled writing scope not found',404,'writing_defaults_scope');}
  }
  async freeze(demand){
-  // Old claims and non-writing continuations retain their previous contract.
+  // A demand keeps the rules an earlier claim froze. Translations and updates continue existing work, and a
+  // write demand that has already delivered an edition continues under the contract that edition was written
+  // to: both stay without rules. Any other write claim freezes the current rules, including a demand released
+  // or expired after an earlier claim that predates frozen rules, since nothing was delivered under that claim.
   if(demand.payload?.writingDefaults)return rules.snapshot(demand.payload.writingDefaults,{workspaceId:demand.workspaceId,sectionId:demand.sectionId});
-  if(demand.kind!=='write'||demand.generation>0)return null;
+  if(demand.kind!=='write'||demand.payload?.submittedLocales?.length)return null;
   const c=await this.catalog();return rules.resolve(c,demand.workspaceId,demand.sectionId);
  }
 }

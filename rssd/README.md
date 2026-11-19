@@ -34,8 +34,11 @@ Set `RSSD_WRITING_DEFAULTS_FILE` for another path. Publishing retains immutable
 hash-named versions and atomically switches the active file. No database migration
 or organization data is involved. The GET-only `/rssd/public/v1/writing-defaults`
 and `/:workspaceId/:sectionId` routes expose only that public catalog without a
-device credential. New write claims freeze the full selected rules; resumed legacy
-claims are preserved. New baseline-bound publications check the claimed baseline,
+device credential. Write claims freeze the full selected rules, also when a demand
+claimed before rules existed is claimed again after a release or expiry; a demand
+keeps the rules frozen by its first such claim. Translations, updates, resumed claims
+and write demands that already delivered an edition keep their previous contract.
+New baseline-bound publications check the claimed baseline,
 actual notebook image references and captions. Draft storage remains available.
 The portable contract and fingerprint are maintained by core's
 `scripts/sync-writing-defaults-contract.mjs`.
