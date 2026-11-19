@@ -30,6 +30,10 @@ export class RssdController {
   @Get('/coordination/overview') overview(@Req() req: any, @Query() query: any) { return this.rssd.coordination.overview(req.rssd, query); }
   @Get('/coordination/channels') coordinatedChannels(@Req() req: any, @Query() query: any) { return this.rssd.coordination.channels(req.rssd, query); }
   @Get('/coordination/calendar') calendar(@Req() req: any, @Query() query: any) { return this.rssd.coordination.calendar(req.rssd, query); }
+  @Get('/annotations/form') annotationForm(@Req() req: any) { return this.rssd.annotations.form(req.rssd); }
+  @Get('/annotations/target') annotationTarget(@Req() req: any, @Query() query: any) { return this.rssd.annotations.describe(req.rssd, {...query, ...(query.revision === undefined ? {} : {revision: Number(query.revision)})}); }
+  @Get('/annotations') annotations(@Req() req: any, @Query() query: any) { return this.rssd.annotations.list(req.rssd, query); }
+  @Post('/annotations') async annotate(@Req() req: any, @Body() body: any, @Res() res: any) { res.status(201).json(await this.rssd.annotations.submit(req.rssd, body)); }
   @Get('/goals') goals(@Req() req: any, @Query() query: any) { return this.rssd.coordination.goals(req.rssd, query); }
   @Post('/goals') saveGoal(@Req() req: any, @Body() body: any) { return this.rssd.coordination.saveGoal(req.rssd, body); }
   @Patch('/demands/:id/definition') editDemand(@Req() req: any, @Param('id') id: string, @Body() body: any) { return this.rssd.coordination.editDemand(req.rssd, id, body); }

@@ -193,3 +193,13 @@ CREATE TABLE IF NOT EXISTS rssd_existing_site_publishes (
  "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY ("orgId","requestId")
 );
 CREATE INDEX IF NOT EXISTS rssd_existing_site_publishes_work ON rssd_existing_site_publishes ("orgId","workId",locale,revision,"destinationId");
+
+-- Annotations of published revisions. Rows are only added, and the newest per annotator, revision and form version counts.
+CREATE TABLE IF NOT EXISTS rssd_annotations (
+ "orgId" TEXT NOT NULL,id TEXT NOT NULL,"workspaceId" TEXT NOT NULL,"sectionId" TEXT NOT NULL,"workId" TEXT NOT NULL,
+ locale TEXT NOT NULL,revision INTEGER NOT NULL,"editionHash" TEXT NOT NULL,"formVersion" TEXT NOT NULL,
+ "annotatorKind" TEXT NOT NULL,"annotatorId" TEXT NOT NULL,"submittedBy" TEXT NOT NULL,target JSONB NOT NULL,answers JSONB NOT NULL,
+ "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY ("orgId",id)
+);
+CREATE INDEX IF NOT EXISTS rssd_annotations_work ON rssd_annotations ("orgId","workId",locale,revision,"createdAt");
+CREATE INDEX IF NOT EXISTS rssd_annotations_workspace ON rssd_annotations ("orgId","workspaceId","createdAt");

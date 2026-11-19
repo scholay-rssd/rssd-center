@@ -21,6 +21,7 @@ const { RssdEditorialActions } = require('../../../../rssd/editorial-actions.cjs
 const { RssdMigration } = require('../../../../rssd/migration.cjs');
 const { RssdExistingSitePublish } = require('../../../../rssd/existing-site-publish.cjs');
 const { WritingDefaults } = require('../../../../rssd/writing-defaults.cjs');
+const { RssdAnnotations } = require('../../../../rssd/annotations.cjs');
 
 @Injectable()
 export class RssdService implements OnModuleInit, OnModuleDestroy {
@@ -38,6 +39,7 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   readonly editorial: any;
   readonly migration: any;
   readonly existingSitePublish: any;
+  readonly annotations: any;
   private timer?: ReturnType<typeof setInterval>;
   constructor(prisma: PrismaService, posts: PostsService, temporal: TemporalService) {
     this.store = new RssdStore(prisma,{writingDefaults:new WritingDefaults()});
@@ -51,6 +53,7 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
     this.media = new RssdMedia(this.store, {directory: process.env.RSSD_MEDIA_DIRECTORY, origin: process.env.FRONTEND_URL});
     this.migration = new RssdMigration(this.store, this.media);
     this.editorial = new RssdEditorial(this.store, this.media);
+    this.annotations = new RssdAnnotations(this.store, {editorial: this.editorial});
     this.postiz = new RssdPostiz(this.store, {
       validate: (org: string, values: any[]) => posts.validatePosts(org, values),
       uploadMedia: async ({bytes, asset}: any) => UploadFactory.createStorage().uploadFile({buffer: bytes, mimetype: asset.manifest.mime, originalname: asset.name} as Express.Multer.File),
