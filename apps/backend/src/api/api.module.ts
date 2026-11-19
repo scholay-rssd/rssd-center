@@ -61,6 +61,7 @@ import { RssdAuthController } from '../rssd/rssd.auth.controller';
 import { RssdGuestbookController } from '../rssd/rssd.guestbook.controller';
 import { RssdCommunityController } from '../rssd/rssd.community.controller';
 import { RssdWritingDefaultsController } from '../rssd/rssd.writing-defaults.controller';
+import { RssdObsidianPluginController } from '../rssd/rssd.obsidian-plugin.controller';
 import { RssdService } from '../rssd/rssd.service';
 import { RssdMiddleware } from '../rssd/rssd.middleware';
 
@@ -103,6 +104,7 @@ const authenticatedController = [
         RssdGuestbookController,
         RssdCommunityController,
         RssdWritingDefaultsController,
+        RssdObsidianPluginController,
         StripeController,
         AuthController,
         PublicController,
