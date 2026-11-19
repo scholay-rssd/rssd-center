@@ -97,9 +97,8 @@ must still name every `/article-media/<sha256>.<ext>` image its Markdown uses,
 but an image the base edition already stores may be named as `{path}` alone,
 without `data`. The save checks each such path against the base edition's
 attachments and referenced media and fails with `stored_media_missing` when it
-is not there. Only images sent with their bytes count toward the 12-image,
-2 MiB-per-request limits on new bytes; the asset list itself still holds at
-most 12 entries. Work details advertise this with
+is not there. Only images sent with their bytes count toward the 2 MiB per
+request; the asset list still holds at most 12 entries. Work details advertise this with
 `reusesStoredMediaOnSave:true`. Staged drafts still require every image's bytes.
 
 Visibility actions run only when `RSSD_DISPATCH_ENABLED=1`. Their confirmed
