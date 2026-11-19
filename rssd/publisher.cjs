@@ -83,9 +83,10 @@ class RssdPublisher {
     const reader=response.body.getReader();let size=0;const chunks=[];try{for(;;){const r=await reader.read();if(r.done)break;size+=r.value.length;if(size>8*1024*1024)throw Error('Destination response is too large');chunks.push(r.value);}}finally{await reader.cancel();}
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   }
-  /** Whether the site's receiver says it understands work types, note links and card sets. */
+  /** Whether the site's receiver says it understands work types, note links and card sets. A receiver without a
+   * status endpoint does not; any other failure is retried like the submission itself. */
   async receiverCapable(config,token){
-    const status=await this.request(origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/status',{token});
+    let status;try{status=await this.request(origin(config.origin)+'/api/rssd-receiver/v1/sites/'+encodeURIComponent(config.siteId)+'/status',{token});}catch(error){if(error.status===404)return false;throw error;}
     return Array.isArray(status?.capabilities)&&status.capabilities.includes(WORK_TYPES_CAPABILITY);
   }
   /**

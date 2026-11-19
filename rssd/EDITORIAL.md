@@ -35,6 +35,17 @@ Migrated request keys can be queried without creating a new request. A POST
 that reuses a migrated key is rejected and instructs the client to recover
 its preserved receipt. Versions and tombstones are never discarded.
 
+Workspaces that advertise `work-types-v1` in `/site` accept two optional
+manuscript fields, also in staged drafts. `data.workType` is `article` or
+`note`; a structured record keeps the type of its record kind. A note may name
+`data.adaptedFrom: {articleId, revision}`, the Chinese long article in the same
+workspace it was rewritten from and the revision it was written from. Omitted
+fields keep the previous edition's values and `null` clears them. Reads return
+both, with the source by its article ID. A site publication carries them, and
+an article edition's newest raster card rendition saved for the published
+revision before the publication was requested, only when the receiver's status
+also advertises `work-types-v1`; other receivers get the packet they always had.
+
 Native claim-submit receipts (`GET /submissions/:requestId` / `rssd_receipt`)
 return `publicationIds`. Those ids are the website `job.id` values for site
 destinations; they are not editorial `requestKey`s. `GET /requests/:key`

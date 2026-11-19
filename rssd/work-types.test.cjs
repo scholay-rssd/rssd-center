@@ -15,7 +15,7 @@ function receiver(capabilities){
   const stored=new Map(),packets=new Map(),calls=[];
   const fetchImpl=async(url,{method='GET',body}={})=>{
     const path=new URL(url).pathname;calls.push(method+' '+path);
-    if(path.endsWith('/status'))return json({accepting:true,capabilities});
+    if(path.endsWith('/status'))return capabilities==='no-status'?json({},404):capabilities==='status-down'?json({},503):json({accepting:true,capabilities});
     const mediaMatch=/\/media\/([a-f0-9]{64})$/.exec(path);
     if(mediaMatch){if(method==='POST'){const {data,...m}=JSON.parse(body);stored.set(mediaMatch[1],m);}return stored.has(mediaMatch[1])?json(stored.get(mediaMatch[1])):json({},404);}
     if(path.endsWith('/submissions')&&method==='POST'){const value=publication(JSON.parse(body));packets.set(value.requestId,value);return json(receipt(value));}
@@ -72,7 +72,8 @@ test('a note reaches a capable site with its source link and no card set',async(
 });
 
 test('a receiver that does not advertise work types gets the packet it always had',async()=>{
-  for(const capabilities of [[],null]){
+  // An empty list, no list, or a receiver from before the status endpoint answered 404.
+  for(const capabilities of [[],null,'no-status']){
     const f=fixture({capabilities,metadata:{workType:'note',adaptedFrom:{workId:'maine-coon-article',revision:3}}});await f.publisher.dispatch(f.row);
     assert.equal(state(f),'published');
     const packet=f.site.packets.get('publication-1');
@@ -80,6 +81,13 @@ test('a receiver that does not advertise work types gets the packet it always ha
     assert.equal(packet.cards,undefined);
     assert.ok(!f.queries.some(q=>/FROM rssd_renditions/.test(q.sql)));
   }
+});
+
+test('a status check that fails for another reason is retried, not guessed',async()=>{
+  const f=fixture({capabilities:'status-down'});
+  await assert.rejects(f.publisher.dispatch(f.row),{status:503});
+  assert.equal(f.site.packets.size,0);
+  assert.equal(f.finished.length,0);
 });
 
 test('an article without a card set for its revision is published without one',async()=>{

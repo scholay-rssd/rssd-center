@@ -11,7 +11,7 @@ const {record,recordFields}=require('./rssd-record.cjs');
 const {StagedDrafts}=require('./staged-drafts.cjs');
 const {RssdRenditions}=require('./renditions.cjs');
 const {prepareStructuredDraft}=require('./structured-draft.cjs');
-const {CHOSEN_WORK_TYPES}=require('./publication.cjs');
+const {CHOSEN_WORK_TYPES,WORK_TYPES_CAPABILITY}=require('./publication.cjs');
 const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args);
 const x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
 const digest=value=>createHash('sha256').update(value).digest('hex');
@@ -582,7 +582,7 @@ class RssdEditorial {
       else p.fail('Unknown rendition operation',404,'not_found');
     }else if(method==='GET'&&parts.length===1&&first==='site'){
       const workspace=await this.workspace(ctx,workspaceId);
-      result={protocol:'scholay-content',version:1,siteId:workspace.siteId,spaceId:workspace.id,origin:workspace.origin,capabilities:['language-editions-v1','rssd-center-v1','staged-drafts-v1','bounded-media-v1','card-renditions-v1']};
+      result={protocol:'scholay-content',version:1,siteId:workspace.siteId,spaceId:workspace.id,origin:workspace.origin,capabilities:['language-editions-v1','rssd-center-v1','staged-drafts-v1','bounded-media-v1','card-renditions-v1',WORK_TYPES_CAPABILITY]};
     }else if(first==='staged-drafts'){
       const drafts=new StagedDrafts(this,inputData);
       if(method==='GET'&&parts.length===1)result=await drafts.list(ctx,workspaceId,query);
