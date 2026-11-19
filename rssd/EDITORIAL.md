@@ -49,8 +49,9 @@ drafts accept the values they read back and refuse a change to them.
 A site publication carries them only when the receiver's status also
 advertises `work-types-v1`; other receivers, including those whose status
 endpoint answers 401 or 404, get the packet they always had. For a long article
-the packet also carries the newest raster card rendition saved for the
-published revision. Both decisions are made before the first submission and
+the packet also carries a raster card rendition saved for the published
+revision: an `ai-image` set before `ai-code`, `ai-code` before `algorithm`,
+then any other variant, and the newest set of that variant. Both decisions are made before the first submission and
 kept with the publication (`payload.sitePacket`), so every retry sends the same
 packet. Publish and restore actions make the same decisions and freeze them in
 the action packet.

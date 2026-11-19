@@ -66,9 +66,10 @@ test('an article reaches a capable site with its type and the newest card set fo
   assert.equal(packet.content.metadata.workType,'article');
   assert.deepEqual(packet.cards,{revision:2,pages:[{...media.a,width:1080,height:1440},{...media.b,width:1080,height:1440}],cover:media.c});
   assert.deepEqual([...f.site.stored.keys()].sort(),[media.a.sha256,media.b.sha256,media.c.sha256]);
-  // The choice is the newest raster set for this revision, kept with the publication before anything is sent.
+  // The choice is a raster set for this revision, ai-image before ai-code before algorithm, then the newest; it is
+  // kept with the publication before anything is sent.
   const lookup=f.queries.find(q=>/FROM rssd_renditions/.test(q.sql)&&!/ id=\$3/.test(q.sql));
-  assert.match(lookup.sql,/summary->>'representation'='raster'[^]*ORDER BY "createdAt" DESC/);
+  assert.match(lookup.sql,/summary->>'representation'='raster'[^]*ORDER BY CASE summary->>'variant' WHEN 'ai-image' THEN 0 WHEN 'ai-code' THEN 1 WHEN 'algorithm' THEN 2 ELSE 3 END,"createdAt" DESC/);
   assert.deepEqual(lookup.values,[orgId,'pets','maine-coon','zh-CN',2]);
   assert.deepEqual(frozen(f),[{sitePacket:{workTypes:true,cardSetId:'rendition-1'}}]);
   assert.deepEqual(f.row.payload.sitePacket,{workTypes:true,cardSetId:'rendition-1'});

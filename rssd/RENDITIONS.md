@@ -6,7 +6,7 @@ The workspace editorial API advertises `card-renditions-v1`. Every workspace use
 
 A rendition belongs to an existing `workId`, language, immutable edition revision and edition hash. `source.hash` records the producer's rendering-input fingerprint. `variant` identifies the production method. The rendition ID hashes the normalized manifest, including engine version, page order, cover and media references. Repeating a save returns the same ID.
 
-A raster rendition saved for an edition's live revision is sent to the website automatically as a `cards` editorial action (see EDITORIAL.md), when the site's receiver advertises `card-updates-v1`. Layout renditions stay in the Center.
+A raster rendition saved for an edition's live revision is sent to the website automatically as a `cards` editorial action (see EDITORIAL.md), when the site's receiver advertises `card-updates-v1`. A website shows one set per revision, chosen by variant: `ai-image` (model-drawn cards), else `ai-code` (智能排版), else `algorithm` (算法排版), else any other; the newest set of that variant. A set saved later in a lower variant is stored but not sent. Layout renditions stay in the Center; turn one into a raster set of the same variant to make it a fallback.
 
 Article categories remain attached through the work's section and edition record kind. Existing editions can acquire renditions through the same API. A newer edition makes the earlier rendition's listing report `current: false`. Historical outputs remain readable through their immutable IDs.
 

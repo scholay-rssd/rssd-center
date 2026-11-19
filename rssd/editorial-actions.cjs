@@ -86,7 +86,7 @@ class RssdEditorialActions {
   });return this.status(ctx,workspaceId,input.requestKey);
  }
  /**
-  * Queues the newest raster card set of a work edition's live revision for its website, once per card set. Nothing
+  * Queues the raster card set a website shows (see RssdPublisher.newestCardSet) of a work edition's live revision for its website, once per card set. Nothing
   * is queued for a note, for a site that is not set up for the workspace, or while another website operation for
   * the edition is pending; the follow-up after that operation queues it instead. `except` is a card set the caller
   * has just sent. Returns the action's request key when it queued one.
