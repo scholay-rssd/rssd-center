@@ -61,7 +61,35 @@ function policy(input) {
   // part of the policy, it is frozen with a claim like every other rule. A section without one keeps the
   // site's own byline. Nothing else about a persona belongs here.
   if (value.persona != null) result.persona = persona(value.persona);
+  // How a work of this section gets the persona that writes it, and whose name it is signed with. It
+  // replaces `persona`, so a section has one or the other. See docs/persona-voice.md.
+  if (value.voice != null) {
+    if (value.persona != null) fail('A section has a persona byline or a voice, not both');
+    result.voice = voice(value.voice);
+  }
   return result;
+}
+// A section's voice. `mode` says who picks the persona of a new work: `fixed` names one; `choose` lets the
+// writer pick among candidates; `random` and `balanced` let the Center draw. Every mode but `fixed` picks
+// from `range`, which is 'all' or a list of persona IDs, and may name a `fallback` for when nothing in the
+// range can be used. `byline` says whose name signs: the persona's founder ('persona') or the site ('site').
+// The same lists are VOICE_MODES and VOICE_BYLINES in persona-voice.mjs, which a test keeps equal.
+const VOICE_MODES = ['fixed', 'choose', 'random', 'balanced'], VOICE_BYLINES = ['persona', 'site'];
+function voice(input) {
+  const value = object(input, 'voice'), byline = value.byline ?? 'persona';
+  if (!VOICE_MODES.includes(value.mode)) fail('Invalid voice.mode');
+  if (!VOICE_BYLINES.includes(byline)) fail('Invalid voice.byline');
+  if (value.mode === 'fixed') {
+    if (value.range != null || value.fallback != null) fail('A fixed voice names one persona and nothing else');
+    return {mode: 'fixed', persona: id(value.persona, 'voice.persona'), byline};
+  }
+  if (value.persona != null) fail('Only a fixed voice names its persona');
+  let range = 'all';
+  if (value.range != null && value.range !== 'all') {
+    range = array(value.range, 'voice.range', 500).map(item => id(item, 'voice.range'));
+    if (!range.length || new Set(range).size !== range.length) fail('voice.range must be nonempty and unique');
+  }
+  return {mode: value.mode, range, ...(value.fallback != null ? {fallback: id(value.fallback, 'voice.fallback')} : {}), byline};
 }
 function persona(input) {
   const value = object(input, 'persona'), name = text(value.name, 'persona.name', 80);
@@ -104,6 +132,13 @@ function demand(input) {
     result.adaptedFrom = {workId: id(from.workId, 'adaptedFrom.workId'), revision: integer(from.revision, 'adaptedFrom.revision', 1)};
   }
   if (value.topicKey != null) result.topicKey = text(value.topicKey, 'topicKey', 200);
+  // An order may name the persona that writes it, or ask for none, whatever the section's voice says.
+  // A note rewritten from an article keeps the article's persona, so it cannot name another.
+  if (value.voice != null) {
+    if (kind !== 'write') fail('Only a write demand names its persona');
+    if (result.adaptedFrom) fail('A note rewritten from an article keeps the persona of the article');
+    result.voice = value.voice === 'none' ? 'none' : {persona: id(object(value.voice, 'voice').persona, 'voice.persona')};
+  }
   // What prompted the topic, such as a hot-board term: who reported it, what it said and when it was seen.
   // A lead only suggests a topic. It is never evidence and never a source of the article.
   if (value.lead != null) {
@@ -151,4 +186,4 @@ function submission(input) {
     baseRevisions: bases, editions};
 }
 module.exports = {VERSION, ProtocolError, fail, object, text, id, locale, array, integer, canonical, hash,
-  publicUrl, json, policy, persona, workspace, demand, DEMAND_WORK_TYPES, referencedMediaIds, edition, submission};
+  publicUrl, json, policy, persona, voice, VOICE_MODES, VOICE_BYLINES, workspace, demand, DEMAND_WORK_TYPES, referencedMediaIds, edition, submission};

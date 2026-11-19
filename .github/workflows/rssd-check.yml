@@ -37,7 +37,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec prisma migrate diff --from-empty --to-schema-datamodel libraries/nestjs-libraries/src/database/prisma/schema.prisma --script --output rssd/postiz-schema.sql
       - run: pnpm exec jest --config rssd/jest-providers.config.cjs --runInBand
-      - run: node --test rssd/coordination.test.cjs rssd/store.test.cjs rssd/discourse.test.cjs rssd/postiz.test.cjs rssd/initialize-database.test.cjs rssd/owner-context.test.cjs rssd/health.test.cjs rssd/labels.test.cjs rssd/community.test.cjs rssd/existing-site-publish.test.cjs rssd/writing-defaults.test.cjs rssd/obsidian-plugin-releases.test.cjs rssd/prune-runtime-modules.test.cjs rssd/work-types.test.cjs rssd/annotations.test.cjs
+      - run: node --test rssd/coordination.test.cjs rssd/store.test.cjs rssd/discourse.test.cjs rssd/postiz.test.cjs rssd/initialize-database.test.cjs rssd/owner-context.test.cjs rssd/health.test.cjs rssd/labels.test.cjs rssd/community.test.cjs rssd/existing-site-publish.test.cjs rssd/writing-defaults.test.cjs rssd/obsidian-plugin-releases.test.cjs rssd/prune-runtime-modules.test.cjs rssd/work-types.test.cjs rssd/annotations.test.cjs rssd/mounts.test.cjs
       - run: pnpm --filter postiz-backend build
       - run: node --experimental-require-module --test rssd/social-receipts.integration.test.cjs
       - run: node --test rssd/http.test.cjs rssd/body-parsers.test.cjs rssd/existing-site-publish.http.test.cjs rssd/writing-defaults.http.test.cjs rssd/obsidian-plugin-releases.http.test.cjs
@@ -47,4 +47,4 @@ jobs:
       - run: python3 -m unittest discover -s rssd -p test_backup.py -v
       - run: python3 -m unittest discover -s rssd -p test_drive_authorization.py -v
       - name: Verify packaged domain runtime
-        run: node -e "for(const name of ['body-parsers','store','publisher','media','migration','editorial','editorial-actions','existing-site-publish','obsidian-plugin-releases','annotations'])require('./apps/backend/dist/rssd/'+name+'.cjs')"
+        run: node -e "for(const name of ['body-parsers','store','publisher','media','migration','editorial','editorial-actions','existing-site-publish','obsidian-plugin-releases','annotations','mounts'])require('./apps/backend/dist/rssd/'+name+'.cjs')"

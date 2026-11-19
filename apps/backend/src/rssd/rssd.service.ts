@@ -22,6 +22,7 @@ const { RssdMigration } = require('../../../../rssd/migration.cjs');
 const { RssdExistingSitePublish } = require('../../../../rssd/existing-site-publish.cjs');
 const { WritingDefaults } = require('../../../../rssd/writing-defaults.cjs');
 const { RssdAnnotations } = require('../../../../rssd/annotations.cjs');
+const { RssdMounts } = require('../../../../rssd/mounts.cjs');
 
 @Injectable()
 export class RssdService implements OnModuleInit, OnModuleDestroy {
@@ -40,9 +41,12 @@ export class RssdService implements OnModuleInit, OnModuleDestroy {
   readonly migration: any;
   readonly existingSitePublish: any;
   readonly annotations: any;
+  readonly mounts: any;
   private timer?: ReturnType<typeof setInterval>;
   constructor(prisma: PrismaService, posts: PostsService, temporal: TemporalService) {
     this.store = new RssdStore(prisma,{writingDefaults:new WritingDefaults()});
+    // The store asks the mount library which persona writes a work when a demand is claimed.
+    this.mounts = this.store.mounts = new RssdMounts(this.store);
     this.coordination = new RssdCoordination(this.store);
     this.existingSitePublish = new RssdExistingSitePublish(this.store);
     this.mcp = new RssdMcp(this.store, this.coordination, this.existingSitePublish);
