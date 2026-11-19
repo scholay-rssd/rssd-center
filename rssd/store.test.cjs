@@ -1635,3 +1635,26 @@ test('a section may be signed by a persona: frozen with the claim, required on a
  const next=await store.claim(f.ctx,{demandId:plain.id});assert.equal('persona' in next.payload.policy,false);
  assert.equal((await store.submit(f.ctx,{requestId:randomUUID(),workId:other,workspaceId:'research',sectionId:'methods',demandId:next.id,claimToken:next.claimToken,editions:[{locale:'en',title:'Unsigned work',bodyMarkdown:'Body.',metadata:{author:'Research desk'}}]},{publish:false})).editions[0].revision,1);
 });
+
+test('a space read is reused while nothing it depends on changed, and read afresh after any change',async()=>{
+ const f=await editorialFixture();
+ await f.service.submit(f.ctx,'research',f.packet,{intent:'draft'});
+ const db=f.service.store.db,original=db.$queryRawUnsafe,whole=[];
+ db.$queryRawUnsafe=function(sql,...args){if(/JOIN LATERAL\s*\(SELECT DISTINCT ON \(locale\)/.test(sql))whole.push(1);return original.call(this,sql,...args);};
+ try{
+  const first=await f.service.entries(f.ctx,'research'),again=await f.service.entries(f.ctx,'research');
+  assert.equal(whole.length,1,'the second read reuses the first');
+  assert.deepEqual(again,first);assert.notEqual(again,first,'each caller gets its own copy');
+  again[0].title='changed by a caller';assert.notEqual((await f.service.entries(f.ctx,'research'))[0].title,'changed by a caller');
+  // A new revision changes the fingerprint.
+  const detail=await f.service.detail(f.ctx,'research','synthetic-manuscript');
+  await f.service.submit(f.ctx,'research',{requestKey:randomUUID(),expectedVersion:detail.version,expectedPublishedVersion:null,data:{...detail.data,markdown:detail.data.markdown+' more'}},{intent:'draft'});
+  const after=await f.service.entries(f.ctx,'research');
+  assert.equal(after.find(row=>row.articleId==='synthetic-manuscript').revision,2);
+  // So does a publication changing state, which entries() reads as the published version.
+  const reads=whole.length;await f.service.entries(f.ctx,'research');assert.equal(whole.length,reads);
+  await db.$executeRawUnsafe(`INSERT INTO rssd_publications ("orgId",id,"workId","workspaceId",locale,revision,"destinationId",state,payload,receipt) SELECT "orgId",$2,"workId",'research',locale,2,'site-research-site','published','{}'::jsonb,'{}'::jsonb FROM rssd_editions WHERE "orgId"=$1 AND revision=2 LIMIT 1`,f.ctx.orgId,randomUUID());
+  assert.equal((await f.service.entries(f.ctx,'research')).find(row=>row.articleId==='synthetic-manuscript').publishedVersion,2);
+  assert.equal(whole.length,reads+1);
+ }finally{db.$queryRawUnsafe=original;}
+});

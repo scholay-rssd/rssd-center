@@ -172,8 +172,30 @@ class RssdEditorial {
     const migration=(await q(this.store.db,'SELECT manifest FROM rssd_migrations WHERE "orgId"=$1 AND "workspaceId"=$2',ctx.orgId,workspaceId))[0];
     return {...row.payload,origin:migration?.manifest?.site?.origin||''};
   }
+  /**
+   * A fingerprint of everything entries() reads for one space: its works, editions, publications, visibility
+   * states, legacy documents and the workspace record. Cheap (indexed counts and digests, no JSON documents), so
+   * a whole-space read can be reused exactly while nothing it depends on changed.
+   */
+  async entriesStamp(ctx,workspaceId,siteId){
+    const [row]=await q(this.store.db,`SELECT md5(concat_ws('|',
+      (SELECT count(*)||':'||md5(coalesce(string_agg(id||':'||"sectionId"||':'||"updatedAt"::text,',' ORDER BY id),'')) FROM rssd_works WHERE "orgId"=$1 AND "workspaceId"=$2),
+      (SELECT count(*)||':'||coalesce(max(e."createdAt")::text,'')||':'||coalesce(sum(e.revision),0) FROM rssd_editions e JOIN rssd_works w ON w."orgId"=e."orgId" AND w.id=e."workId" WHERE w."orgId"=$1 AND w."workspaceId"=$2),
+      (SELECT count(*)||':'||md5(coalesce(string_agg(p.id||':'||p.state||':'||p.revision||':'||p."destinationId"||':'||md5(coalesce(p.receipt::text,'')),',' ORDER BY p.id),'')) FROM rssd_publications p JOIN rssd_works w ON w."orgId"=p."orgId" AND w.id=p."workId" WHERE w."orgId"=$1 AND w."workspaceId"=$2),
+      (SELECT count(*)||':'||md5(coalesce(string_agg(s."workId"||s.locale||s.visibility||s.generation||s."updatedAt"::text,',' ORDER BY s."workId",s.locale),'')) FROM rssd_editorial_states s JOIN rssd_works w ON w."orgId"=s."orgId" AND w.id=s."workId" WHERE w."orgId"=$1 AND w."workspaceId"=$2),
+      (SELECT count(*)||':'||md5(coalesce(string_agg("documentId"||':'||"workId"||':'||locale||':'||"sourceHash"||':'||coalesce("deletedAt"::text,''),',' ORDER BY "documentId"),'')) FROM rssd_legacy_documents WHERE "orgId"=$1 AND "siteId"=$3),
+      (SELECT md5(payload::text) FROM rssd_workspaces WHERE "orgId"=$1 AND id=$2))) AS stamp`,ctx.orgId,workspaceId,siteId);
+    return row.stamp;
+  }
   async entries(ctx,workspaceId){
     const workspace=await this.workspace(ctx,workspaceId);
+    // Reading a whole space joins every work with its editions, publications and legacy documents: seconds for a
+    // space of thousands of works, and catalog pages and batch reads each need it. The rows are kept per space and
+    // reused only while the fingerprint above is unchanged, so a reader never sees older data than before. Each
+    // caller gets its own copy. (Instances made inside a write transaction start empty and read afresh.)
+    const stamp=await this.entriesStamp(ctx,workspaceId,workspace.siteId),key=ctx.orgId+'\0'+workspaceId;
+    const cached=this.entriesCache?.get(key);
+    if(cached?.stamp===stamp)return structuredClone(cached.rows);
     const rows=await q(this.store.db,`SELECT w.id AS "workId",w."sectionId",e.locale,e.revision,
       e.payload->>'title' AS title,e.payload->>'summary' AS summary,e.payload->'metadata' AS metadata,e.payload->'sources' AS sources,
       e."createdAt",l."documentId",l."deletedAt",l.source->'document'->>'kind' AS "legacyKind",
@@ -190,7 +212,7 @@ class RssdEditorial {
       LEFT JOIN rssd_editions pe ON pe."orgId"=w."orgId" AND pe."workId"=w.id AND pe.locale=e.locale AND pe.revision=pub.revision
       LEFT JOIN rssd_editorial_states visibility ON visibility."orgId"=w."orgId" AND visibility."workId"=w.id AND visibility.locale=e.locale
       WHERE w."orgId"=$1 AND w."workspaceId"=$2 ORDER BY w.id,e.locale`,ctx.orgId,workspaceId,workspace.siteId,'site-'+workspace.siteId);
-    return rows.map(row=>{
+    const entries=rows.map(row=>{
       const kind=row.legacyKind||row.metadata?.record?.kind||'news';
       const recordId=row.documentId||row.metadata?.editorial?.documentId||(kind==='news'?null:documentId(row));
       const id=kind==='news'?(row.legacyArticleId||row.metadata?.editorial?.articleId):'record-'+recordId;
@@ -198,6 +220,8 @@ class RssdEditorial {
         publishedVersion:['withdrawn','deleted'].includes(row.visibility)?null:row.publishedVersion,
         documentId:recordId,kind,origin:workspace.origin,articleId:articleId({...row,articleId:id}),url:row.legacyRoute||row.metadata?.publication?.path||((row.locale==='en'?'/en':'')+'/news/'+p.hash(row.workId).slice(0,32)+'/')};
     });
+    (this.entriesCache??=new Map()).set(key,{stamp,rows:entries});
+    return structuredClone(entries);
   }
   async find(ctx,workspaceId,id,{allowDeleted=false,locale}={}){
     p.id(id);if(locale!==undefined)p.locale(locale);
