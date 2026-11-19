@@ -36,7 +36,7 @@ function Devices({ api, registry }: { api: RssdApi; registry: Row[] }) {
         <tbody>{(rows || []).map(row => <tr key={row.id}>
           <td><strong>{row.name}</strong>{row.details?.message && <small>{row.details.message}</small>}</td>
           <td><span className="cp-state">{row.revokedAt ? '已撤销' : stateNames[row.state] || row.state}</span></td>
-          <td>{row.workspaceIds.map((id: string) => registry.find(w => w.id === id)?.name || id).join('、')}</td>
+          <td>{row.workspaceIds.map((id: string) => registry.find(w => w.id === id)?.name || id).join('、')}{row.grants?.some((grant: Row) => grant.operation === 'center' && !grant.revokedAt) && <small>包括 RSSD Center</small>}</td>
           <td><time>{when(row.heartbeatAt)}</time></td>
           <td>{!row.revokedAt && <span className="ca-row-actions">
             <button className="cp-text-button" disabled={busy} onClick={() => action(async () => { setDestinations(await api('/destinations')); setGrantFor(row); })}>授予排期</button>
@@ -55,9 +55,10 @@ function Devices({ api, registry }: { api: RssdApi; registry: Row[] }) {
           <p className="cp-muted">复制到对应设备的 RSSD 中心设置中。</p>
           <input aria-label="设备连接凭据" readOnly type="password" value={token} />
           <div className="ca-actions"><button onClick={() => void navigator.clipboard.writeText(token).then(() => setNotice('连接凭据已复制')).catch(() => setError('复制失败，请选择后复制'))}>复制凭据</button><button className="cp-primary" onClick={() => { setToken(''); setConnecting(false); }}>完成</button></div>
-        </> : <form className="cp-detail-form ca-form" onSubmit={event => { event.preventDefault(); const values = new FormData(event.currentTarget); action(async () => { const worker = await api('/workers', 'POST', { name: values.get('name'), workspaceIds: values.getAll('spaces') }); setToken(worker.token); await load(); }); }}>
+        </> : <form className="cp-detail-form ca-form" onSubmit={event => { event.preventDefault(); const values = new FormData(event.currentTarget); action(async () => { const worker = await api('/workers', 'POST', { name: values.get('name'), workspaceIds: values.getAll('spaces'), center: values.get('center') === 'on' }); setToken(worker.token); await load(); }); }}>
           <label>设备名称<input name="name" required placeholder="例如：Mac mini" /></label>
           <fieldset><legend>允许处理的工作空间</legend>{registry.map(w => <label className="ca-check" key={w.id}><input type="checkbox" name="spaces" value={w.id} />{w.name}</label>)}</fieldset>
+          <fieldset><legend>RSSD Center</legend><label className="ca-check"><input type="checkbox" name="center" />包括 RSSD Center：在 Obsidian 里还能看到这些空间的选题池、发布状态和总览</label></fieldset>
           <footer><button className="cp-primary" disabled={busy}>生成凭据</button></footer>
         </form>}
       </div>
