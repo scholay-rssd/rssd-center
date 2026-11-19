@@ -23,7 +23,11 @@ All endpoints extend `/api/rssd/v1`; original v1 and Postiz APIs remain compatib
 
 Demand edits accept title, brief, priority, requiredLocales, dueAt, workType, adaptedFrom, topicKey and lead; `null` clears the last four, and an edit that changes the title or topic key is checked for a repeat like a new demand. Workspace, section, kind and source remain fixed. Claimed rules are frozen. Original request replay returns the original result; changed payloads conflict. Goal definitions contain workspaceId, sectionId, title, brief, target (0–1000), period (day/week/month), IANA timezone, requiredLocales and enabled. Scope is immutable. New goals default to paused. Native Postiz schedules continue through `/launches`; changing an RSSD schedule never creates a replacement post.
 
-Errors retain HTTP status and code: forbidden, not_found, revision_conflict, request_conflict, demand_frozen, migration_staged, publication_started, source_conflict, topic_repeat, open_translate_conflict, english_only, unsupported_destination, identity_conflict, store_only_conflict. Clients retain original request IDs after timeout. No synthetic-data fallback is allowed.
+Errors retain HTTP status and code: forbidden, not_found, revision_conflict, request_conflict, demand_frozen, migration_staged, publication_started, source_conflict, topic_repeat, byline_conflict, open_translate_conflict, english_only, unsupported_destination, identity_conflict, store_only_conflict. Clients retain original request IDs after timeout. No synthetic-data fallback is allowed.
+
+## Persona byline
+
+A section's policy may name the persona that signs its new works: `policy.persona {id,name}`, set by the owner with the other section rules. It holds nothing else about a persona. Like every rule it is frozen with a claim. A submission for a claimed write demand whose frozen policy names a persona must carry `metadata.author` equal to the persona's name and `metadata.persona.id` equal to its ID in every edition, or it is refused with `byline_conflict`. Translations and updates keep the byline of the edition they came from and are not checked. `metadata.persona` stays in the Center: a site packet carries the author's name only. A device that does not know personas is refused in a section that names one, so update devices before binding a section.
 
 ## Persistent maintenance
 

@@ -1589,3 +1589,31 @@ test('a device may withdraw an unclaimed demand of its workspace, and nothing mo
  const far=await store.createDemand(f.owner,{workspaceId:'other',sectionId:'methods',title:'Far away'});
  await assert.rejects(store.changeDemand(f.ctx,far.id,{action:'cancel'}),{code:'forbidden'});
 });
+
+test('a section may be signed by a persona: frozen with the claim, required on a new work, absent from the public packet',async()=>{
+ const f=await fixture(),{publicContent}=require('./publication.cjs');
+ const sections=persona=>[{id:'methods',name:'Methods',policy:{version:2,targets:[],...(persona?{persona}:{})}}];
+ await assert.rejects(store.saveWorkspace(f.owner,{id:'research',name:'Research',sections:sections({id:'M01',name:' Kiya'})},1),/persona.name/);
+ await store.saveWorkspace(f.owner,{id:'research',name:'Research',sections:sections({id:'M01',name:'Kiya',age:29})},1);
+ const saved=(await db.$queryRawUnsafe('SELECT payload FROM rssd_workspaces WHERE "orgId"=$1 AND id=$2',f.owner.orgId,'research'))[0];
+ assert.deepEqual(saved.payload.sections[0].policy.persona,{id:'M01',name:'Kiya'});
+ const demand=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Signed work',requiredLocales:['en']});
+ const claim=await store.claim(f.ctx,{demandId:demand.id});assert.deepEqual(claim.payload.policy.persona,{id:'M01',name:'Kiya'});
+ // A later change of the section does not reach the claim.
+ await store.saveWorkspace(f.owner,{id:'research',name:'Research',sections:sections({id:'M02',name:'Gorge'})},2);
+ const packet=metadata=>({requestId:randomUUID(),workId:f.packet.workId,workspaceId:'research',sectionId:'methods',demandId:claim.id,claimToken:claim.claimToken,editions:[{locale:'en',title:'Signed work',bodyMarkdown:'Body.',metadata}]});
+ for(const metadata of [{},{author:'Research desk'},{author:'Kiya'},{author:'Kiya',persona:{id:'M02'}},{author:'Gorge',persona:{id:'M02'}}])
+  await assert.rejects(store.submit(f.ctx,packet(metadata),{publish:false}),{code:'byline_conflict'});
+ const accepted=await store.submit(f.ctx,packet({author:'Kiya',persona:{id:'M01'}}),{publish:false});assert.equal(accepted.editions[0].revision,1);
+ const edition=await store.edition(f.ctx,f.packet.workId,'en',1);
+ assert.equal(edition.payload.metadata.author,'Kiya');assert.deepEqual(edition.payload.metadata.persona,{id:'M01'});
+ // The site receives the name only.
+ const sent=publicContent(edition.payload);assert.equal(sent.metadata.author,'Kiya');assert.equal('persona' in sent.metadata,false);assert.equal(JSON.stringify(sent).includes('M01'),false);
+ // A section without a persona, and a submission without a claim, are as before.
+ const other=randomUUID();
+ await store.saveWorkspace(f.owner,{id:'research',name:'Research',sections:sections(null)},3);
+ const plain=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Unsigned work',requiredLocales:['en']});
+ await store.changeDemand(f.ctx,claim.id,{action:'release',claimToken:claim.claimToken});
+ const next=await store.claim(f.ctx,{demandId:plain.id});assert.equal('persona' in next.payload.policy,false);
+ assert.equal((await store.submit(f.ctx,{requestId:randomUUID(),workId:other,workspaceId:'research',sectionId:'methods',demandId:next.id,claimToken:next.claimToken,editions:[{locale:'en',title:'Unsigned work',bodyMarkdown:'Body.',metadata:{author:'Research desk'}}]},{publish:false})).editions[0].revision,1);
+});

@@ -440,6 +440,15 @@ class RssdStore {
         if(demand.payload.source && demand.payload.source.workId!==value.workId)p.fail('Update or translation must retain the source work identity',409);
         if(demand.payload.workId && demand.payload.workId!==value.workId)p.fail('Language editions must retain the original submission work identity',409);
         policy=demand.payload.policy;
+        // A new work of a section whose frozen policy names a persona carries that persona's name as its
+        // byline and its ID in the edition's private metadata. Translations and updates keep the byline of
+        // the edition they came from, so they are not checked here.
+        if(demand.kind==='write'&&policy?.persona){
+          for(const edition of value.editions){
+            if(edition.metadata?.author!==policy.persona.name||edition.metadata?.persona?.id!==policy.persona.id)
+              p.fail('This section is signed by '+policy.persona.name+'; the '+edition.locale+' edition carries another byline',409,'byline_conflict');
+          }
+        }
         storeOnlyDemand=isStoreOnlyPayload(demand.payload);
         if(storeOnlyDemand){
           if(demand.payload.storeOnlyWorkerId!==ctx.workerId)p.fail('Store-only demand belongs to another device',403,'forbidden');
