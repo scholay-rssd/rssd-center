@@ -6,6 +6,13 @@ const keys={
  openSource:['date','category','url','relatedUrl','status']
 };
 const sections={year:[['summary',['摘要']],['body',['正文']]],history:[['factSummary',['事实摘要']],['historicalSignificance',['学术意义','历史意义']]],openSource:[['summary',['项目简介']],['value',['学术价值','使用价值']]]};
+// English editions may localize their public headings. Chinese aliases stay
+// valid for retained English revisions; section identity and order are unchanged.
+const englishSections={
+ year:{summary:['Summary','Abstract'],body:['Body','Details']},
+ history:{factSummary:['Fact summary','Facts'],historicalSignificance:['Historical significance','Academic significance']},
+ openSource:{summary:['Project overview','Project summary'],value:['Research value','Practical value']}
+};
 function record(value){
  p.object(value,'structured record');if(!keys[value.kind])p.fail('Unknown structured record kind');
  const original=p.object(value.fields,'record fields'),fields={};
@@ -20,7 +27,13 @@ function recordFields(value,content){
   if(!fenced){const match=/^## ([^\n]+)$/.exec(line);if(match)headings.push({label:match[1].trim(),start:offset,end:offset+line.length+1});}
   offset+=line.length+1;
  }
- const required=sections[kind].map(([key,labels])=>{const found=headings.filter(h=>labels.includes(h.label));if(found.length!==1)p.fail('Structured content must retain one heading: '+labels.join(' / '));return {key,...found[0]};});
+ const required=sections[kind].map(([key,chineseLabels])=>{
+  const english=content.locale==='en',labels=english?[...englishSections[kind][key],...chineseLabels]:chineseLabels;
+  const names=new Set(labels.map(label=>english?label.toLowerCase():label));
+  const found=headings.filter(h=>names.has(english?h.label.toLowerCase():h.label));
+  if(found.length!==1)p.fail('Structured content must retain one heading: '+labels.join(' / '));
+  return {key,...found[0]};
+ });
  if(required.some((h,i)=>i>0&&h.start<=required[i-1].start))p.fail('Structured content headings are out of order');
  const leading=markdown.slice(0,required[0].start).replace(/^# [^\n]+\n?/,'').trim();if(leading)p.fail('Put structured prose inside its named sections');
  const result={...fields,title:content.title};for(let i=0;i<required.length;i++)result[required[i].key]=markdown.slice(required[i].end,required[i+1]?.start??markdown.length).trim();
