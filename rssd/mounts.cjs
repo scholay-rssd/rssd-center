@@ -33,23 +33,27 @@ class RssdMounts {
   * refused, because a changed persona needs a new revision. Owner only.
   */
  async savePersonas(ctx,input){
-  admin(ctx);const {personaEntry,personaSnapshot}=await loadVoices();
+  admin(ctx);const {personaEntry,writingPersonaSnapshot}=await loadVoices();
   // One request stays under the default body limit; a larger library is sent in several requests.
   const list=p.array(p.object(input,'personas').personas,'personas',30);
   if(!list.length)p.fail('Name at least one persona',400,'invalid_persona');
-  const prepared=list.map(item=>{const value=p.object(item,'persona');return contract(()=>({snapshot:personaSnapshot(value.snapshot),entry:personaEntry(value.snapshot,{founderName:value.founderName})}));});
+  const prepared=list.map(item=>contract(()=>{
+   const value=p.object(item,'persona'),snapshot=writingPersonaSnapshot(value.snapshot);
+   return {snapshot,entry:personaEntry(snapshot,{founderName:value.founderName})};
+  }));
   if(new Set(prepared.map(x=>x.entry.id+'\0'+x.entry.revision)).size!==prepared.length)p.fail('A persona revision is listed twice',400,'invalid_persona');
   return this.store.transaction(async db=>{
    await execute(db,'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',ctx.orgId+':mounts:'+PERSONA);
    const personas=[];
    for(const {snapshot,entry} of prepared){
-    const {active:_,...kept}=entry,old=await one(db,'SELECT hash,entry FROM rssd_mounts WHERE "orgId"=$1 AND kind=$2 AND id=$3 AND revision=$4',ctx.orgId,PERSONA,entry.id,entry.revision);
+    const {active:_,...kept}=entry,old=await one(db,'SELECT hash,entry,content FROM rssd_mounts WHERE "orgId"=$1 AND kind=$2 AND id=$3 AND revision=$4',ctx.orgId,PERSONA,entry.id,entry.revision);
     if(old){
-     if(old.hash!==entry.snapshotHash||old.entry.founder?.name!==entry.founder.name)p.fail('Persona '+entry.id+' already has revision '+entry.revision+' with other content; a changed persona needs a new revision',409,'mount_conflict');
+     const same=old.hash===entry.snapshotHash || (!old.entry.presetIdOnly && writingPersonaSnapshot(old.content).snapshotHash===entry.snapshotHash);
+     if(!same||old.entry.founder?.name!==entry.founder.name)p.fail('Persona '+entry.id+' already has revision '+entry.revision+' with other content; a changed persona needs a new revision',409,'mount_conflict');
      personas.push({id:entry.id,revision:entry.revision,status:'existing'});continue;
     }
     await execute(db,'INSERT INTO rssd_mounts ("orgId",kind,id,revision,version,hash,entry,content) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb)',
-     ctx.orgId,PERSONA,entry.id,entry.revision,Number(/\.v(\d+)$/.exec(entry.revision)[1]),entry.snapshotHash,JSON.stringify(kept),JSON.stringify(snapshot));
+     ctx.orgId,PERSONA,entry.id,entry.revision,Number(/\.v(\d+)$/.exec(entry.revision)[1]),entry.snapshotHash,JSON.stringify({...kept,presetIdOnly:true}),JSON.stringify(snapshot));
     personas.push({id:entry.id,revision:entry.revision,status:'created'});
    }
    // A persona that was retired stays retired when a new revision of it arrives.
@@ -76,9 +80,15 @@ class RssdMounts {
   * revision that wrote it.
   */
  async library(db,orgId){
-  const all=await rows(db,'SELECT id,version,entry,"retiredAt" FROM rssd_mounts WHERE "orgId"=$1 AND kind=$2 ORDER BY id,version',orgId,PERSONA);
+  const all=await rows(db,'SELECT id,version,entry,"retiredAt",CASE WHEN NOT (entry ? \'presetIdOnly\') THEN content END AS legacy FROM rssd_mounts WHERE "orgId"=$1 AND kind=$2 ORDER BY id,version',orgId,PERSONA);
   const newest=new Map(all.map(row=>[row.id,row.version]));
-  return all.map(row=>({...row.entry,active:!row.retiredAt&&row.version===newest.get(row.id)}));
+  const {writingPersonaSnapshot,personaEntry}=await loadVoices();
+  return all.map(row=>{
+   const active=!row.retiredAt && row.version===newest.get(row.id);
+   if(!row.legacy)return {...row.entry,active};
+   const snapshot=writingPersonaSnapshot(row.legacy);
+   return {...personaEntry(snapshot,{founderName:row.entry.founder.name,active}),originalHash:row.entry.snapshotHash};
+  });
  }
 
  /** The personas of the library for the owner: one row per persona, its newest revision, who signs and whether it is in use. No content. */
@@ -108,7 +118,7 @@ class RssdMounts {
     ?await one(db,`SELECT payload->'metadata' AS metadata FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND revision=$4`,orgId,from.workId,from.locale,from.revision)
     :await one(db,`SELECT payload->'metadata' AS metadata FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND revision=$3 ORDER BY locale DESC LIMIT 1`,orgId,from.workId,from.revision);
    const kept=edition?.metadata?.voice;
-   source=kept?.id&&kept.revision?{id:kept.id,revision:kept.revision,signed:Boolean(edition.metadata.persona?.id)}:null;
+   source=kept?.id&&kept.revision?{id:kept.id,revision:kept.revision,snapshotHash:kept.snapshotHash,signed:Boolean(edition.metadata.persona?.id)}:null;
   }
   if(!source&&!voice&&!order)return null;
   const {decideVoice}=await loadVoices(),library=await this.library(db,orgId);
@@ -118,13 +128,21 @@ class RssdMounts {
      AND state IN ('claimed','blocked','completed') AND payload->'voiceDecision'->>'state'='chosen' AND "updatedAt">CURRENT_TIMESTAMP-make_interval(days=>$5) GROUP BY 1`,orgId,demand.workspaceId,demand.sectionId,demand.id,USAGE_DAYS);
    usage=Object.fromEntries(used.map(row=>[row.id,row.count]));
   }
-  return decideVoice({voice,order,source,library,demandId:demand.id,usage});
+  const decision=decideVoice({voice,order,source,library,demandId:demand.id,usage});
+  // A writer running the old code may copy its source edition's original hash into a derived note.
+  if(decision.method==='kept' && source.snapshotHash && source.snapshotHash!==decision.persona.snapshotHash &&
+     library.some(entry=>entry.id===source.id && entry.revision===source.revision && entry.originalHash===source.snapshotHash))
+   decision.sourceSnapshotHash=source.snapshotHash;
+  return decision;
  }
 
  /** The stored snapshot a decision refers to, or null. */
  async snapshot(db,orgId,persona){
   const row=await one(db,'SELECT hash,content FROM rssd_mounts WHERE "orgId"=$1 AND kind=$2 AND id=$3 AND revision=$4',orgId,PERSONA,persona.id,persona.revision);
-  return row&&row.hash===persona.snapshotHash?row.content:null;
+  if(!row)return null;
+  if(row.hash===persona.snapshotHash)return row.content;
+  const {writingPersonaSnapshot}=await loadVoices(),writing=writingPersonaSnapshot(row.content);
+  return writing.snapshotHash===persona.snapshotHash?writing:null;
  }
 
  /**
@@ -169,7 +187,7 @@ class RssdMounts {
   * What a submission under a claim must carry for the claim's frozen decision, checked for each edition of
   * a new work. A decision the writer never settled lapses here. Returns the decision that applies.
   */
- async checkSubmission(decision,editions){
+ async checkSubmission(decision,editions,{presetRecord=false}={}){
   const {lapseVoice}=await loadVoices(),settled=lapseVoice(decision),chosen=settled.state==='chosen'?settled.persona:null;
   for(const edition of editions){
    const metadata=edition.metadata||{},wrote=metadata.voice,where='the '+edition.locale+' edition ';
@@ -177,11 +195,16 @@ class RssdMounts {
     if(wrote||metadata.persona)p.fail('This work has no persona; '+where+'names one',409,'voice_conflict');
     continue;
    }
-   if(wrote?.id!==chosen.id||wrote?.revision!==chosen.revision||wrote?.snapshotHash!==chosen.snapshotHash)
+   const sourceHash=!presetRecord && settled.method==='kept' && settled.sourceSnapshotHash && wrote?.snapshotHash===settled.sourceSnapshotHash;
+   if(wrote?.id!==chosen.id||wrote?.revision!==chosen.revision||(!sourceHash && wrote?.snapshotHash!==chosen.snapshotHash))
     p.fail('This work is written by persona '+chosen.id+' at '+chosen.revision+'; '+where+'records another',409,'voice_conflict');
    if(settled.byline==='persona'){
-    if(metadata.author!==chosen.founder.name||metadata.persona?.id!==chosen.founder.id)p.fail('This work is signed by '+chosen.founder.name+'; '+where+'carries another byline',409,'byline_conflict');
+    const signingId=metadata.persona?.id;
+    const matches=signingId===chosen.id || (!presetRecord && signingId===chosen.founder.id);
+    if(metadata.author!==chosen.founder.name || !matches || Object.keys(metadata.persona).length!==1)
+     p.fail('This work is signed by '+chosen.founder.name+'; '+where+'carries another signing identity',409,'byline_conflict');
    }else if(metadata.persona)p.fail('This work is signed by the site; '+where+'names a persona as its byline',409,'byline_conflict');
+   if(Object.keys(wrote).length!==3)p.fail('A writing record contains only the preset ID, revision and snapshot hash',409,'voice_conflict');
   }
   return settled;
  }

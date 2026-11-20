@@ -32,8 +32,7 @@ const sha256=value=>createHash('sha256').update(value).digest('hex');
 /**
  * A preset's writing snapshot as the persona library compiles it, checked and returned as a plain copy.
  * It is accepted only whole: the library's schema, exactly its fields, and a hash that matches. RSSD never
- * edits a snapshot, so the hash a work records can be checked against the library later. A snapshot carries
- * no demographics, and one that does is refused.
+ * accepts changes under the same hash. A snapshot carries no demographics, and one that does is refused.
  */
 export function personaSnapshot(input){
  let raw;try{raw=JSON.stringify(input);}catch{fail('A persona snapshot must be plain data');}
@@ -55,6 +54,40 @@ export function personaSnapshot(input){
  const {snapshotHash,...payload}=s;
  if(sha256(JSON.stringify(sorted(payload)))!==snapshotHash)fail('The persona snapshot does not match its hash','persona_hash_mismatch');
  return s;
+}
+
+/**
+ * Compile the verified library snapshot into the copy RSSD hands a writer. The v1 wire format requires
+ * three display-name fields, so all three hold the preset ID. Keep the source profile and personality
+ * hashes for provenance, and hash the actual writing copy so older devices can also verify it.
+ */
+export function writingPersonaSnapshot(input) {
+ const snapshot = personaSnapshot(input);
+ const {preset, publicProfile} = snapshot;
+ const aliases = [...new Set(Object.values(publicProfile))].filter(name => name !== preset.id);
+ if (!aliases.length) return snapshot;
+
+ // Replace whole Latin words (an abbreviation can also be part of an ordinary word), and names embedded
+ // in Chinese prose. Match longer names first and replace in one pass so overlapping aliases stay intact.
+ const pattern = aliases.sort((a, b) => b.length - a.length).map(name => {
+  const literal = name.replace(/[.*+?^{}$()|[\]\\]/g, '\\$&');
+  const left = /^\w/.test(name) ? '(?<![a-zA-Z0-9_])' : '';
+  const right = /\w$/.test(name) ? '(?![a-zA-Z0-9_])' : '';
+  return left + literal + right;
+ }).join('|');
+ const names = new RegExp(pattern, 'g');
+ const byId = text => text.replace(names, () => preset.id);
+ const behavior = {};
+ for (const [key, value] of Object.entries(snapshot.behavior)) {
+  behavior[key] = Array.isArray(value) ? value.map(byId) : byId(value);
+ }
+ const identityLine = 'Public name: ' + publicProfile.chineseScreenName + ' / ' + publicProfile.englishScreenName + '.';
+ const instructions = snapshot.developerInstructions.split(/\r?\n/).filter(line => line !== identityLine).join('\n');
+ const {snapshotHash, ...payload} = snapshot;
+ payload.publicProfile = {chineseScreenName:preset.id, englishScreenName:preset.id, abbreviation:preset.id};
+ payload.behavior = behavior;
+ payload.developerInstructions = byId(instructions).trim() || 'Preset: ' + preset.id + '.';
+ return personaSnapshot({...payload, snapshotHash:sha256(JSON.stringify(sorted(payload)))});
 }
 
 /**

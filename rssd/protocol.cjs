@@ -75,21 +75,25 @@ function policy(input) {
 // range can be used. `byline` says whose name signs: the persona's founder ('persona') or the site ('site').
 // The same lists are VOICE_MODES and VOICE_BYLINES in persona-voice.mjs, which a test keeps equal.
 const VOICE_MODES = ['fixed', 'choose', 'random', 'balanced'], VOICE_BYLINES = ['persona', 'site'];
+function presetId(value, field) {
+  if (typeof value !== 'string' || !/^P\d{4,}$/.test(value)) fail('Invalid ' + field + ': expected a P preset ID');
+  return id(value, field);
+}
 function voice(input) {
   const value = object(input, 'voice'), byline = value.byline ?? 'persona';
   if (!VOICE_MODES.includes(value.mode)) fail('Invalid voice.mode');
   if (!VOICE_BYLINES.includes(byline)) fail('Invalid voice.byline');
   if (value.mode === 'fixed') {
     if (value.range != null || value.fallback != null) fail('A fixed voice names one persona and nothing else');
-    return {mode: 'fixed', persona: id(value.persona, 'voice.persona'), byline};
+    return {mode: 'fixed', persona: presetId(value.persona, 'voice.persona'), byline};
   }
   if (value.persona != null) fail('Only a fixed voice names its persona');
   let range = 'all';
   if (value.range != null && value.range !== 'all') {
-    range = array(value.range, 'voice.range', 500).map(item => id(item, 'voice.range'));
+    range = array(value.range, 'voice.range', 500).map(item => presetId(item, 'voice.range'));
     if (!range.length || new Set(range).size !== range.length) fail('voice.range must be nonempty and unique');
   }
-  return {mode: value.mode, range, ...(value.fallback != null ? {fallback: id(value.fallback, 'voice.fallback')} : {}), byline};
+  return {mode: value.mode, range, ...(value.fallback != null ? {fallback: presetId(value.fallback, 'voice.fallback')} : {}), byline};
 }
 function persona(input) {
   const value = object(input, 'persona'), name = text(value.name, 'persona.name', 80);
@@ -137,7 +141,7 @@ function demand(input) {
   if (value.voice != null) {
     if (kind !== 'write') fail('Only a write demand names its persona');
     if (result.adaptedFrom) fail('A note rewritten from an article keeps the persona of the article');
-    result.voice = value.voice === 'none' ? 'none' : {persona: id(object(value.voice, 'voice').persona, 'voice.persona')};
+    result.voice = value.voice === 'none' ? 'none' : {persona: presetId(object(value.voice, 'voice').persona, 'voice.persona')};
   }
   // What prompted the topic, such as a hot-board term: who reported it, what it said and when it was seen.
   // A lead only suggests a topic. It is never evidence and never a source of the article.
