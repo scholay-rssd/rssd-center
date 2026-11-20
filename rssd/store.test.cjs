@@ -1319,6 +1319,12 @@ test('retired imported works can claim source-bound English continuation without
   const accepted=await store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'archive',demandId:claim.id,claimToken:claim.claimToken,baseRevisions:{en:0},editions:[{locale:'en',title:'English continuation',bodyMarkdown:'Complete English translation.',translationOf:request.source}]});
   assert.equal(accepted.status,'accepted');assert.equal(accepted.publicationIds.length,storeOnly?0:1);
   assert.equal((await store.edition(f.ctx,workId,'zh-CN',1)).hash,zh.hash);
+  const {RssdExistingSitePublish}=require('./existing-site-publish.cjs');
+  const english=await store.edition(f.ctx,workId,'en',1),sitePublish=new RssdExistingSitePublish(store);
+  const publication=await sitePublish.publish(f.ctx,{requestId:randomUUID(),workId,locale:'en',revision:english.revision,hash:english.hash,destinationId:'site-research-site'});
+  assert.equal(publication.destinationId,'site-research-site');assert.equal(publication.publicationState,'queued');
+  assert.equal((await store.publications(f.ctx)).length,1);
+  await assert.rejects(sitePublish.publish(f.ctx,{requestId:randomUUID(),workId,locale:'en',revision:english.revision,hash:english.hash,destinationId:'external'}),{code:'unsupported_destination'});
   assert.deepEqual((await store.registry(f.ctx)).workspaces[0].sections.map(s=>s.id),['methods']);
   await assert.rejects(store.workspace(db,f.ctx,'research','archive'),{status:404});
  }

@@ -69,7 +69,7 @@ class RssdExistingSitePublish {
    const openStoreOnly=await one(db,`SELECT id FROM rssd_demands WHERE "orgId"=$1 AND kind='translate' AND state IN ('queued','claimed','blocked')
      AND payload->>'storeOnly'='true' AND payload->'source'->>'workId'=$2 LIMIT 1`,ctx.orgId,workId);
    if(openStoreOnly)p.fail('An open store-only translate forbids other writes to this work',409,'store_only_conflict');
-   const {row:workspace}=await this.store.workspace(db,ctx,work.workspaceId,work.sectionId);
+   const {row:workspace}=await this.store.workSection(db,ctx,work.workspaceId,work.sectionId,workId);
    const siteId=workspace.payload.siteId;
    if(!siteId)p.fail('Workspace has no website destination',409,'missing_destination');
    const canonical='site-'+siteId;
