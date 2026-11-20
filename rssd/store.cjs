@@ -380,7 +380,7 @@ class RssdStore {
       // earlier claim that was released is not carried over.
       const {voiceDecision:_,personaRecordVersion:_format,...queued}=demand.payload;
       const voiceDecision=this.mounts?await this.mounts.decide(db,ctx.orgId,demand,section.policy):null;
-      const claimToken=randomUUID(),payload={...queued,policy:section.policy,workspaceRevision:row.revision,destinations,outputContractVersion:1,claimExpiresAt:new Date(Date.now()+CLAIM_TTL_MS).toISOString(),...(writingDefaults?{writingDefaults}:{}),...(voiceDecision?{voiceDecision}:{}),...(voiceDecision && input.personaRecordVersion===2?{personaRecordVersion:2}:{})};
+      const claimToken=randomUUID(),payload={...queued,policy:section.policy,workspaceRevision:row.revision,destinations,outputContractVersion:1,claimExpiresAt:new Date(Date.now()+CLAIM_TTL_MS).toISOString(),...(writingDefaults?{writingDefaults}:{}),...(voiceDecision?{voiceDecision,personaRecordVersion:2}:{})};
       const result=await one(db,`UPDATE rssd_demands SET state='claimed',"workerId"=$3,"claimToken"=$4,generation=generation+1,
         payload=$5::jsonb,"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2 RETURNING *`,ctx.orgId,demand.id,ctx.workerId,claimToken,encoded(payload));
       await audit(db,ctx,'demand.claim',{id:demand.id,generation:result.generation});
