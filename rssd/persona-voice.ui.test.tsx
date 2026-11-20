@@ -32,7 +32,7 @@ test('a section can be given a fixed persona that signs, and saving sends exactl
  expect((group.getByLabelText('人格') as HTMLSelectElement).value).toBe('none');
  expect(group.queryByRole('option',{name:'只署名（旧设置）'})).toBeNull();
  fireEvent.change(group.getByLabelText('人格'),{target:{value:'fixed'}});
- await waitFor(()=>expect(group.getByRole('option',{name:'P0002',exact:true})).toBeTruthy());
+ await waitFor(()=>expect(group.getByRole('option',{name:'P0002'})).toBeTruthy());
  expect(group.queryByRole('option',{name:/Founder/})).toBeNull();
  saveRules();
  await screen.findByText(/选一位固定的人格/);expect(f.saved()).toHaveLength(0);

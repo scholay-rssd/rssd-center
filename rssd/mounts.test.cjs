@@ -191,9 +191,11 @@ test('a translation and a note rewritten from an article keep the voice of what 
  await f.setVoice({mode:'fixed',persona:'P0002',byline:'site'});
  await mounts.savePersonas(f.owner,{personas:[persona(1,{revision:2})]});await mounts.retirePersona(f.owner,'P0001');
  const translate=await store.createDemand(f.owner,{workspaceId:'research',sectionId:'methods',title:'Translate',kind:'translate',source:{workId:article.workId,locale:'zh-CN',revision:1},requiredLocales:['en']});
- const claim=await store.claim(f.ctx,{demandId:translate.id});
+ const claim=await store.claim(f.ctx,{demandId:translate.id,personaRecordVersion:2});
  assert.deepEqual([claim.payload.voiceDecision.method,claim.payload.voiceDecision.persona.revision,claim.payload.voiceDecision.byline,claim.mounts.voice.preset.revision],['kept','p0001.v1','persona','p0001.v1']);
- await store.submit(f.ctx,f.packet(claim,f.signed(first.payload.voiceDecision),{workId:article.workId,locale:'en',translationOf:{workId:article.workId,locale:'zh-CN',revision:1}}));
+ const translation={workId:article.workId,locale:'en',translationOf:{workId:article.workId,locale:'zh-CN',revision:1}};
+ await assert.rejects(store.submit(f.ctx,f.packet(claim,f.signed(first.payload.voiceDecision),translation)),{code:'byline_conflict'});
+ await store.submit(f.ctx,f.packet(claim,f.signed(claim.payload.voiceDecision,'P0001'),translation));
  const note=await store.claim(f.ctx,{demandId:(await f.order({workType:'note',adaptedFrom:{workId:article.workId,revision:1}})).id});
  assert.deepEqual([note.payload.voiceDecision.method,note.payload.voiceDecision.persona.id,note.payload.voiceDecision.byline],['kept','P0001','persona']);
  await assert.rejects(store.submit(f.ctx,f.packet(note,{author:'Research desk'})),{code:'voice_conflict'});

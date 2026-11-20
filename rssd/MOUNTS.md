@@ -49,7 +49,7 @@ For a new work under a claim with a `voiceDecision`, every edition is checked:
 - chosen with `byline: site`: no `metadata.persona`.
 - none: neither `metadata.voice` nor `metadata.persona`.
 
-A decision still pending at submission lapses to the fallback or to none, and that is recorded on the demand. Translations and updates are not checked; they keep what their source carried.
+A decision still pending at submission lapses to the fallback or to none, and that is recorded on the demand. Translations and updates inherit the source's voice and byline. A version 2 claim with an inherited voice checks the P ID and signing choice on submission.
 
 `metadata.voice` and `metadata.persona` are private. The public packet carries only `author`.
 

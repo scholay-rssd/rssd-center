@@ -472,9 +472,10 @@ class RssdStore {
         // the edition they came from, so they are not checked here.
         // A claim that froze a voice decision is checked against that instead: the preset that wrote is
         // recorded privately, and the founder signs only where the section says so.
-        if(demand.kind==='write'&&demand.payload.voiceDecision){
+        const presetRecord=demand.payload.personaRecordVersion===2,voiceDecision=demand.payload.voiceDecision;
+        if(voiceDecision && (demand.kind==='write' || (presetRecord && voiceDecision.state==='chosen'))){
           if(!this.mounts)p.fail('This Center has no persona library',409,'voice_conflict');
-          const settled=await this.mounts.checkSubmission(demand.payload.voiceDecision,value.editions,{presetRecord:demand.payload.personaRecordVersion===2});
+          const settled=await this.mounts.checkSubmission(voiceDecision,value.editions,{presetRecord});
           if(settled!==demand.payload.voiceDecision){
             demand.payload={...demand.payload,voiceDecision:settled};
             await execute(db,'UPDATE rssd_demands SET payload=$3::jsonb WHERE "orgId"=$1 AND id=$2',ctx.orgId,demand.id,encoded(demand.payload));
