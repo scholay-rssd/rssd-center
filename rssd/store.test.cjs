@@ -1294,6 +1294,36 @@ test('retired migration columns allow only their imported works to save and publ
  await assert.rejects(f.service.submit(f.ctx,'research',{...update,requestKey:randomUUID(),expectedVersion:3},{intent:'draft'}),{code:'migration_staged'});
 });
 
+test('retired imported works can claim source-bound English continuation without reopening the column',async()=>{
+ for(const storeOnly of [false,true]){
+  const f=await editorialFixture();
+  await f.service.submit(f.ctx,'research',f.packet,{intent:'draft'});
+  const original=await f.service.detail(f.ctx,'research',f.packet.data.id),workId=original.workId;
+  const zh=await store.edition(f.ctx,workId,'zh-CN',1);
+  await db.$executeRawUnsafe('UPDATE rssd_works SET "sectionId"=\'archive\' WHERE "orgId"=$1 AND id=$2',f.owner.orgId,workId);
+  const manifest={site:{id:'research-site',spaceId:'research'},compatibilitySections:[{id:'archive',name:'Historical'}]};
+  await db.$executeRawUnsafe('INSERT INTO rssd_migrations ("orgId","siteId","workspaceId",state,manifest,ancillary) VALUES ($1,\'research-site\',\'research\',\'active\',$2::jsonb,\'{}\')',f.owner.orgId,JSON.stringify(manifest));
+  await db.$executeRawUnsafe('INSERT INTO rssd_legacy_documents ("orgId","siteId","documentId","workId",locale,"sourceHash",source) VALUES ($1,\'research-site\',\'old-document\',$2,\'zh-CN\',$3,\'{}\')',f.owner.orgId,workId,'a'.repeat(64));
+  const request={workspaceId:'research',sectionId:'archive',kind:'translate',title:'English continuation',requiredLocales:['en'],source:{workId,locale:'zh-CN',revision:1},...(storeOnly?{storeOnly:true}:{})};
+  await assert.rejects(store.createDemand({...f.ctx,workspaceIds:[]},request),{status:403});
+  await assert.rejects(store.createDemand(f.ctx,{...request,source:{...request.source,workId:randomUUID()}}),{status:404});
+  await assert.rejects(store.createDemand(f.ctx,{...request,sectionId:'unrelated'}),{status:404});
+  await assert.rejects(store.createDemand(f.ctx,{...request,kind:'write',source:undefined,storeOnly:false}),{status:404});
+  await assert.rejects(store.createDemand(f.ctx,{...request,kind:'update',storeOnly:false}),{status:404});
+  await assert.rejects(store.createDemand(f.ctx,{...request,source:{...request.source,locale:'en'},requiredLocales:['zh-CN'],storeOnly:false}),{status:404});
+  const queued=await store.createDemand(f.ctx,request);
+  const claim=await store.claim(f.ctx,{demandId:queued.id,storeOnly});
+  assert.equal(claim.sectionId,'archive');
+  assert(claim.payload.policy.targets.every(t=>t.destinationId==='site-research-site'));
+  assert.deepEqual(claim.payload.source,request.source);
+  const accepted=await store.submit(f.ctx,{requestId:randomUUID(),workId,workspaceId:'research',sectionId:'archive',demandId:claim.id,claimToken:claim.claimToken,baseRevisions:{en:0},editions:[{locale:'en',title:'English continuation',bodyMarkdown:'Complete English translation.',translationOf:request.source}]});
+  assert.equal(accepted.status,'accepted');assert.equal(accepted.publicationIds.length,storeOnly?0:1);
+  assert.equal((await store.edition(f.ctx,workId,'zh-CN',1)).hash,zh.hash);
+  assert.deepEqual((await store.registry(f.ctx)).workspaces[0].sections.map(s=>s.id),['methods']);
+  await assert.rejects(store.workspace(db,f.ctx,'research','archive'),{status:404});
+ }
+});
+
 test('translate demands bind source hash, create once, skip existing English and keep Chinese identity',async()=>{
  const f=await fixture(),missing=randomUUID(),present=randomUUID();
  await store.submit(f.owner,{requestId:randomUUID(),workId:missing,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'待补译',bodyMarkdown:'完整的中文正文。'}]},{publish:false});
