@@ -62,6 +62,8 @@ export async function proxy(request: NextRequest) {
     nextUrl.pathname.startsWith('/p/') ||
     nextUrl.pathname.startsWith('/provider/') ||
     nextUrl.pathname.startsWith('/icons/') ||
+    // the RSSD icon and fonts, which the public home and sign-in pages use
+    nextUrl.pathname.startsWith('/rssd-ui/') ||
     // the consent screen of MCP / OAuth clients handles signed-out visitors
     // itself (sign in and come back, or connect a self-hosted instance)
     nextUrl.pathname.startsWith('/oauth/authorize')
@@ -105,6 +107,10 @@ export async function proxy(request: NextRequest) {
 
   const org = nextUrl.searchParams.get('org');
   const url = new URL(nextUrl).search;
+  // The home page is public: what RSSD is and where to download it.
+  if (nextUrl.pathname === '/' && !authCookie && !org) {
+    return topResponse;
+  }
   if (!nextUrl.pathname.startsWith('/auth') && !authCookie) {
     const providers = ['google', 'settings'];
     const findIndex = providers.find((p) => nextUrl.href.indexOf(p) > -1);
