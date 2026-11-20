@@ -82,7 +82,7 @@ class RssdStore {
     const section=row.payload.sections.find(s=>s.id===sectionId);
     if(section)return {row,section};
     // Retired columns are available only to an already imported work. They
-    // cannot be selected for a new work, demand, or another workspace.
+    // cannot be selected for a new work, unbound demand, or another workspace.
     const legacy=workId&&await one(db,`SELECT m.manifest FROM rssd_works w
       JOIN rssd_legacy_documents l ON l."orgId"=w."orgId" AND l."workId"=w.id
       JOIN rssd_migrations m ON m."orgId"=l."orgId" AND m."siteId"=l."siteId" AND m."workspaceId"=w."workspaceId"
@@ -93,6 +93,13 @@ class RssdStore {
     const targets=[...new Map(row.payload.sections.flatMap(s=>s.policy.targets)
       .filter(t=>t.destinationId===destinationId).map(t=>[t.destinationId+':'+t.locale,t])).values()];
     return {row,section:{id:sectionId,name:archived.name,policy:{version:1,targets}}};
+  }
+  async demandSection(db,ctx,demand) {
+    const value=demand.payload||demand,source=value.source;
+    const targets=(value.requiredLocales||[]).filter(locale=>locale!==source?.locale);
+    if(demand.kind==='translate'&&source?.locale==='zh-CN'&&targets.length===1&&targets[0]==='en')
+      return this.workSection(db,ctx,demand.workspaceId,demand.sectionId,source.workId);
+    return this.workspace(db,ctx,demand.workspaceId,demand.sectionId);
   }
   async registry(ctx) {
     const all = await rows(this.db,'SELECT w.*,m.state AS "migrationState" FROM rssd_workspaces w LEFT JOIN rssd_migrations m ON m."orgId"=w."orgId" AND m."workspaceId"=w.id WHERE w."orgId"=$1 ORDER BY w.id',ctx.orgId);
@@ -174,7 +181,7 @@ class RssdStore {
     }
     const allowRepeat=allowRepeatAsserted(input);
     if(allowRepeat&&!ctx.admin)p.fail('Only the owner may queue a repeated topic',403,'forbidden');
-    const {section}=await this.workspace(this.db,ctx,value.workspaceId,value.sectionId);
+    const {section}=await this.demandSection(this.db,ctx,value);
     await this.writable(this.db,ctx,value.workspaceId);
     if(!value.source){
       // The repeat check and the insert share one lock per section, so two devices cannot queue the same
@@ -360,7 +367,7 @@ class RssdStore {
         }
         return null;
       }
-      const {row,section}=await this.workspace(db,ctx,demand.workspaceId,demand.sectionId);
+      const {row,section}=await this.demandSection(db,ctx,demand);
       const destinations=[];
       for(const target of section.policy.targets){
         const destination=await one(db,'SELECT id,name,kind,config FROM rssd_destinations WHERE "orgId"=$1 AND id=$2',ctx.orgId,target.destinationId);
