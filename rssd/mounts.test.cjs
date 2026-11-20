@@ -39,7 +39,7 @@ async function fixture({voice,count=3}={}){
  const order=(extra={})=>store.createDemand(owner,{workspaceId:'research',sectionId:'methods',title:TITLES[next++]+' '+randomUUID().slice(0,6),requiredLocales:['zh-CN'],...extra});
  const packet=(claim,metadata,{workId=randomUUID(),locale='zh-CN',...extra}={})=>({requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',demandId:claim.id,claimToken:claim.claimToken,
   editions:[{locale,title:'Work',bodyMarkdown:'Body.',metadata,...extra}]});
- const signed=(decision,id=decision.persona.founder.id)=>({author:decision.persona.founder.name,persona:{id},voice:{id:decision.persona.id,revision:decision.persona.revision,snapshotHash:decision.persona.snapshotHash}});
+ const signed=(decision,id=decision.persona.id)=>({author:decision.persona.founder.name,persona:{id},voice:{id:decision.persona.id,revision:decision.persona.revision,snapshotHash:decision.persona.snapshotHash}});
  return {owner,ctx,device,order,packet,signed,setVoice};
 }
 
@@ -72,7 +72,7 @@ test('the library keeps every revision unchanged; only the owner writes it, and 
 
 test('a fixed voice: decided and frozen at the claim, the snapshot handed to the claiming device only, required on the work',async()=>{
  const f=await fixture({voice:{mode:'fixed',persona:'P0002'}});
- const demand=await f.order(),claim=await store.claim(f.ctx,{demandId:demand.id,personaRecordVersion:2}),decision=claim.payload.voiceDecision;
+ const demand=await f.order(),claim=await store.claim(f.ctx,{demandId:demand.id}),decision=claim.payload.voiceDecision;
  const {writingPersonaSnapshot}=await import('./persona-voice.mjs'),copy=writingPersonaSnapshot(snapshot(2));
  assert.deepEqual(decision,{state:'chosen',method:'fixed',persona:{id:'P0002',revision:'p0002.v1',snapshotHash:copy.snapshotHash,founder:{id:'M02',name:'Founder2'}},byline:'persona'});
  assert.equal(claim.payload.personaRecordVersion,2);
@@ -84,9 +84,9 @@ test('a fixed voice: decided and frozen at the claim, the snapshot handed to the
  // A later change of the section, or a newer revision of the persona, does not reach the claim.
  await f.setVoice({mode:'fixed',persona:'P0001'});await mounts.savePersonas(f.owner,{personas:[persona(2,{revision:2})]});
  assert.equal((await store.activeClaim(f.ctx)).mounts.voice.preset.revision,'p0002.v1');
- const good=f.signed(decision,decision.persona.id);
+ const good=f.signed(decision);
  for(const [metadata,code] of [[{},'voice_conflict'],[{author:'Founder2',persona:{id:'M02'}},'voice_conflict'],[{...good,voice:{...good.voice,revision:'p0002.v2'}},'voice_conflict'],
-  [{...good,voice:{...good.voice,id:'P0001'}},'voice_conflict'],[{...good,author:'Research desk'},'byline_conflict'],[{...good,persona:{id:'M01'}},'byline_conflict'],[{voice:good.voice},'byline_conflict']])
+  [{...good,voice:{...good.voice,id:'P0001'}},'voice_conflict'],[{...good,author:'Research desk'},'byline_conflict'],[{...good,persona:{id:'M02'}},'byline_conflict'],[{voice:good.voice},'byline_conflict']])
   await assert.rejects(store.submit(f.ctx,f.packet(claim,metadata)),{code});
  await assert.rejects(store.submit(f.ctx,f.packet(claim,{...good,persona:{id:'P0002',name:'Alias'}})),{code:'byline_conflict'});
  const packet=f.packet(claim,good),receipt=await store.submit(f.ctx,packet);
@@ -185,8 +185,12 @@ test('an order comes before the section: it may name a persona the library has, 
 
 test('a translation and a note rewritten from an article keep the voice of what they came from',async()=>{
  const f=await fixture({voice:{mode:'fixed',persona:'P0001'}});
- const first=await store.claim(f.ctx,{demandId:(await f.order()).id}),article=f.packet(first,f.signed(first.payload.voiceDecision));
- await store.submit(f.ctx,article);
+ const first=await store.claim(f.ctx,{demandId:(await f.order()).id});
+ // Model an already frozen claim from before the record format changed.
+ await db.$executeRawUnsafe("UPDATE rssd_demands SET payload=payload-'personaRecordVersion' WHERE \"orgId\"=$1 AND id=$2",f.owner.orgId,first.id);
+ const article=f.packet(first,f.signed(first.payload.voiceDecision,first.payload.voiceDecision.persona.founder.id));
+ const receipt=await store.submit(f.ctx,article);
+ assert.deepEqual(await store.submit(f.ctx,article),receipt);
  // The section moves on and the persona gets a newer revision, then retires.
  await f.setVoice({mode:'fixed',persona:'P0002',byline:'site'});
  await mounts.savePersonas(f.owner,{personas:[persona(1,{revision:2})]});await mounts.retirePersona(f.owner,'P0001');
@@ -194,8 +198,8 @@ test('a translation and a note rewritten from an article keep the voice of what 
  const claim=await store.claim(f.ctx,{demandId:translate.id,personaRecordVersion:2});
  assert.deepEqual([claim.payload.voiceDecision.method,claim.payload.voiceDecision.persona.revision,claim.payload.voiceDecision.byline,claim.mounts.voice.preset.revision],['kept','p0001.v1','persona','p0001.v1']);
  const translation={workId:article.workId,locale:'en',translationOf:{workId:article.workId,locale:'zh-CN',revision:1}};
- await assert.rejects(store.submit(f.ctx,f.packet(claim,f.signed(first.payload.voiceDecision),translation)),{code:'byline_conflict'});
- await store.submit(f.ctx,f.packet(claim,f.signed(claim.payload.voiceDecision,'P0001'),translation));
+ await assert.rejects(store.submit(f.ctx,f.packet(claim,f.signed(claim.payload.voiceDecision,'M01'),translation)),{code:'byline_conflict'});
+ await store.submit(f.ctx,f.packet(claim,f.signed(claim.payload.voiceDecision),translation));
  const note=await store.claim(f.ctx,{demandId:(await f.order({workType:'note',adaptedFrom:{workId:article.workId,revision:1}})).id});
  assert.deepEqual([note.payload.voiceDecision.method,note.payload.voiceDecision.persona.id,note.payload.voiceDecision.byline],['kept','P0001','persona']);
  await assert.rejects(store.submit(f.ctx,f.packet(note,{author:'Research desk'})),{code:'voice_conflict'});

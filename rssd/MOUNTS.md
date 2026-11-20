@@ -45,7 +45,7 @@ The claiming device receives the chosen persona's snapshot as `mounts.voice` on 
 For a new work under a claim with a `voiceDecision`, every edition is checked:
 
 - chosen: `metadata.voice` is `{id, revision, snapshotHash}` of the frozen persona (`voice_conflict` otherwise).
-- chosen with `byline: persona`: `metadata.author` is the founder's English name. Writers request `personaRecordVersion: 2` when claiming. Once confirmed in the claim payload, signed editions must record the P ID in `metadata.persona.id`. Legacy claims also accept the founder ID so that previously prepared packets can be submitted and their receipts verified byte for byte.
+- chosen with `byline: persona`: `metadata.author` is the founder's English name. The Center sets `personaRecordVersion: 2` on each new claim that has a voice decision. Signed editions record the P ID in `metadata.persona.id`. A claim already frozen under the previous format still accepts its original signing ID so its writer can submit or retry the same packet and verify the receipt.
 - chosen with `byline: site`: no `metadata.persona`.
 - none: neither `metadata.voice` nor `metadata.persona`.
 
