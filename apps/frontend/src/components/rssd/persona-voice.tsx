@@ -37,7 +37,7 @@ export function usePersonaLibrary(api:Api){
   return {personas,error,reload:load};
 }
 
-const label=(p:Row)=>p.id+' · '+(p.founder?.name||'')+(p.active===false?'（已停用）':'');
+const label=(p:Row)=>p.id+(p.missing?'（库里没有）':p.active===false?'（已停用）':'');
 
 /** One section's persona settings, inside the section's fieldset of the rules form. */
 export function SectionVoice({section,personas,onChange}:{section:Row;personas:Row[];onChange:(policy:Row)=>void}){
@@ -48,7 +48,7 @@ export function SectionVoice({section,personas,onChange}:{section:Row;personas:R
   // owner sees it and can remove it.
   const active=personas.filter(p=>p.active!==false),offered=new Set(active.map(p=>p.id));
   const named=[...new Set([voice.persona,voice.fallback,...(Array.isArray(range)?range:[])].filter((id:any)=>id&&!offered.has(id)))] as string[];
-  const options=[...active,...named.map(id=>personas.find(p=>p.id===id)||{id,founder:{name:'库里没有'},active:false})];
+  const options=[...active,...named.map(id=>personas.find(p=>p.id===id)||{id,missing:true,active:false})];
   const modes=(Object.keys(VOICE_MODE_NAMES) as VoiceMode[]).filter(m=>m!=='persona'||mode==='persona');
   return <div className="ca-stack" role="group" aria-label={section.name+'的人格'}>
     <label>人格<select value={mode} onChange={e=>set({mode:e.target.value as VoiceMode})}>{modes.map(m=><option key={m} value={m}>{VOICE_MODE_NAMES[m]}</option>)}</select></label>
@@ -131,7 +131,7 @@ export function PersonaLibrary({api,registry}:{api:Api;registry:Row[]}){
         <thead><tr><th>人格</th><th>署名</th><th>当前版本</th><th>使用的栏目</th><th>状态</th><th>操作</th></tr></thead>
         <tbody>{(personas||[]).map(row=><tr key={row.id}>
           <td><strong>{row.id}</strong><small>{row.summary?.core}</small></td>
-          <td>{row.founder?.name}<small>{row.founder?.id}</small></td>
+          <td>{row.founder?.name}</td>
           <td>{row.revision}{row.revisions?.length>1&&<small>共 {row.revisions.length} 个版本</small>}</td>
           <td>{[...(named.get(row.id)||[]),...(row.active?all:[])].join('、')||'—'}</td>
           <td><span className="cp-state">{row.active?'在用':'已停用'}</span></td>

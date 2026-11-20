@@ -39,7 +39,7 @@ async function fixture({voice,count=3}={}){
  const order=(extra={})=>store.createDemand(owner,{workspaceId:'research',sectionId:'methods',title:TITLES[next++]+' '+randomUUID().slice(0,6),requiredLocales:['zh-CN'],...extra});
  const packet=(claim,metadata,{workId=randomUUID(),locale='zh-CN',...extra}={})=>({requestId:randomUUID(),workId,workspaceId:'research',sectionId:'methods',demandId:claim.id,claimToken:claim.claimToken,
   editions:[{locale,title:'Work',bodyMarkdown:'Body.',metadata,...extra}]});
- const signed=decision=>({author:decision.persona.founder.name,persona:{id:decision.persona.founder.id},voice:{id:decision.persona.id,revision:decision.persona.revision,snapshotHash:decision.persona.snapshotHash}});
+ const signed=(decision,id=decision.persona.founder.id)=>({author:decision.persona.founder.name,persona:{id},voice:{id:decision.persona.id,revision:decision.persona.revision,snapshotHash:decision.persona.snapshotHash}});
  return {owner,ctx,device,order,packet,signed,setVoice};
 }
 
@@ -72,21 +72,25 @@ test('the library keeps every revision unchanged; only the owner writes it, and 
 
 test('a fixed voice: decided and frozen at the claim, the snapshot handed to the claiming device only, required on the work',async()=>{
  const f=await fixture({voice:{mode:'fixed',persona:'P0002'}});
- const demand=await f.order(),claim=await store.claim(f.ctx,{demandId:demand.id}),decision=claim.payload.voiceDecision;
- assert.deepEqual(decision,{state:'chosen',method:'fixed',persona:{id:'P0002',revision:'p0002.v1',snapshotHash:snapshot(2).snapshotHash,founder:{id:'M02',name:'Founder2'}},byline:'persona'});
- assert.deepEqual(claim.mounts,{voice:snapshot(2)});
- assert.deepEqual((await store.activeClaim(f.ctx)).mounts,{voice:snapshot(2)});
+ const demand=await f.order(),claim=await store.claim(f.ctx,{demandId:demand.id,personaRecordVersion:2}),decision=claim.payload.voiceDecision;
+ const {writingPersonaSnapshot}=await import('./persona-voice.mjs'),copy=writingPersonaSnapshot(snapshot(2));
+ assert.deepEqual(decision,{state:'chosen',method:'fixed',persona:{id:'P0002',revision:'p0002.v1',snapshotHash:copy.snapshotHash,founder:{id:'M02',name:'Founder2'}},byline:'persona'});
+ assert.equal(claim.payload.personaRecordVersion,2);
+ assert.deepEqual(claim.mounts,{voice:copy});
+ assert.deepEqual((await store.activeClaim(f.ctx)).mounts,{voice:copy});
  // The demand itself keeps the decision, never the content: listing demands shows no snapshot.
  const listed=(await store.demands(f.owner,{workspaceId:'research'})).find(row=>row.id===demand.id);
  assert.deepEqual(listed.payload.voiceDecision,decision);assert.equal('mounts' in listed,false);assert.equal(JSON.stringify(listed).includes(SECRET),false);
  // A later change of the section, or a newer revision of the persona, does not reach the claim.
  await f.setVoice({mode:'fixed',persona:'P0001'});await mounts.savePersonas(f.owner,{personas:[persona(2,{revision:2})]});
  assert.equal((await store.activeClaim(f.ctx)).mounts.voice.preset.revision,'p0002.v1');
- const good=f.signed(decision);
+ const good=f.signed(decision,decision.persona.id);
  for(const [metadata,code] of [[{},'voice_conflict'],[{author:'Founder2',persona:{id:'M02'}},'voice_conflict'],[{...good,voice:{...good.voice,revision:'p0002.v2'}},'voice_conflict'],
   [{...good,voice:{...good.voice,id:'P0001'}},'voice_conflict'],[{...good,author:'Research desk'},'byline_conflict'],[{...good,persona:{id:'M01'}},'byline_conflict'],[{voice:good.voice},'byline_conflict']])
   await assert.rejects(store.submit(f.ctx,f.packet(claim,metadata)),{code});
+ await assert.rejects(store.submit(f.ctx,f.packet(claim,{...good,persona:{id:'P0002',name:'Alias'}})),{code:'byline_conflict'});
  const packet=f.packet(claim,good),receipt=await store.submit(f.ctx,packet);
+ assert.deepEqual(await store.submit(f.ctx,packet),receipt);
  assert.equal(receipt.demandState,'completed');
  const edition=await store.edition(f.ctx,packet.workId,'zh-CN',1);
  assert.deepEqual(edition.payload.metadata,good);
@@ -103,6 +107,20 @@ test('a section may use a persona and still sign with the site',async()=>{
  await assert.rejects(store.submit(f.ctx,f.packet(claim,{author:'Research desk'})),{code:'voice_conflict'});
  const packet=f.packet(claim,{author:'Research desk',voice});await store.submit(f.ctx,packet);
  assert.deepEqual(publicContent((await store.edition(f.ctx,packet.workId,'zh-CN',1)).payload).metadata,{author:'Research desk'});
+});
+
+test('a stored original stays readable by its frozen hash while new claims use ID-only copies',async()=>{
+ const f=await fixture({count:0,voice:{mode:'fixed',persona:'P0001'}});
+ const {personaEntry,writingPersonaSnapshot}=await import('./persona-voice.mjs');
+ const raw=snapshot(1),entry=personaEntry(raw,{founderName:'Founder1'}),copy=writingPersonaSnapshot(raw);
+ await db.$executeRawUnsafe('INSERT INTO rssd_mounts ("orgId",kind,id,revision,version,hash,entry,content) VALUES ($1,$2,$3,$4,1,$5,$6::jsonb,$7::jsonb)',
+  f.owner.orgId,'persona',entry.id,entry.revision,entry.snapshotHash,JSON.stringify(entry),JSON.stringify(raw));
+ assert.equal((await mounts.savePersonas(f.owner,{personas:[{snapshot:copy,founderName:'Founder1'}]})).personas[0].status,'existing');
+ assert.deepEqual(await mounts.snapshot(db,f.owner.orgId,entry),raw);
+ const claim=await store.claim(f.ctx,{demandId:(await f.order()).id});
+ assert.deepEqual(claim.mounts.voice,copy);
+ assert.equal(claim.payload.voiceDecision.persona.snapshotHash,copy.snapshotHash);
+ assert.doesNotMatch(JSON.stringify(claim),/示例1|Example 1/);
 });
 
 test('choosing: the writer sees candidates without content, settles one with a reason, and only then gets the snapshot',async()=>{

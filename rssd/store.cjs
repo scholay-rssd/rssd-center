@@ -378,9 +378,9 @@ class RssdStore {
       const writingDefaults=this.writingDefaults?await this.writingDefaults.freeze(demand):null;
       // Which persona writes this work is decided now and frozen with the other rules. A decision left by an
       // earlier claim that was released is not carried over.
-      const {voiceDecision:_,...queued}=demand.payload;
+      const {voiceDecision:_,personaRecordVersion:_format,...queued}=demand.payload;
       const voiceDecision=this.mounts?await this.mounts.decide(db,ctx.orgId,demand,section.policy):null;
-      const claimToken=randomUUID(),payload={...queued,policy:section.policy,workspaceRevision:row.revision,destinations,outputContractVersion:1,claimExpiresAt:new Date(Date.now()+CLAIM_TTL_MS).toISOString(),...(writingDefaults?{writingDefaults}:{}),...(voiceDecision?{voiceDecision}:{})};
+      const claimToken=randomUUID(),payload={...queued,policy:section.policy,workspaceRevision:row.revision,destinations,outputContractVersion:1,claimExpiresAt:new Date(Date.now()+CLAIM_TTL_MS).toISOString(),...(writingDefaults?{writingDefaults}:{}),...(voiceDecision?{voiceDecision}:{}),...(voiceDecision && input.personaRecordVersion===2?{personaRecordVersion:2}:{})};
       const result=await one(db,`UPDATE rssd_demands SET state='claimed',"workerId"=$3,"claimToken"=$4,generation=generation+1,
         payload=$5::jsonb,"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2 RETURNING *`,ctx.orgId,demand.id,ctx.workerId,claimToken,encoded(payload));
       await audit(db,ctx,'demand.claim',{id:demand.id,generation:result.generation});
@@ -474,7 +474,7 @@ class RssdStore {
         // recorded privately, and the founder signs only where the section says so.
         if(demand.kind==='write'&&demand.payload.voiceDecision){
           if(!this.mounts)p.fail('This Center has no persona library',409,'voice_conflict');
-          const settled=await this.mounts.checkSubmission(demand.payload.voiceDecision,value.editions);
+          const settled=await this.mounts.checkSubmission(demand.payload.voiceDecision,value.editions,{presetRecord:demand.payload.personaRecordVersion===2});
           if(settled!==demand.payload.voiceDecision){
             demand.payload={...demand.payload,voiceDecision:settled};
             await execute(db,'UPDATE rssd_demands SET payload=$3::jsonb WHERE "orgId"=$1 AND id=$2',ctx.orgId,demand.id,encoded(demand.payload));

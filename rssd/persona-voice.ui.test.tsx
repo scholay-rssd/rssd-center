@@ -32,7 +32,8 @@ test('a section can be given a fixed persona that signs, and saving sends exactl
  expect((group.getByLabelText('人格') as HTMLSelectElement).value).toBe('none');
  expect(group.queryByRole('option',{name:'只署名（旧设置）'})).toBeNull();
  fireEvent.change(group.getByLabelText('人格'),{target:{value:'fixed'}});
- await waitFor(()=>expect(group.getByRole('option',{name:'P0002 · Founder2'})).toBeTruthy());
+ await waitFor(()=>expect(group.getByRole('option',{name:'P0002',exact:true})).toBeTruthy());
+ expect(group.queryByRole('option',{name:/Founder/})).toBeNull();
  saveRules();
  await screen.findByText(/选一位固定的人格/);expect(f.saved()).toHaveLength(0);
  fireEvent.change(group.getByLabelText('固定的人格'),{target:{value:'P0002'}});
@@ -49,8 +50,8 @@ test('a range, a fallback and the site byline; choosing none removes the voice',
  fireEvent.change(group.getByLabelText('人格'),{target:{value:'choose'}});
  fireEvent.click(group.getByLabelText('只用下面勾选的'));
  saveRules();await screen.findByText(/至少选一位人格/);
- await waitFor(()=>expect(group.getByLabelText('P0001 · Founder1')).toBeTruthy());
- fireEvent.click(group.getByLabelText('P0001 · Founder1'));fireEvent.click(group.getByLabelText('P0002 · Founder2'));
+ await waitFor(()=>expect(group.getByLabelText('P0001')).toBeTruthy());
+ fireEvent.click(group.getByLabelText('P0001'));fireEvent.click(group.getByLabelText('P0002'));
  fireEvent.change(group.getByLabelText('兜底人格'),{target:{value:'P0002'}});
  fireEvent.change(group.getByLabelText('署名'),{target:{value:'site'}});
  saveRules();await screen.findByText(/栏目规则已保存/);
@@ -63,8 +64,8 @@ test('a range, a fallback and the site byline; choosing none removes the voice',
 test('a persona the section names but the library no longer offers stays visible, and an empty library is said plainly',async()=>{
  const f=center([persona(1)]);render(<WorkspacePolicy workspace={workspace({voice:{mode:'balanced',range:['P0001','P0009'],byline:'persona'}})} api={f.api} onSaved={async()=>{}}/>);
  const group=voiceGroup();
- await waitFor(()=>expect(group.getByLabelText('P0009 · 库里没有（已停用）')).toBeTruthy());
- expect((group.getByLabelText('P0009 · 库里没有（已停用）') as HTMLInputElement).checked).toBe(true);
+ await waitFor(()=>expect(group.getByLabelText('P0009（库里没有）')).toBeTruthy());
+ expect((group.getByLabelText('P0009（库里没有）') as HTMLInputElement).checked).toBe(true);
  cleanup();
  const empty=center([]);render(<WorkspacePolicy workspace={workspace({voice:{mode:'fixed',persona:'P0001',byline:'site'}})} api={empty.api} onSaved={async()=>{}}/>);
  await screen.findByText(/人格库里没有在用的人格/);
@@ -99,6 +100,7 @@ test('the library lists personas, uploads an export file in batches, and retires
  render(<PersonaLibrary api={f.api} registry={registry}/>);
  const row=(id:string)=>within(screen.getByText(id).closest('tr') as HTMLElement);
  await screen.findByText('P0002');
+ expect(row('P0002').getByText('Founder2')).toBeTruthy();
  expect(row('P0002').getByText('Research / Methods、Research / Notes')).toBeTruthy();
  expect(row('P0001').getByText('Research / Notes')).toBeTruthy();
  expect(row('P0003').getByText('已停用')).toBeTruthy();expect(row('P0003').getByText('—')).toBeTruthy();

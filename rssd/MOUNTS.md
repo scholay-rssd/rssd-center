@@ -2,7 +2,7 @@
 
 The mount library holds what a writer is handed for one work besides the section's rules. An item has a kind, an ID and revisions; a revision is content with a hash and is never changed once stored. The Center decides which items a work uses when its demand is claimed, freezes the decision with the claim, and gives the claiming device the content of exactly those items.
 
-The first kind is `persona`: a preset person of a persona library kept outside this repository, stored as that library's own writing snapshot (`12monkey.content-persona-snapshot.v1`). The design is `docs/persona-voice.md` in the rssd repository. `persona-voice.mjs` is an unchanged copy of `contracts/persona-voice.mjs` there and decides which persona writes a work.
+The first kind is a writing persona identified by its P ID. RSSD verifies the library snapshot and hashes an ID-only writing copy in the same v1 wire format. The source profile fingerprints are preserved. Existing revisions remain readable by their original hashes. The design is in the rssd repository's `docs/persona-voice.md`. The shared implementation is `contracts/persona-voice.mjs` in that repository.
 
 All endpoints extend `/api/rssd/v1`.
 
@@ -45,7 +45,7 @@ The claiming device receives the chosen persona's snapshot as `mounts.voice` on 
 For a new work under a claim with a `voiceDecision`, every edition is checked:
 
 - chosen: `metadata.voice` is `{id, revision, snapshotHash}` of the frozen persona (`voice_conflict` otherwise).
-- chosen with `byline: persona`: `metadata.author` is the founder's name and `metadata.persona.id` the founder's ID (`byline_conflict`).
+- chosen with `byline: persona`: `metadata.author` is the founder's English name. Writers request `personaRecordVersion: 2` when claiming. Once confirmed in the claim payload, signed editions must record the P ID in `metadata.persona.id`. Legacy claims also accept the founder ID so that previously prepared packets can be submitted and their receipts verified byte for byte.
 - chosen with `byline: site`: no `metadata.persona`.
 - none: neither `metadata.voice` nor `metadata.persona`.
 
