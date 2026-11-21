@@ -1430,7 +1430,8 @@ test('store-only translate stays on the original work with zero publications whe
  assert.equal(created.status,'created');assert.equal(created.payload.storeOnly,true);assert.equal(created.payload.storeOnlyWorkerId,f.ctx.workerId);assert.equal(created.payload.sourceHash,f.zh.hash);
  const reused=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'again',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
  assert.equal(reused.status,'existing');assert.equal(reused.id,created.id);
- await assert.rejects(store.createDemand(f.otherCtx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'other',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true}),{code:'open_translate_conflict'});
+ const shared=await store.createDemand(f.otherCtx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'other',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
+ assert.equal(shared.status,'existing');assert.equal(shared.id,created.id);
  const {RssdCoordination}=require('./coordination.cjs');
  await assert.rejects(new RssdCoordination(store).editDemand(f.ctx,created.id,{baseGeneration:created.generation,requestId:randomUUID(),changes:{storeOnly:false}}),{code:'identity_conflict'});
  const claim=await store.claim(f.ctx,{demandId:created.id,storeOnly:true});
@@ -1459,30 +1460,47 @@ test('old consumers omitting storeOnly cannot claim a store-only row while defau
  stolen.filter(row=>row.status==='rejected').forEach(row=>assert.equal(row.reason.code,'worker_busy'));
  await store.changeDemand(f.otherCtx,decoy.id,{action:'release',claimToken:won[0].claimToken});
  await assert.rejects(store.claim(f.otherCtx,{demandId:storeOnly.id}),{code:'store_only_required'});
- await assert.rejects(store.claim(f.otherCtx,{demandId:storeOnly.id,storeOnly:true}),{code:'forbidden'});
  await assert.rejects(store.claim(f.ctx,{demandId:decoy.id,storeOnly:true}),{code:'not_store_only'});
  const mine=await store.claim(f.ctx,{demandId:storeOnly.id,storeOnly:true});
- await assert.rejects(store.claim(f.otherCtx,{demandId:storeOnly.id,storeOnly:true}),{code:'forbidden'});
+ await assert.rejects(store.claim(f.otherCtx,{demandId:storeOnly.id,storeOnly:true}),{code:'claim_conflict'});
  await store.changeDemand(f.ctx,storeOnly.id,{action:'release',claimToken:mine.claimToken});
  const ordinary=await store.claim(f.otherCtx);assert.equal(ordinary.id,decoy.id);
  const published=await store.submit(f.otherCtx,{requestId:randomUUID(),workId:randomUUID(),workspaceId:'research',sectionId:'methods',demandId:ordinary.id,claimToken:ordinary.claimToken,editions:[{locale:'en',title:'Default publish',bodyMarkdown:'Goes to policy targets.'}]});
  assert.equal(published.publicationIds.length,1);assert.equal(published.storeOnly,undefined);
 });
 
-test('store-only lease expiry restores only the creating device and rejects the expired token',async()=>{
+test('store-only lease expiry returns the demand to the pool and rejects the expired token',async()=>{
  const f=await storeOnlyEnglishFixture();
  const created=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'仅存英文',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
  const claim=await store.claim(f.ctx,{demandId:created.id,storeOnly:true});
  await db.$executeRawUnsafe('UPDATE rssd_demands SET payload=payload || $3::jsonb WHERE "orgId"=$1 AND id=$2',f.owner.orgId,claim.id,JSON.stringify({claimExpiresAt:new Date(Date.now()-1000).toISOString()}));
  assert.equal(await store.activeClaim(f.ctx),null);
- await assert.rejects(store.claim(f.otherCtx,{demandId:claim.id,storeOnly:true}),{code:'forbidden'});
  assert.equal(await store.claim(f.otherCtx),null);
- const recovered=await store.claim(f.ctx,{demandId:claim.id,storeOnly:true});
- assert.ok(recovered);assert.notEqual(recovered.claimToken,claim.claimToken);assert.equal(recovered.payload.storeOnly,true);
+ const recovered=await store.claim(f.otherCtx,{demandId:claim.id,storeOnly:true});
+ assert.ok(recovered);assert.notEqual(recovered.claimToken,claim.claimToken);assert.equal(recovered.payload.storeOnly,true);assert.equal(recovered.payload.storeOnlyWorkerId,f.otherCtx.workerId);
  const packet={requestId:randomUUID(),workId:f.workId,workspaceId:'research',sectionId:'methods',demandId:claim.id,claimToken:claim.claimToken,baseRevisions:{en:0},editions:[{locale:'en',title:'Late',bodyMarkdown:'Expired token.',translationOf:{workId:f.workId,locale:'zh-CN',revision:1}}]};
  await assert.rejects(store.submit(f.ctx,packet),{code:'claim_revoked'});
- const accepted=await store.submit(f.ctx,{...packet,demandId:recovered.id,claimToken:recovered.claimToken,requestId:randomUUID()});
- assert.equal(accepted.storeOnly,true);assert.deepEqual(accepted.publicationIds,[]);
+ await assert.rejects(store.submit(f.ctx,{...packet,claimToken:recovered.claimToken,requestId:randomUUID()}),{code:'claim_revoked'});
+ const accepted=await store.submit(f.otherCtx,{...packet,demandId:recovered.id,claimToken:recovered.claimToken,requestId:randomUUID()});
+ assert.equal(accepted.storeOnly,true);assert.deepEqual(accepted.publicationIds,[]);assert.equal(accepted.storeOnlyWorkerId,f.otherCtx.workerId);
+});
+
+test('a queued store-only translate is open to any authorized device; only the one in progress is held',async()=>{
+ const f=await storeOnlyEnglishFixture();
+ const second=randomUUID();
+ await store.submit(f.owner,{requestId:randomUUID(),workId:second,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'第二篇',bodyMarkdown:'完整的中文正文。'}]},{publish:false});
+ const request=workId=>({workspaceId:'research',sectionId:'methods',kind:'translate',title:'仅存英文',requiredLocales:['en'],source:{workId,locale:'zh-CN',revision:1},storeOnly:true});
+ const first=await store.createDemand(f.ctx,request(f.workId)),next=await store.createDemand(f.ctx,request(second));
+ // The creator is busy with the first; another device skips it and takes the next one.
+ const held=await store.claim(f.ctx,{storeOnly:true});assert.equal(held.id,first.id);
+ const taken=await store.claim(f.otherCtx,{storeOnly:true});assert.equal(taken.id,next.id);assert.equal(taken.payload.storeOnlyWorkerId,f.otherCtx.workerId);
+ const done=await store.submit(f.otherCtx,{requestId:randomUUID(),workId:second,workspaceId:'research',sectionId:'methods',demandId:taken.id,claimToken:taken.claimToken,baseRevisions:{en:0},editions:[{locale:'en',title:'Second',bodyMarkdown:'Stored English.',translationOf:{workId:second,locale:'zh-CN',revision:1}}]});
+ assert.equal(done.demandState,'completed');assert.deepEqual(done.publicationIds,[]);
+ // The held one is not touched by anyone else until it is released.
+ await assert.rejects(store.claim(f.otherCtx,{demandId:first.id,storeOnly:true}),{code:'claim_conflict'});
+ assert.equal(await store.claim(f.otherCtx,{storeOnly:true}),null);
+ await store.changeDemand(f.ctx,first.id,{action:'release',claimToken:held.claimToken});
+ const after=await store.claim(f.otherCtx,{storeOnly:true});assert.equal(after.id,first.id);
 });
 
 test('store-only existing reuse cannot mix omitted or false intent; side-channel writes are fenced',async()=>{
@@ -1527,7 +1545,7 @@ test('mixed queues claim ordinary and store-only in parallel without stealing a 
  const [ordinary,mine]=await Promise.all([store.claim(f.otherCtx),store.claim(f.ctx,{storeOnly:true})]);
  assert.equal(ordinary.id,decoy.id);assert.equal(mine.id,storeOnly.id);
  const idle=await store.createWorker(f.owner,{name:'Idle other',workspaceIds:['research']}),idleCtx=await store.authenticate(idle.token);
- await assert.rejects(store.claim(idleCtx,{demandId:storeOnly.id,storeOnly:true}),{code:'forbidden'});
+ await assert.rejects(store.claim(idleCtx,{demandId:storeOnly.id,storeOnly:true}),{code:'claim_conflict'});
  await assert.rejects(store.claim(f.otherCtx,{demandId:storeOnly.id,storeOnly:true}),{code:'worker_busy'});
  await assert.rejects(store.claim(f.ctx,{demandId:decoy.id}),{code:'worker_busy'});
  assert.equal((await store.activeClaim(f.otherCtx)).id,decoy.id);
