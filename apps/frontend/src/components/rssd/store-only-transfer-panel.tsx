@@ -251,7 +251,7 @@ export function StoreOnlyTransferPanel({ api, registry, workers }: { api: RssdAp
             <option value="">选择有工作空间范围的设备</option>
             {eligibleWorkers.map((row) => (
               <option key={row.id} value={row.id}>
-                {row.name} · {(row.workspaceIds || []).map((id: string) => registry.find((w) => w.id === id)?.name || id).join('、')}
+                {row.name} · {row.id} · {(row.workspaceIds || []).map((id: string) => registry.find((w) => w.id === id)?.name || id).join('、')}
               </option>
             ))}
           </select>
@@ -267,7 +267,7 @@ export function StoreOnlyTransferPanel({ api, registry, workers }: { api: RssdAp
         </label>
         {frozen && previewCurrent && (
           <p className="cp-muted" role="status">
-            冻结目标：<strong>{frozenTargetName}</strong> · 冻结清单 {frozen.preview.length} 条 · 可移交 {transferable} 条。修改清单或目标会使预览失效。
+            冻结目标：<strong>{frozenTargetName}</strong>（<code>{frozen.toWorkerId}</code>） · 冻结清单 {frozen.preview.length} 条 · 可移交 {transferable} 条。修改清单或目标会使预览失效。
           </p>
         )}
         {!previewCurrent && frozen === null && results?.length ? (
@@ -307,7 +307,7 @@ export function StoreOnlyTransferPanel({ api, registry, workers }: { api: RssdAp
                   </td>
                   <td>{row.state || '—'}</td>
                   <td>{row.expectedGeneration ?? '—'}</td>
-                  <td><code>{row.expectedStoreOnlyWorkerId ? String(row.expectedStoreOnlyWorkerId).slice(0, 8) : '—'}</code></td>
+                  <td><code>{row.expectedStoreOnlyWorkerId || '—'}</code></td>
                   <td>
                     {row.source ? `${row.source.locale}@${row.source.revision}` : '—'}
                     {row.sourceHash ? <small>{String(row.sourceHash).slice(0, 12)}</small> : null}

@@ -1779,21 +1779,51 @@ async function oneDemand(orgId,id){
  return (await db.$queryRawUnsafe('SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2',orgId,id))[0];
 }
 
-function withDemandLockBarrier(timeoutMs=5000){
- let release;
- const gate=new Promise(resolve=>{release=resolve;});
- const seen=new Promise((resolve,reject)=>{
-  const timer=setTimeout(()=>reject(new Error('timed out waiting for demand lock barrier')),timeoutMs);
-  store._testAfterDemandLocked=async(info)=>{
-   clearTimeout(timer);
-   resolve(info);
-   await gate;
-  };
+/**
+ * Test-only wrapper around the real pg adapter: pause after the real demand
+ * FOR UPDATE / SKIP LOCKED SELECT returns inside the live claim/transfer transaction.
+ * No production hooks and no forged SQL.
+ */
+function withDemandLockBarrier(kind,timeoutMs=5000){
+ let releaseGate=()=>{};
+ let released=false;
+ const gate=new Promise(resolve=>{releaseGate=()=>{released=true;resolve();};});
+ let resolveSeen,rejectSeen;
+ const seen=new Promise((resolve,reject)=>{resolveSeen=resolve;rejectSeen=reject;});
+ const timer=setTimeout(()=>rejectSeen(new Error('timed out waiting for demand lock barrier')),timeoutMs);
+ let fired=false;
+ const originalDb=store.db;
+ const matches=(sql)=>{
+  if(kind==='claim')return /FROM\s+rssd_demands[\s\S]*FOR UPDATE SKIP LOCKED/i.test(sql);
+  if(kind==='transfer')return /FROM\s+rssd_demands[\s\S]*FOR UPDATE/i.test(sql)&&!/SKIP LOCKED/i.test(sql);
+  return false;
+ };
+ const wrapClient=(client)=>({
+  ...client,
+  $queryRawUnsafe:async(sql,...args)=>{
+   const result=await client.$queryRawUnsafe(sql,...args);
+   if(!fired&&matches(sql)&&Array.isArray(result)&&result.length>0){
+    fired=true;
+    clearTimeout(timer);
+    resolveSeen({kind,id:result[0].id,sql});
+    await gate;
+   }
+   return result;
+  },
+  $executeRawUnsafe:(...args)=>client.$executeRawUnsafe(...args),
  });
+ store.db={
+  ...originalDb,
+  $transaction:async(fn,...rest)=>originalDb.$transaction(async tx=>fn(wrapClient(tx)),...rest),
+ };
  return {
   seen,
-  release:()=>{release();},
-  clear:()=>{delete store._testAfterDemandLocked;},
+  release:()=>{releaseGate();},
+  clear:()=>{
+   clearTimeout(timer);
+   store.db=originalDb;
+   if(!released)releaseGate();
+  },
  };
 }
 
@@ -1801,11 +1831,12 @@ test('in-transaction barrier: real claim holds the row so waiting transfer loses
  const f=await storeOnlyEnglishFixture();
  const successor=await store.createWorker(f.owner,{name:'BarrierTransferLoser',workspaceIds:['research']});
  const created=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'真领取屏障',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
- const barrier=withDemandLockBarrier();
+ const barrier=withDemandLockBarrier('claim');
  try{
   const claimPromise=store.claim(f.ctx,{demandId:created.id,storeOnly:true});
   const locked=await barrier.seen;
   assert.equal(locked.kind,'claim');
+  assert.equal(locked.id,created.id);
   const transferPromise=store.transferStoreOnlyOwnership(f.owner,created.id,{
    requestId:randomUUID(),expectedGeneration:created.generation,expectedStoreOnlyWorkerId:f.ctx.workerId,toWorkerId:successor.id,
   });
@@ -1823,13 +1854,14 @@ test('in-transaction barrier: real transfer holds the row so creator claim loses
  const successor=await store.createWorker(f.owner,{name:'BarrierClaimLoser',workspaceIds:['research']});
  const successorCtx=await store.authenticate(successor.token);
  const created=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'真移交屏障',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
- const barrier=withDemandLockBarrier();
+ const barrier=withDemandLockBarrier('transfer');
  try{
   const transferPromise=store.transferStoreOnlyOwnership(f.owner,created.id,{
    requestId:randomUUID(),expectedGeneration:created.generation,expectedStoreOnlyWorkerId:f.ctx.workerId,toWorkerId:successor.id,
   });
   const locked=await barrier.seen;
   assert.equal(locked.kind,'transfer');
+  assert.equal(locked.id,created.id);
   const claimPromise=store.claim(f.ctx,{demandId:created.id,storeOnly:true});
   await new Promise(resolve=>setTimeout(resolve,30));
   barrier.release();
@@ -1841,6 +1873,46 @@ test('in-transaction barrier: real transfer holds the row so creator claim loses
   assert.equal(creatorBlocked,true);
   assert.equal((await store.claim(successorCtx,{demandId:created.id,storeOnly:true})).payload.storeOnlyWorkerId,successor.id);
   assert.equal((await oneDemand(f.owner.orgId,created.id)).payload.sourceHash,f.zh.hash);
+ }finally{barrier.clear();}
+});
+
+test('concurrent transfers reusing one requestId across two demands return clean request_conflict',async()=>{
+ const f=await storeOnlyEnglishFixture();
+ const successor=await store.createWorker(f.owner,{name:'SharedRequestTarget',workspaceIds:['research']});
+ const work2=randomUUID();
+ await store.submit(f.owner,{requestId:randomUUID(),workId:work2,workspaceId:'research',sectionId:'methods',editions:[{locale:'zh-CN',title:'第二待补译',bodyMarkdown:'另一篇中文正文。'}]},{publish:false});
+ const zh2=await store.edition(f.owner,work2,'zh-CN',1);
+ const first=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'共享请求甲',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
+ const second=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'共享请求乙',requiredLocales:['en'],source:{workId:work2,locale:'zh-CN',revision:1},storeOnly:true});
+ const sharedRequestId=randomUUID();
+ const editionsBefore=await db.$queryRawUnsafe(
+  'SELECT locale,revision,hash FROM rssd_editions WHERE "orgId"=$1 AND "workId"=ANY($2::text[]) ORDER BY "workId",locale,revision',
+  f.owner.orgId,[f.workId,work2]);
+ const pubsBefore=(await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_publications WHERE "orgId"=$1',f.owner.orgId))[0].n;
+ const barrier=withDemandLockBarrier('transfer');
+ try{
+  const held=store.transferStoreOnlyOwnership(f.owner,first.id,{
+   requestId:sharedRequestId,expectedGeneration:first.generation,expectedStoreOnlyWorkerId:f.ctx.workerId,toWorkerId:successor.id,
+  });
+  const locked=await barrier.seen;
+  assert.equal(locked.id,first.id);
+  const competing=store.transferStoreOnlyOwnership(f.owner,second.id,{
+   requestId:sharedRequestId,expectedGeneration:second.generation,expectedStoreOnlyWorkerId:f.ctx.workerId,toWorkerId:successor.id,
+  });
+  await new Promise(resolve=>setTimeout(resolve,30));
+  barrier.release();
+  const winner=await held;
+  assert.equal(winner.status,'transferred');
+  assert.equal(winner.demand.payload.storeOnlyWorkerId,successor.id);
+  await assert.rejects(competing,{code:'request_conflict',status:409});
+  assert.equal((await oneDemand(f.owner.orgId,first.id)).payload.storeOnlyWorkerId,successor.id);
+  assert.equal((await oneDemand(f.owner.orgId,second.id)).payload.storeOnlyWorkerId,f.ctx.workerId);
+  assert.equal((await oneDemand(f.owner.orgId,first.id)).payload.sourceHash,f.zh.hash);
+  assert.equal((await oneDemand(f.owner.orgId,second.id)).payload.sourceHash,zh2.hash);
+  assert.deepEqual(await db.$queryRawUnsafe(
+   'SELECT locale,revision,hash FROM rssd_editions WHERE "orgId"=$1 AND "workId"=ANY($2::text[]) ORDER BY "workId",locale,revision',
+   f.owner.orgId,[f.workId,work2]),editionsBefore);
+  assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_publications WHERE "orgId"=$1',f.owner.orgId))[0].n,pubsBefore);
  }finally{barrier.clear();}
 });
 

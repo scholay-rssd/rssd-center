@@ -25,9 +25,11 @@ jest.mock('../apps/frontend/src/components/rssd/api', () => ({
   },
 }));
 
+const LOCAL_WORKER_ID = '2c7fb3bf-fa03-403e-a0f0-316d227fbed8';
 const workers = [
-  {id: 'mac', name: 'Mac Cursor', workspaceIds: ['metho', 'enter'], revokedAt: null},
-  {id: 'other', name: 'Other', workspaceIds: ['pets'], revokedAt: null},
+  {id: LOCAL_WORKER_ID, name: 'Mac Cursor', workspaceIds: ['metho', 'enter'], revokedAt: null},
+  // Same display name as the local worker — options must still show the full unique id.
+  {id: 'other-device-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', name: 'Mac Cursor', workspaceIds: ['pets'], revokedAt: null},
 ];
 const registry = [{id: 'metho', name: 'Metho'}, {id: 'enter', name: 'Enter'}, {id: 'pets', name: 'Pets'}];
 
@@ -68,7 +70,7 @@ test('loadDemandsByIds paginates beyond 200 and only returns pasted ids', async 
   expect(found.has('tr-missing')).toBe(false);
 });
 
-test('panel invalidates frozen preview when destination or list changes and never marks skips as allTransferred', async () => {
+test('panel shows full unique device ids in options and frozen preview, invalidates on edit, never marks skips as allTransferred', async () => {
   const api = jest.fn(async (path: string, method = 'GET', body?: any) => {
     if (path.startsWith('/demands?')) {
       return {items: [demand('tr-1'), demand('tr-2', {state: 'claimed', workerId: 'creator'})], total: 2, limit: 200, offset: 0};
@@ -76,28 +78,35 @@ test('panel invalidates frozen preview when destination or list changes and neve
     if (method === 'POST' && path.includes('/transfer-store-only')) {
       return {
         status: 'transferred',
-        liveOwnership: {storeOnlyWorkerId: 'mac', generation: 1},
-        demand: {payload: {storeOnlyWorkerId: 'mac'}},
+        liveOwnership: {storeOnlyWorkerId: LOCAL_WORKER_ID, generation: 1},
+        demand: {payload: {storeOnlyWorkerId: LOCAL_WORKER_ID}},
       };
     }
     throw new Error('unexpected ' + path);
   });
 
   render(<StoreOnlyTransferPanel api={api as any} registry={registry} workers={workers} />);
-  fireEvent.change(screen.getByRole('combobox'), {target: {value: 'mac'}});
+  const options = screen.getAllByRole('option').map((node) => node.textContent || '');
+  expect(options.some((text) => text.includes(LOCAL_WORKER_ID))).toBe(true);
+  expect(options.filter((text) => text.includes('Mac Cursor')).length).toBe(2);
+  expect(options.every((text) => !text.includes('Mac Cursor') || /[0-9a-f-]{36}/i.test(text))).toBe(true);
+
+  fireEvent.change(screen.getByRole('combobox'), {target: {value: LOCAL_WORKER_ID}});
   fireEvent.change(screen.getByPlaceholderText('tr-…'), {target: {value: 'tr-1\ntr-2'}});
   fireEvent.click(screen.getByRole('button', {name: '预览并冻结'}));
   await screen.findByText(/冻结目标/);
+  expect(screen.getByText(LOCAL_WORKER_ID)).toBeTruthy();
   expect((screen.getByRole('button', {name: /对冻结预览中的 1 条执行移交/}) as HTMLButtonElement).disabled).toBe(false);
 
-  fireEvent.change(screen.getByRole('combobox'), {target: {value: 'other'}});
+  fireEvent.change(screen.getByRole('combobox'), {target: {value: workers[1].id}});
   await waitFor(() => expect((screen.getByRole('button', {name: /对冻结预览中的 0 条执行移交/}) as HTMLButtonElement).disabled).toBe(true));
   expect((await screen.findAllByRole('status')).some((node) => /旧预览已失效|清单或目标/.test(node.textContent || ''))).toBe(true);
 
   // Restore selection and preview again, then run.
-  fireEvent.change(screen.getByRole('combobox'), {target: {value: 'mac'}});
+  fireEvent.change(screen.getByRole('combobox'), {target: {value: LOCAL_WORKER_ID}});
   fireEvent.click(screen.getByRole('button', {name: '预览并冻结'}));
   await screen.findByText(/冻结目标/);
+  expect(screen.getByText(LOCAL_WORKER_ID)).toBeTruthy();
   fireEvent.click(screen.getByRole('button', {name: /对冻结预览中的 1 条执行移交/}));
   await waitFor(() => expect(screen.getByText(/全部可移交项已确认归属目标设备/)).toBeTruthy());
   expect(screen.getAllByText(/跳过 1/).length).toBeGreaterThan(0);
@@ -108,23 +117,23 @@ test('panel invalidates frozen preview when destination or list changes and neve
 test('existing replay without live target ownership is not allTransferred', () => {
   const classified = classifyTransferOutcome({
     receipt: {status: 'existing', liveOwnership: {storeOnlyWorkerId: 'someone-else'}},
-    toWorkerId: 'mac',
+    toWorkerId: LOCAL_WORKER_ID,
   });
   const summary = summarizeTransferResults([{demandId: 'tr-1', ...classified}]);
   expect(summary.allTransferred).toBe(false);
   expect(summary.existingStale).toBe(1);
-  expect(previewIsCurrent({rawIds: 'a', toWorkerId: 'mac', preview: []}, 'a', 'mac')).toBe(true);
+  expect(previewIsCurrent({rawIds: 'a', toWorkerId: LOCAL_WORKER_ID, preview: []}, 'a', LOCAL_WORKER_ID)).toBe(true);
 });
 
 test('logic helpers: parse, skip vs transfer, confirmed replay, merge without blocking stale', async () => {
   expect(parseDemandIds('tr-a\ntr-b, tr-a')).toEqual(['tr-a', 'tr-b']);
   expect(() => parseDemandIds('bad id!')).toThrow(/无效的任务编号/);
   const queued = demand('tr-9');
-  expect(freezePreviewRow(queued, 'mac').action).toBe('transfer');
-  expect(freezePreviewRow({...queued, state: 'claimed', workerId: 'creator'}, 'mac').reason).toBe('claimed_or_blocked');
+  expect(freezePreviewRow(queued, LOCAL_WORKER_ID).action).toBe('transfer');
+  expect(freezePreviewRow({...queued, state: 'claimed', workerId: 'creator'}, LOCAL_WORKER_ID).reason).toBe('claimed_or_blocked');
   const confirmed = classifyTransferOutcome({
-    receipt: {status: 'existing', liveOwnership: {storeOnlyWorkerId: 'mac'}},
-    toWorkerId: 'mac',
+    receipt: {status: 'existing', liveOwnership: {storeOnlyWorkerId: LOCAL_WORKER_ID}},
+    toWorkerId: LOCAL_WORKER_ID,
   });
   expect(confirmed.confirmedTransfer).toBe(true);
   const withSkips = summarizeTransferResults([
@@ -188,7 +197,7 @@ test('logic helpers: parse, skip vs transfer, confirmed replay, merge without bl
   expect(network.current[0].confirmedTransfer).toBe(false);
   expect(network.history[0].confirmedTransfer).toBe(true);
 
-  const a = await stableTransferRequestId({demandId: 'tr-1', expectedGeneration: 0, expectedStoreOnlyWorkerId: 'c', toWorkerId: 'mac'});
-  const b = await stableTransferRequestId({demandId: 'tr-1', expectedGeneration: 0, expectedStoreOnlyWorkerId: 'c', toWorkerId: 'mac'});
+  const a = await stableTransferRequestId({demandId: 'tr-1', expectedGeneration: 0, expectedStoreOnlyWorkerId: 'c', toWorkerId: LOCAL_WORKER_ID});
+  const b = await stableTransferRequestId({demandId: 'tr-1', expectedGeneration: 0, expectedStoreOnlyWorkerId: 'c', toWorkerId: LOCAL_WORKER_ID});
   expect(a).toBe(b);
 });

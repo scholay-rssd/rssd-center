@@ -368,8 +368,6 @@ class RssdStore {
         }
         return null;
       }
-      // Test-only hook: pause after the claim transaction holds the demand row.
-      if(typeof this._testAfterDemandLocked==='function')await this._testAfterDemandLocked({kind:'claim',id:demand.id,db});
       const {row,section}=await this.demandSection(db,ctx,demand);
       const destinations=[];
       for(const target of section.policy.targets){
@@ -447,13 +445,14 @@ class RssdStore {
       expectedState: 'queued',
     });
     return this.transaction(async db => {
+      // Serialize by requestId then demandId (fixed order) so concurrent reuse of one
+      // requestId across demands cannot race past the receipt lookup into a raw 23505.
+      await lock(db, ctx.orgId + ':store-only-transfer-request:' + requestId);
       await lock(db, ctx.orgId + ':store-only-transfer:' + id);
       const demand = await one(db, 'SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2 FOR UPDATE', ctx.orgId, id);
       if (!demand) p.fail('Demand not found', 404, 'not_found');
       scope(ctx, demand.workspaceId);
       if (!isStoreOnlyPayload(demand.payload)) p.fail('Demand is not a store-only translate', 409, 'not_store_only');
-      // Test-only hook: pause after the transfer transaction holds the demand row.
-      if (typeof this._testAfterDemandLocked === 'function') await this._testAfterDemandLocked({kind: 'transfer', id, db});
 
       const prior = await one(db,
         'SELECT * FROM rssd_store_only_transfers WHERE "orgId"=$1 AND "requestId"=$2',
@@ -534,8 +533,19 @@ class RssdStore {
           workerId: result.workerId || null,
         },
       };
-      await execute(db, `INSERT INTO rssd_store_only_transfers ("orgId","requestId","demandId","payloadHash",result)
-        VALUES ($1,$2,$3,$4,$5::jsonb)`, ctx.orgId, requestId, id, fingerprint, encoded(receipt));
+      try {
+        await execute(db, `INSERT INTO rssd_store_only_transfers ("orgId","requestId","demandId","payloadHash",result)
+          VALUES ($1,$2,$3,$4,$5::jsonb)`, ctx.orgId, requestId, id, fingerprint, encoded(receipt));
+      } catch (error) {
+        if (!uniqueViolation(error)) throw error;
+        const raced = await one(db,
+          'SELECT * FROM rssd_store_only_transfers WHERE "orgId"=$1 AND "requestId"=$2',
+          ctx.orgId, requestId);
+        if (raced && raced.demandId !== id) {
+          p.fail('Transfer request belongs to another demand', 409, 'request_conflict');
+        }
+        p.fail('Transfer request identity was reused with different content', 409, 'request_conflict');
+      }
       await audit(db, ctx, 'demand.transfer_store_only', {
         id, requestId, generation: result.generation,
         fromWorkerId: expectedStoreOnlyWorkerId, toWorkerId,
