@@ -243,7 +243,7 @@ class RssdStore {
         const old=await one(db,'SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2',ctx.orgId,value.id);
         if(old && old.kind===value.kind && old.payload.source?.workId===value.source.workId){
           if(isStoreOnlyPayload(old.payload)!==storeOnly)p.fail('Demand identity already exists',409,'identity_conflict');
-          if(isStoreOnlyPayload(old.payload) && old.payload.storeOnlyWorkerId!==ctx.workerId)
+          if(isStoreOnlyPayload(old.payload) && old.workerId && old.workerId!==ctx.workerId)
             p.fail('An open store-only translate already exists for this work; wait for expiry, release or completion before rebinding',409,'open_translate_conflict');
           return {...safeDemand(old),status:'existing'};
         }
@@ -262,7 +262,7 @@ class RssdStore {
     if(existing){
       if(isStoreOnlyPayload(existing.payload)!==storeOnly)
         p.fail('An open translate task already exists for this work; wait for expiry, release or completion before rebinding',409,'open_translate_conflict');
-      if(isStoreOnlyPayload(existing.payload) && existing.payload.storeOnlyWorkerId!==ctx.workerId)
+      if(isStoreOnlyPayload(existing.payload) && existing.workerId && existing.workerId!==ctx.workerId)
         p.fail('An open store-only translate already exists for this work; wait for expiry, release or completion before rebinding',409,'open_translate_conflict');
       return {...safeDemand(existing),status:'existing'};
     }
@@ -349,7 +349,6 @@ class RssdStore {
           const targetedStoreOnly=isStoreOnlyPayload(targeted.payload);
           if(targetedStoreOnly && !storeOnly)p.fail('Store-only demand requires storeOnly=true on claim',403,'store_only_required');
           if(!targetedStoreOnly && storeOnly)p.fail('Demand is not a store-only translate',409,'not_store_only');
-          if(targetedStoreOnly && targeted.payload.storeOnlyWorkerId!==ctx.workerId)p.fail('Store-only demand belongs to another device',403,'forbidden');
         }
       }
       const demand=await one(db,`SELECT * FROM rssd_demands d WHERE "orgId"=$1 AND state='queued'
@@ -357,10 +356,10 @@ class RssdStore {
         AND NOT EXISTS (SELECT 1 FROM rssd_migrations m WHERE m."orgId"=d."orgId" AND m."workspaceId"=d."workspaceId" AND m.state<>'active')
         AND ($3::text IS NULL OR id=$3) AND ($4='[]' OR "sectionId" IN (SELECT jsonb_array_elements_text($4::jsonb)))
         AND (
-          ($5::boolean AND payload->>'storeOnly'='true' AND payload->>'storeOnlyWorkerId'=$6)
+          ($5::boolean AND payload->>'storeOnly'='true')
           OR (NOT $5::boolean AND coalesce(payload->>'storeOnly','')<>'true')
         )
-        ORDER BY priority DESC,"createdAt",id FOR UPDATE SKIP LOCKED LIMIT 1`,ctx.orgId,encoded(workspaceIds),demandId,encoded(sectionIds),storeOnly,ctx.workerId);
+        ORDER BY priority DESC,(coalesce(payload->>'storeOnlyWorkerId','')=$6) DESC,"createdAt",id FOR UPDATE SKIP LOCKED LIMIT 1`,ctx.orgId,encoded(workspaceIds),demandId,encoded(sectionIds),storeOnly,ctx.workerId);
       if(!demand){
         if(demandId){
           const held=await one(db,'SELECT id,state FROM rssd_demands WHERE "orgId"=$1 AND id=$2',ctx.orgId,demandId);
@@ -381,6 +380,10 @@ class RssdStore {
       // earlier claim that was released is not carried over.
       const {voiceDecision:_,personaRecordVersion:_format,...queued}=demand.payload;
       const voiceDecision=this.mounts?await this.mounts.decide(db,ctx.orgId,demand,section.policy):null;
+      // A store-only translate is held only by the device working on it. While queued any authorized device
+      // may claim it, the creating device first; the claim makes the claimer its holder until it is
+      // released, expires or completes, and only the claim token can submit, so no device's draft is replaced.
+      if(isStoreOnlyPayload(queued))queued.storeOnlyWorkerId=ctx.workerId;
       const claimToken=randomUUID(),payload={...queued,policy:section.policy,workspaceRevision:row.revision,destinations,outputContractVersion:1,claimExpiresAt:new Date(Date.now()+CLAIM_TTL_MS).toISOString(),...(writingDefaults?{writingDefaults}:{}),...(voiceDecision?{voiceDecision,personaRecordVersion:2}:{})};
       const result=await one(db,`UPDATE rssd_demands SET state='claimed',"workerId"=$3,"claimToken"=$4,generation=generation+1,
         payload=$5::jsonb,"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2 RETURNING *`,ctx.orgId,demand.id,ctx.workerId,claimToken,encoded(payload));
@@ -402,7 +405,7 @@ class RssdStore {
       const demand=await one(db,'SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2 FOR UPDATE',ctx.orgId,id);
       if(!demand)p.fail('Demand not found',404);scope(ctx,demand.workspaceId);
       // A device may withdraw a demand nobody has claimed in a workspace it is authorized for, as it may
-      // create and edit one. A store-only translate stays with the device that created it.
+      // create and edit one. A store-only translate is withdrawn only by the device that created or last held it.
       const withdraw=input.action==='cancel'&&demand.state==='queued'&&!demand.workerId&&Boolean(ctx.workerId)
         &&(demand.payload?.storeOnly!==true||demand.payload.storeOnlyWorkerId===ctx.workerId);
       if(!ctx.admin && !withdraw && (demand.workerId!==ctx.workerId || demand.claimToken!==input.claimToken))p.fail('Claim no longer belongs to this device',409,'claim_revoked');
