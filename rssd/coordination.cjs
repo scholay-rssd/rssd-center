@@ -2,7 +2,7 @@
 const {randomUUID}=require('node:crypto');
 const p=require('./protocol.cjs');
 const {scope,admin}=require('./store.cjs');
-const {existingEnglishSitePublishContract,supportsExistingEnglishSitePublish,EXISTING_ENGLISH_SITE_PUBLISH_VERSION,EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES}=require('./existing-site-publish.cjs');
+const {existingEnglishSitePublishContract,supportsExistingEnglishSitePublish,supportsExistingEnglishSitePublishHeadCompare,EXISTING_ENGLISH_SITE_PUBLISH_VERSION,EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES}=require('./existing-site-publish.cjs');
 const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args);
 const x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
 const one=async(...args)=>(await q(...args))[0]||null;
@@ -17,11 +17,26 @@ function supportsTranslateContinuation(overview){
 }
 const STORE_ONLY_TRANSLATE_VERSION=1;
 const STORE_ONLY_TRANSLATE_GUARANTEES=Object.freeze(['storeOnlyFrozen','zeroPublications','exclusiveWorkerClaim','intentRequired','noClaimSteal','leaseRecovery','englishOnly','sourceBind','receipt','receiptIsolation','openWorkFence']);
-function storeOnlyTranslateContract(){return {version:STORE_ONLY_TRANSLATE_VERSION,guarantees:[...STORE_ONLY_TRANSLATE_GUARANTEES]};}
+const STORE_ONLY_OWNERSHIP_TRANSFER_VERSION=1;
+const STORE_ONLY_OWNERSHIP_TRANSFER_GUARANTEES=Object.freeze(['queuedCompareAndSwap','sourceBindingPreserved','noEditionMutation','ownerOnly','idempotentRequest','persistentRequestReceipt','liveOwnershipOnReplay']);
+function storeOnlyOwnershipTransferContract(){return {version:STORE_ONLY_OWNERSHIP_TRANSFER_VERSION,guarantees:[...STORE_ONLY_OWNERSHIP_TRANSFER_GUARANTEES]};}
+function storeOnlyTranslateContract(){
+ return {
+  version:STORE_ONLY_TRANSLATE_VERSION,
+  guarantees:[...STORE_ONLY_TRANSLATE_GUARANTEES],
+  ownershipTransfer:storeOnlyOwnershipTransferContract(),
+ };
+}
 function supportsStoreOnlyTranslate(overview){
  const row=overview?.contracts?.storeOnlyTranslate;
  if(!row||typeof row!=='object'||Array.isArray(row)||!Number.isInteger(row.version)||row.version<STORE_ONLY_TRANSLATE_VERSION||!Array.isArray(row.guarantees))return false;
  return STORE_ONLY_TRANSLATE_GUARANTEES.every(token=>row.guarantees.includes(token));
+}
+function supportsStoreOnlyOwnershipTransfer(overview){
+ if(!supportsStoreOnlyTranslate(overview))return false;
+ const row=overview?.contracts?.storeOnlyTranslate?.ownershipTransfer;
+ if(!row||typeof row!=='object'||Array.isArray(row)||!Number.isInteger(row.version)||row.version<STORE_ONLY_OWNERSHIP_TRANSFER_VERSION||!Array.isArray(row.guarantees))return false;
+ return STORE_ONLY_OWNERSHIP_TRANSFER_GUARANTEES.every(token=>row.guarantees.includes(token));
 }
 function date(value,name){if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}T/.test(value)||!Number.isFinite(Date.parse(value)))p.fail('Invalid '+name);return new Date(value).toISOString();}
 function page(input={}){const limit=p.integer(Number(input.limit??50),'limit',1,200),offset=p.integer(Number(input.offset??0),'offset',0,1000000);return {limit,offset};}
@@ -231,4 +246,4 @@ class RssdCoordination {
    nativePaths:{calendar:'/launches',media:'/media',analytics:'/analytics',agents:'/agents',settings:'/settings'}};
  }
 }
-module.exports={RssdCoordination,windowFor,page,TRANSLATE_CONTINUATION_VERSION,TRANSLATE_CONTINUATION_GUARANTEES,translateContinuationContract,supportsTranslateContinuation,STORE_ONLY_TRANSLATE_VERSION,STORE_ONLY_TRANSLATE_GUARANTEES,storeOnlyTranslateContract,supportsStoreOnlyTranslate,EXISTING_ENGLISH_SITE_PUBLISH_VERSION,EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES,existingEnglishSitePublishContract,supportsExistingEnglishSitePublish};
+module.exports={RssdCoordination,windowFor,page,TRANSLATE_CONTINUATION_VERSION,TRANSLATE_CONTINUATION_GUARANTEES,translateContinuationContract,supportsTranslateContinuation,STORE_ONLY_TRANSLATE_VERSION,STORE_ONLY_TRANSLATE_GUARANTEES,storeOnlyTranslateContract,supportsStoreOnlyTranslate,STORE_ONLY_OWNERSHIP_TRANSFER_VERSION,STORE_ONLY_OWNERSHIP_TRANSFER_GUARANTEES,storeOnlyOwnershipTransferContract,supportsStoreOnlyOwnershipTransfer,EXISTING_ENGLISH_SITE_PUBLISH_VERSION,EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES,existingEnglishSitePublishContract,supportsExistingEnglishSitePublish,supportsExistingEnglishSitePublishHeadCompare};
