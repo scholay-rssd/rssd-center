@@ -1781,7 +1781,8 @@ async function oneDemand(orgId,id){
 
 /**
  * Test-only wrapper around the real pg adapter: pause after the real demand
- * FOR UPDATE / SKIP LOCKED SELECT returns inside the live claim/transfer transaction.
+ * FOR UPDATE / SKIP LOCKED SELECT, or after an empty transfer-receipt lookup,
+ * returns inside the live claim/transfer transaction.
  * No production hooks and no forged SQL.
  */
 function withDemandLockBarrier(kind,timeoutMs=5000){
@@ -1796,16 +1797,24 @@ function withDemandLockBarrier(kind,timeoutMs=5000){
  const matches=(sql)=>{
   if(kind==='claim')return /FROM\s+rssd_demands[\s\S]*FOR UPDATE SKIP LOCKED/i.test(sql);
   if(kind==='transfer')return /FROM\s+rssd_demands[\s\S]*FOR UPDATE/i.test(sql)&&!/SKIP LOCKED/i.test(sql);
+  // Pause after the pre-insert receipt lookup returns empty so the test can plant a
+  // committed conflicting row and exercise INSERT ... ON CONFLICT DO NOTHING.
+  if(kind==='transfer-receipt-lookup')return /FROM\s+rssd_store_only_transfers\b/i.test(sql)&&!/INSERT/i.test(sql);
   return false;
+ };
+ const shouldPause=(sql,result)=>{
+  if(!matches(sql)||!Array.isArray(result))return false;
+  if(kind==='transfer-receipt-lookup')return result.length===0;
+  return result.length>0;
  };
  const wrapClient=(client)=>({
   ...client,
   $queryRawUnsafe:async(sql,...args)=>{
    const result=await client.$queryRawUnsafe(sql,...args);
-   if(!fired&&matches(sql)&&Array.isArray(result)&&result.length>0){
+   if(!fired&&shouldPause(sql,result)){
     fired=true;
     clearTimeout(timer);
-    resolveSeen({kind,id:result[0].id,sql});
+    resolveSeen({kind,id:result[0]?.id||null,sql,args});
     await gate;
    }
    return result;
@@ -1913,6 +1922,57 @@ test('concurrent transfers reusing one requestId across two demands return clean
    'SELECT locale,revision,hash FROM rssd_editions WHERE "orgId"=$1 AND "workId"=ANY($2::text[]) ORDER BY "workId",locale,revision',
    f.owner.orgId,[f.workId,work2]),editionsBefore);
   assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_publications WHERE "orgId"=$1',f.owner.orgId))[0].n,pubsBefore);
+ }finally{barrier.clear();}
+});
+
+test('transfer INSERT ON CONFLICT DO NOTHING fallback returns request_conflict and rolls back demand update',async()=>{
+ const f=await storeOnlyEnglishFixture();
+ const successor=await store.createWorker(f.owner,{name:'OnConflictTarget',workspaceIds:['research']});
+ const created=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'冲突回落',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
+ const requestId=randomUUID();
+ const foreignDemandId=randomUUID();
+ const editionsBefore=await db.$queryRawUnsafe(
+  'SELECT locale,revision,hash FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 ORDER BY locale,revision',
+  f.owner.orgId,f.workId);
+ const pubsBefore=(await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_publications WHERE "orgId"=$1',f.owner.orgId))[0].n;
+ const draftsBefore=(await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_staged_drafts WHERE "orgId"=$1',f.owner.orgId))[0].n;
+ const demandsBefore=await db.$queryRawUnsafe(
+  'SELECT id,state,generation,payload FROM rssd_demands WHERE "orgId"=$1 ORDER BY id',f.owner.orgId);
+ const barrier=withDemandLockBarrier('transfer-receipt-lookup');
+ try{
+  const transferPromise=store.transferStoreOnlyOwnership(f.owner,created.id,{
+   requestId,expectedGeneration:created.generation,expectedStoreOnlyWorkerId:f.ctx.workerId,toWorkerId:successor.id,
+  });
+  const locked=await barrier.seen;
+  assert.equal(locked.kind,'transfer-receipt-lookup');
+  assert.equal(locked.args[1],requestId);
+  // Plant a committed conflicting receipt while the transfer TX still holds the
+  // requestId advisory lock but has already passed its empty prior lookup.
+  await db.$executeRawUnsafe(
+   `INSERT INTO rssd_store_only_transfers ("orgId","requestId","demandId","payloadHash",result)
+    VALUES ($1,$2,$3,$4,$5::jsonb)`,
+   f.owner.orgId,requestId,foreignDemandId,'f'.repeat(64),
+   JSON.stringify({status:'transferred',replay:false,demand:{id:foreignDemandId},liveOwnership:{demandId:foreignDemandId}}));
+  barrier.release();
+  await assert.rejects(transferPromise,{code:'request_conflict',status:409});
+  const after=await oneDemand(f.owner.orgId,created.id);
+  assert.equal(after.payload.storeOnlyWorkerId,f.ctx.workerId,'ownership update must roll back');
+  assert.equal(after.generation,created.generation);
+  assert.equal(after.state,'queued');
+  assert.equal(after.payload.sourceHash,f.zh.hash);
+  assert.deepEqual(await db.$queryRawUnsafe(
+   'SELECT locale,revision,hash FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 ORDER BY locale,revision',
+   f.owner.orgId,f.workId),editionsBefore);
+  assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_publications WHERE "orgId"=$1',f.owner.orgId))[0].n,pubsBefore);
+  assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_staged_drafts WHERE "orgId"=$1',f.owner.orgId))[0].n,draftsBefore);
+  const demandsAfter=await db.$queryRawUnsafe(
+   'SELECT id,state,generation,payload FROM rssd_demands WHERE "orgId"=$1 ORDER BY id',f.owner.orgId);
+  assert.deepEqual(demandsAfter,demandsBefore);
+  const planted=await db.$queryRawUnsafe(
+   'SELECT "demandId","payloadHash" FROM rssd_store_only_transfers WHERE "orgId"=$1 AND "requestId"=$2',
+   f.owner.orgId,requestId);
+  assert.equal(planted.length,1);
+  assert.equal(planted[0].demandId,foreignDemandId);
  }finally{barrier.clear();}
 });
 

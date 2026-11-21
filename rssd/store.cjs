@@ -533,11 +533,14 @@ class RssdStore {
           workerId: result.workerId || null,
         },
       };
-      try {
-        await execute(db, `INSERT INTO rssd_store_only_transfers ("orgId","requestId","demandId","payloadHash",result)
-          VALUES ($1,$2,$3,$4,$5::jsonb)`, ctx.orgId, requestId, id, fingerprint, encoded(receipt));
-      } catch (error) {
-        if (!uniqueViolation(error)) throw error;
+      // ON CONFLICT DO NOTHING keeps the transaction usable (no 23505 → 25P02).
+      // An empty RETURNING means another committed receipt won; fail closed so the
+      // demand UPDATE above rolls back with the rest of this transaction.
+      const inserted = await one(db, `INSERT INTO rssd_store_only_transfers ("orgId","requestId","demandId","payloadHash",result)
+        VALUES ($1,$2,$3,$4,$5::jsonb)
+        ON CONFLICT ("orgId","requestId") DO NOTHING
+        RETURNING "requestId"`, ctx.orgId, requestId, id, fingerprint, encoded(receipt));
+      if (!inserted) {
         const raced = await one(db,
           'SELECT * FROM rssd_store_only_transfers WHERE "orgId"=$1 AND "requestId"=$2',
           ctx.orgId, requestId);
