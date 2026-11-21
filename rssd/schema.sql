@@ -193,6 +193,13 @@ CREATE TABLE IF NOT EXISTS rssd_existing_site_publishes (
  "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,PRIMARY KEY ("orgId","requestId")
 );
 CREATE INDEX IF NOT EXISTS rssd_existing_site_publishes_work ON rssd_existing_site_publishes ("orgId","workId",locale,revision,"destinationId");
+-- Persistent Owner transfer receipts for store-only ownership handoff (additive, no destructive migration).
+CREATE TABLE IF NOT EXISTS rssd_store_only_transfers (
+ "orgId" TEXT NOT NULL,"requestId" TEXT NOT NULL,"demandId" TEXT NOT NULL,"payloadHash" TEXT NOT NULL,
+ result JSONB NOT NULL,"createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ PRIMARY KEY ("orgId","requestId")
+);
+CREATE INDEX IF NOT EXISTS rssd_store_only_transfers_demand ON rssd_store_only_transfers ("orgId","demandId","createdAt");
 
 -- Annotations of published revisions. Rows are only added, and the newest per annotator, revision and form version counts.
 CREATE TABLE IF NOT EXISTS rssd_annotations (

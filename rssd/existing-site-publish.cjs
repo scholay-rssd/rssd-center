@@ -7,8 +7,19 @@ const q=(db,sql,...args)=>db.$queryRawUnsafe(sql,...args);
 const x=(db,sql,...args)=>db.$executeRawUnsafe(sql,...args);
 const one=async(...args)=>(await q(...args))[0]||null;
 const lock=(db,key)=>x(db,'SELECT pg_advisory_xact_lock(hashtextextended($1,0))',key);
-const RECEIPT_FIELDS=Object.freeze(['requestId','status','workId','workspaceId','locale','revision','hash','destinationId','destinationKind','publicationId','publicationState','articleId']);
-const INPUT_FIELDS=Object.freeze(['requestId','workId','locale','revision','hash','destinationId','articleId']);
+const RECEIPT_FIELDS=Object.freeze(['requestId','status','workId','workspaceId','locale','revision','hash','destinationId','destinationKind','publicationId','publicationState','articleId','englishHeadRevision']);
+const INPUT_FIELDS=Object.freeze(['requestId','workId','locale','revision','hash','destinationId','articleId','expectedHeadRevision']);
+const EXISTING_ENGLISH_SITE_PUBLISH_HEAD_COMPARE_VERSION=1;
+const EXISTING_ENGLISH_SITE_PUBLISH_HEAD_COMPARE_GUARANTEES=Object.freeze(['englishHeadRevision']);
+function existingEnglishSitePublishHeadCompareContract(){
+ return {version:EXISTING_ENGLISH_SITE_PUBLISH_HEAD_COMPARE_VERSION,guarantees:[...EXISTING_ENGLISH_SITE_PUBLISH_HEAD_COMPARE_GUARANTEES]};
+}
+function supportsExistingEnglishSitePublishHeadCompare(overview){
+ if(!supportsExistingEnglishSitePublish(overview))return false;
+ const row=overview?.contracts?.existingEnglishSitePublish?.headCompare;
+ if(!row||typeof row!=='object'||Array.isArray(row)||!Number.isInteger(row.version)||row.version<EXISTING_ENGLISH_SITE_PUBLISH_HEAD_COMPARE_VERSION||!Array.isArray(row.guarantees))return false;
+ return EXISTING_ENGLISH_SITE_PUBLISH_HEAD_COMPARE_GUARANTEES.every(token=>row.guarantees.includes(token));
+}
 function editionHash(value){
  if(typeof value!=='string'||!/^[a-f0-9]{64}$/.test(value))p.fail('Invalid hash',400,'invalid_request');
  return value;
@@ -23,12 +34,21 @@ function resolveArticleId(workId,locale,payload){
  if(kind!=='news')return 'record-'+(metadata.editorial?.documentId||documentId(workId,locale));
  return metadata.editorial?.articleId||('center-'+p.hash([workId,locale]).slice(0,48));
 }
+function publishFingerprint({workId,locale,revision,hash,destinationId,articleId,expectedHeadRevision}){
+ // Pre-upgrade receipts hashed without expectedHeadRevision. Omitting the field must keep that byte identity.
+ const value={workId,locale,revision,hash,destinationId,articleId:articleId||null};
+ if(expectedHeadRevision!==undefined)value.expectedHeadRevision=expectedHeadRevision;
+ return p.hash(value);
+}
 function publicReceipt(row,publication){
+ const stored=row.result&&typeof row.result==='object'?row.result:{};
  const value={
-  requestId:row.requestId,status:row.status,workId:row.workId,workspaceId:row.workspaceId,
+  requestId:row.requestId,status:row.status||stored.status||'existing',workId:row.workId,workspaceId:row.workspaceId,
   locale:row.locale,revision:row.revision,hash:row.editionHash,destinationId:row.destinationId,
   destinationKind:'site',publicationId:row.publicationId,publicationState:publication?.state||null,
   articleId:row.articleId,
+  // Prefer the frozen receipt value so GET and idempotent POST stay equal even if the live head moves.
+  englishHeadRevision:row.englishHeadRevision!==undefined?row.englishHeadRevision:(stored.englishHeadRevision??null),
  };
  return Object.fromEntries(RECEIPT_FIELDS.map(k=>[k,value[k]]));
 }
@@ -50,7 +70,8 @@ class RssdExistingSitePublish {
   const locale=p.locale(input.locale),revision=p.integer(input.revision,'revision',1);
   const hash=editionHash(input.hash),destinationId=p.id(input.destinationId,'destinationId');
   const articleId=input.articleId===undefined?undefined:p.id(input.articleId,'articleId');
-  const fingerprint=p.hash({workId,locale,revision,hash,destinationId,articleId:articleId||null});
+  const expectedHeadRevision=input.expectedHeadRevision===undefined?undefined:p.integer(input.expectedHeadRevision,'expectedHeadRevision',1);
+  const fingerprint=publishFingerprint({workId,locale,revision,hash,destinationId,articleId,expectedHeadRevision});
   return this.store.transaction(async db=>{
    await lock(db,ctx.orgId+':existing-site-publish:'+requestId);
    if(ctx.workerId&&!await one(db,'SELECT id FROM rssd_workers WHERE "orgId"=$1 AND id=$2 AND "revokedAt" IS NULL',ctx.orgId,ctx.workerId))p.fail('Device revoked',401,'unauthorized');
@@ -82,9 +103,16 @@ class RssdExistingSitePublish {
    const visibility=await one(db,'SELECT visibility FROM rssd_editorial_states WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3',ctx.orgId,workId,locale);
    if(visibility?.visibility==='deleted')p.fail('This edition was deleted; restore it explicitly before editing',409,'edition_deleted');
    if(visibility?.visibility==='withdrawn')p.fail('This website edition is withdrawn; explicitly publish or restore it through a visibility action',409,'edition_withdrawn');
-   const edition=await one(db,'SELECT locale,revision,payload,hash FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND revision=$4',ctx.orgId,workId,locale,revision);
+   const edition=await one(db,'SELECT locale,revision,payload,hash FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND revision=$4 FOR UPDATE',ctx.orgId,workId,locale,revision);
    if(!edition)p.fail('Edition revision not found',404,'not_found');
    if(edition.hash!==hash)p.fail('Edition fingerprint does not match the requested revision',409,'source_conflict');
+   const head=await one(db,'SELECT revision,hash FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 ORDER BY revision DESC LIMIT 1 FOR UPDATE',ctx.orgId,workId,locale);
+   const englishHeadRevision=head?.revision||null;
+   if(expectedHeadRevision!==undefined){
+    if(englishHeadRevision!==expectedHeadRevision||englishHeadRevision!==revision||head.hash!==hash){
+     p.fail('English head changed; retain the local manuscript and reload before publishing',409,'revision_conflict');
+    }
+   }
    const resolved=resolveArticleId(workId,locale,edition.payload);
    if(articleId!==undefined&&articleId!==resolved)p.fail('English manuscript identity does not match this revision',409,'identity_conflict');
    const existingPublication=await one(db,'SELECT id,state FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND revision=$4 AND "destinationId"=$5',ctx.orgId,workId,locale,revision,destinationId);
@@ -102,20 +130,26 @@ class RssdExistingSitePublish {
     }
    }
    const publication=await one(db,'SELECT id,state FROM rssd_publications WHERE "orgId"=$1 AND id=$2',ctx.orgId,publicationId);
-   const result=publicReceipt({requestId,status,workId,workspaceId:work.workspaceId,locale,revision,editionHash:hash,destinationId,publicationId,articleId:resolved},publication);
+   const result=publicReceipt({requestId,status,workId,workspaceId:work.workspaceId,locale,revision,editionHash:hash,destinationId,publicationId,articleId:resolved,englishHeadRevision},publication);
    await x(db,`INSERT INTO rssd_existing_site_publishes ("orgId","requestId","workspaceId","workId",locale,revision,"destinationId","editionHash","articleId","publicationId","payloadHash",result)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)`,ctx.orgId,requestId,work.workspaceId,workId,locale,revision,destinationId,hash,resolved,publicationId,fingerprint,encoded(result));
-   await x(db,'INSERT INTO rssd_audit ("orgId",id,actor,action,payload) VALUES ($1,$2,$3,$4,$5::jsonb)',ctx.orgId,randomUUID(),ctx.workerId||ctx.userId||'center','publication.existingEnglishSite',encoded({requestId,workId,locale,revision,destinationId,publicationId,status}));
+   await x(db,'INSERT INTO rssd_audit ("orgId",id,actor,action,payload) VALUES ($1,$2,$3,$4,$5::jsonb)',ctx.orgId,randomUUID(),ctx.workerId||ctx.userId||'center','publication.existingEnglishSite',encoded({requestId,workId,locale,revision,destinationId,publicationId,status,expectedHeadRevision:expectedHeadRevision??null,englishHeadRevision}));
    return result;
   });
  }
 }
 const EXISTING_ENGLISH_SITE_PUBLISH_VERSION=1;
 const EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES=Object.freeze(['canonicalSiteOnly','englishOnly','existingRevision','hashBind','localeIdentity','noEditionRewrite','zeroExternalTasks','idempotentReceipt','openWorkFence']);
-function existingEnglishSitePublishContract(){return {version:EXISTING_ENGLISH_SITE_PUBLISH_VERSION,guarantees:[...EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES]};}
+function existingEnglishSitePublishContract(){
+ return {
+  version:EXISTING_ENGLISH_SITE_PUBLISH_VERSION,
+  guarantees:[...EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES],
+  headCompare:existingEnglishSitePublishHeadCompareContract(),
+ };
+}
 function supportsExistingEnglishSitePublish(overview){
  const row=overview?.contracts?.existingEnglishSitePublish;
  if(!row||typeof row!=='object'||Array.isArray(row)||!Number.isInteger(row.version)||row.version<EXISTING_ENGLISH_SITE_PUBLISH_VERSION||!Array.isArray(row.guarantees))return false;
  return EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES.every(token=>row.guarantees.includes(token));
 }
-module.exports={RssdExistingSitePublish,RECEIPT_FIELDS,INPUT_FIELDS,resolveArticleId,EXISTING_ENGLISH_SITE_PUBLISH_VERSION,EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES,existingEnglishSitePublishContract,supportsExistingEnglishSitePublish};
+module.exports={RssdExistingSitePublish,RECEIPT_FIELDS,INPUT_FIELDS,resolveArticleId,publishFingerprint,EXISTING_ENGLISH_SITE_PUBLISH_VERSION,EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES,existingEnglishSitePublishContract,supportsExistingEnglishSitePublish,EXISTING_ENGLISH_SITE_PUBLISH_HEAD_COMPARE_VERSION,EXISTING_ENGLISH_SITE_PUBLISH_HEAD_COMPARE_GUARANTEES,existingEnglishSitePublishHeadCompareContract,supportsExistingEnglishSitePublishHeadCompare};

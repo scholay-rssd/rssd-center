@@ -11,6 +11,7 @@ import { CenterHealth } from './health';
 import { GuestbookModeration } from './guestbook';
 import { CenterLabels } from './labels';
 import { PersonaLibrary } from './persona-voice';
+import { StoreOnlyTransferPanel } from './store-only-transfer-panel';
 import './center-admin.css';
 
 type Row = Record<string, any>;
@@ -73,6 +74,7 @@ function Devices({ api, registry }: { api: RssdApi; registry: Row[] }) {
         <footer><button className="cp-primary" disabled={busy}>授予</button></footer>
       </form>
     </Drawer>}
+    {rows && <StoreOnlyTransferPanel api={api} registry={registry} workers={rows} />}
   </section>;
 }
 

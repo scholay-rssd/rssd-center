@@ -1694,3 +1694,229 @@ test('a space read is reused while nothing it depends on changed, and read afres
   assert.equal(whole.length,reads+1);
  }finally{db.$queryRawUnsafe=original;}
 });
+
+test('owner store-only ownership transfer persists request receipts, preserves editions, and fails closed',async()=>{
+ const f=await storeOnlyEnglishFixture();
+ const successor=await store.createWorker(f.owner,{name:'Mac Cursor',workspaceIds:['research']});
+ const successorCtx=await store.authenticate(successor.token);
+ await store.saveWorkspace(f.owner,{id:'other',name:'Other',sections:[{id:'methods',name:'Methods',policy:{version:1,targets:[]}}]},0);
+ const noAccess=await store.createWorker(f.owner,{name:'NoAccess',workspaceIds:['other']});
+ const revoked=await store.createWorker(f.owner,{name:'Revoked',workspaceIds:['research']});
+ await store.revokeWorker(f.owner,revoked.id);
+
+ const editionsBefore=await db.$queryRawUnsafe(
+  'SELECT locale,revision,hash FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 ORDER BY locale,revision',
+  f.owner.orgId,f.workId);
+ const pubsBefore=(await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_publications WHERE "orgId"=$1',f.owner.orgId))[0].n;
+
+ const created=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'移交英文',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
+ assert.equal(created.payload.storeOnlyWorkerId,f.ctx.workerId);
+ const requestId=randomUUID();
+ const baseInput={expectedGeneration:created.generation,expectedStoreOnlyWorkerId:f.ctx.workerId,toWorkerId:successor.id};
+
+ await assert.rejects(store.transferStoreOnlyOwnership(f.ctx,created.id,{requestId,...baseInput}),{code:'forbidden'});
+ await assert.rejects(store.transferStoreOnlyOwnership(f.owner,created.id,{requestId:randomUUID(),...baseInput,expectedGeneration:created.generation+9}),{code:'revision_conflict'});
+ await assert.rejects(store.transferStoreOnlyOwnership(f.owner,created.id,{requestId:randomUUID(),...baseInput,expectedStoreOnlyWorkerId:successor.id,toWorkerId:f.ctx.workerId}),{code:'ownership_conflict'});
+ await assert.rejects(store.transferStoreOnlyOwnership(f.owner,created.id,{requestId:randomUUID(),...baseInput,toWorkerId:noAccess.id}),{code:'forbidden'});
+ await assert.rejects(store.transferStoreOnlyOwnership(f.owner,created.id,{requestId:randomUUID(),...baseInput,toWorkerId:revoked.id}),{code:'not_found'});
+
+ const transferred=await store.transferStoreOnlyOwnership(f.owner,created.id,{requestId,...baseInput});
+ assert.equal(transferred.status,'transferred');
+ assert.equal(transferred.replay,false);
+ assert.equal(transferred.demand.payload.storeOnlyWorkerId,successor.id);
+ assert.equal(transferred.demand.payload.sourceHash,f.zh.hash);
+ assert.equal(transferred.demand.title,'移交英文');
+ assert.equal(transferred.liveOwnership.storeOnlyWorkerId,successor.id);
+ assert.equal(transferred.liveOwnership.generation,created.generation+1);
+
+ const again=await store.transferStoreOnlyOwnership(f.owner,created.id,{requestId,...baseInput});
+ assert.equal(again.status,'existing');
+ assert.equal(again.replay,true);
+ assert.equal(again.demand.payload.storeOnlyWorkerId,successor.id);
+ assert.equal(again.liveOwnership.storeOnlyWorkerId,successor.id);
+
+ await assert.rejects(store.transferStoreOnlyOwnership(f.owner,created.id,{
+  requestId,...baseInput,toWorkerId:noAccess.id,
+ }),{code:'request_conflict'});
+
+ // A later handoff must not let a stale request replay re-transfer or claim current ownership.
+ const secondId=randomUUID();
+ const second=await store.transferStoreOnlyOwnership(f.owner,created.id,{
+  requestId:secondId,
+  expectedGeneration:transferred.demand.generation,
+  expectedStoreOnlyWorkerId:successor.id,
+  toWorkerId:f.ctx.workerId,
+ });
+ assert.equal(second.status,'transferred');
+ assert.equal(second.demand.payload.storeOnlyWorkerId,f.ctx.workerId);
+ const staleReplay=await store.transferStoreOnlyOwnership(f.owner,created.id,{requestId,...baseInput});
+ assert.equal(staleReplay.status,'existing');
+ assert.equal(staleReplay.replay,true);
+ assert.equal(staleReplay.demand.payload.storeOnlyWorkerId,successor.id,'historical receipt stays frozen');
+ assert.equal(staleReplay.liveOwnership.storeOnlyWorkerId,f.ctx.workerId,'live ownership reports the current owner');
+ assert.notEqual(staleReplay.demand.payload.storeOnlyWorkerId,staleReplay.liveOwnership.storeOnlyWorkerId);
+
+ await assert.rejects(store.claim(successorCtx,{demandId:created.id,storeOnly:true}),{code:'forbidden'});
+ const claim=await store.claim(f.ctx,{demandId:created.id,storeOnly:true});
+ assert.equal(claim.payload.storeOnlyWorkerId,f.ctx.workerId);
+ await assert.rejects(store.transferStoreOnlyOwnership(f.owner,created.id,{
+  requestId:randomUUID(),expectedGeneration:claim.generation,expectedStoreOnlyWorkerId:f.ctx.workerId,toWorkerId:successor.id,
+ }),{code:'claim_conflict'});
+ await store.changeDemand(f.ctx,created.id,{action:'release',claimToken:claim.claimToken});
+
+ const editionsAfter=await db.$queryRawUnsafe(
+  'SELECT locale,revision,hash FROM rssd_editions WHERE "orgId"=$1 AND "workId"=$2 ORDER BY locale,revision',
+  f.owner.orgId,f.workId);
+ assert.deepEqual(editionsAfter,editionsBefore);
+ assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_publications WHERE "orgId"=$1',f.owner.orgId))[0].n,pubsBefore);
+ const audits=await db.$queryRawUnsafe(`SELECT payload FROM rssd_audit WHERE "orgId"=$1 AND action='demand.transfer_store_only' ORDER BY "createdAt"`,f.owner.orgId);
+ assert.equal(audits.length,2);
+ assert.equal(audits[0].payload.requestId,requestId);
+ assert.equal(audits[1].payload.requestId,secondId);
+});
+
+async function oneDemand(orgId,id){
+ return (await db.$queryRawUnsafe('SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2',orgId,id))[0];
+}
+
+function withDemandLockBarrier(timeoutMs=5000){
+ let release;
+ const gate=new Promise(resolve=>{release=resolve;});
+ const seen=new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>reject(new Error('timed out waiting for demand lock barrier')),timeoutMs);
+  store._testAfterDemandLocked=async(info)=>{
+   clearTimeout(timer);
+   resolve(info);
+   await gate;
+  };
+ });
+ return {
+  seen,
+  release:()=>{release();},
+  clear:()=>{delete store._testAfterDemandLocked;},
+ };
+}
+
+test('in-transaction barrier: real claim holds the row so waiting transfer loses with claim_conflict',async()=>{
+ const f=await storeOnlyEnglishFixture();
+ const successor=await store.createWorker(f.owner,{name:'BarrierTransferLoser',workspaceIds:['research']});
+ const created=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'真领取屏障',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
+ const barrier=withDemandLockBarrier();
+ try{
+  const claimPromise=store.claim(f.ctx,{demandId:created.id,storeOnly:true});
+  const locked=await barrier.seen;
+  assert.equal(locked.kind,'claim');
+  const transferPromise=store.transferStoreOnlyOwnership(f.owner,created.id,{
+   requestId:randomUUID(),expectedGeneration:created.generation,expectedStoreOnlyWorkerId:f.ctx.workerId,toWorkerId:successor.id,
+  });
+  await new Promise(resolve=>setTimeout(resolve,30));
+  barrier.release();
+  const claim=await claimPromise;
+  assert.equal(claim.state,'claimed');
+  await assert.rejects(transferPromise,{code:'claim_conflict'});
+  assert.equal((await oneDemand(f.owner.orgId,created.id)).payload.sourceHash,f.zh.hash);
+ }finally{barrier.clear();}
+});
+
+test('in-transaction barrier: real transfer holds the row so creator claim loses',async()=>{
+ const f=await storeOnlyEnglishFixture();
+ const successor=await store.createWorker(f.owner,{name:'BarrierClaimLoser',workspaceIds:['research']});
+ const successorCtx=await store.authenticate(successor.token);
+ const created=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'真移交屏障',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
+ const barrier=withDemandLockBarrier();
+ try{
+  const transferPromise=store.transferStoreOnlyOwnership(f.owner,created.id,{
+   requestId:randomUUID(),expectedGeneration:created.generation,expectedStoreOnlyWorkerId:f.ctx.workerId,toWorkerId:successor.id,
+  });
+  const locked=await barrier.seen;
+  assert.equal(locked.kind,'transfer');
+  const claimPromise=store.claim(f.ctx,{demandId:created.id,storeOnly:true});
+  await new Promise(resolve=>setTimeout(resolve,30));
+  barrier.release();
+  const transferred=await transferPromise;
+  assert.equal(transferred.status,'transferred');
+  const claimResult=await Promise.allSettled([claimPromise]).then(rows=>rows[0]);
+  const creatorBlocked=claimResult.status==='rejected'
+   || (claimResult.status==='fulfilled'&&claimResult.value==null);
+  assert.equal(creatorBlocked,true);
+  assert.equal((await store.claim(successorCtx,{demandId:created.id,storeOnly:true})).payload.storeOnlyWorkerId,successor.id);
+  assert.equal((await oneDemand(f.owner.orgId,created.id)).payload.sourceHash,f.zh.hash);
+ }finally{barrier.clear();}
+});
+
+test('concurrent claim and store-only transfer admit exactly one winner (supplemental schedule coverage)',async()=>{
+ const outcomes={claimFirst:0,transferFirst:0};
+ for(let i=0;i<24;i++){
+  const f=await storeOnlyEnglishFixture();
+  const successor=await store.createWorker(f.owner,{name:'Mac '+i,workspaceIds:['research']});
+  const successorCtx=await store.authenticate(successor.token);
+  const created=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'竞态移交',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
+  const results=await Promise.allSettled([
+   store.claim(f.ctx,{demandId:created.id,storeOnly:true}),
+   store.transferStoreOnlyOwnership(f.owner,created.id,{
+    requestId:randomUUID(),
+    expectedGeneration:created.generation,
+    expectedStoreOnlyWorkerId:f.ctx.workerId,
+    toWorkerId:successor.id,
+   }),
+  ]);
+  const claimResult=results[0],transferResult=results[1];
+  const claimWon=claimResult.status==='fulfilled'&&claimResult.value&&claimResult.value.state==='claimed';
+  const transferWon=transferResult.status==='fulfilled'&&transferResult.value.status==='transferred';
+  assert.equal(Number(claimWon)+Number(transferWon),1,'exactly one of claim or transfer wins');
+  const row=await oneDemand(f.owner.orgId,created.id);
+  if(claimWon){
+   outcomes.claimFirst++;
+   assert.equal(transferResult.status,'rejected');
+   assert.equal(transferResult.reason?.code,'claim_conflict');
+  }else{
+   outcomes.transferFirst++;
+   const creatorBlocked=claimResult.status==='rejected'
+    || (claimResult.status==='fulfilled'&&claimResult.value==null);
+   assert.equal(creatorBlocked,true);
+   assert.equal((await store.claim(successorCtx,{demandId:created.id,storeOnly:true})).payload.storeOnlyWorkerId,successor.id);
+  }
+  assert.equal(row.payload.sourceHash,f.zh.hash);
+ }
+ assert.equal(outcomes.claimFirst+outcomes.transferFirst,24);
+});
+
+test('overview advertises store-only ownershipTransfer without breaking storeOnlyTranslate v1',async()=>{
+ const f=await fixture();
+ const {RssdCoordination,supportsStoreOnlyTranslate,supportsStoreOnlyOwnershipTransfer}=require('./coordination.cjs');
+ const overview=await new RssdCoordination(store).overview(f.owner);
+ assert.equal(supportsStoreOnlyTranslate(overview),true);
+ assert.equal(supportsStoreOnlyOwnershipTransfer(overview),true);
+ assert.equal(overview.contracts.storeOnlyTranslate.ownershipTransfer.version,1);
+ assert.ok(overview.contracts.storeOnlyTranslate.ownershipTransfer.guarantees.includes('queuedCompareAndSwap'));
+ assert.ok(overview.contracts.storeOnlyTranslate.ownershipTransfer.guarantees.includes('persistentRequestReceipt'));
+ assert.ok(overview.contracts.existingEnglishSitePublish.headCompare.guarantees.includes('englishHeadRevision'));
+});
+
+test('existing-site publish optional expectedHeadRevision CAS fails closed when English head moves',async()=>{
+ const f=await storeOnlyEnglishFixture();
+ await f.publisher.saveDestination(f.owner,{id:'site-demo',name:'Demo site',kind:'site',workspaceIds:['research'],config:{origin:'https://example.test',siteId:'demo'},token:'fixture-only-site-credential-000000001',enabled:true});
+ await store.saveWorkspace(f.owner,{id:'research',siteId:'demo',name:'Research',sections:[{id:'methods',name:'Methods',policy:{version:3,targets:[{destinationId:'site-demo',locale:'zh-CN'},{destinationId:'site-demo',locale:'en'}]}}]},2);
+ const {RssdExistingSitePublish}=require('./existing-site-publish.cjs');
+ const sitePublish=new RssdExistingSitePublish(store);
+ const created=await store.createDemand(f.ctx,{workspaceId:'research',sectionId:'methods',kind:'translate',title:'仅存后发站',requiredLocales:['en'],source:{workId:f.workId,locale:'zh-CN',revision:1},storeOnly:true});
+ const claim=await store.claim(f.ctx,{demandId:created.id,storeOnly:true});
+ const packet={requestId:randomUUID(),workId:f.workId,workspaceId:'research',sectionId:'methods',demandId:claim.id,claimToken:claim.claimToken,baseRevisions:{en:0},editions:[{locale:'en',title:'Stored English',bodyMarkdown:'Center-only English body.',translationOf:{workId:f.workId,locale:'zh-CN',revision:1}}]};
+ const accepted=await store.submit(f.ctx,packet);
+ assert.deepEqual(accepted.publicationIds,[]);
+ const en1=await store.edition(f.ctx,f.workId,'en',1);
+ const zhBefore=await store.edition(f.ctx,f.workId,'zh-CN',1);
+ await assert.rejects(sitePublish.publish(f.ctx,{requestId:randomUUID(),workId:f.workId,locale:'en',revision:1,hash:en1.hash,destinationId:'site-demo',expectedHeadRevision:9}),{code:'revision_conflict'});
+ const published=await sitePublish.publish(f.ctx,{requestId:randomUUID(),workId:f.workId,locale:'en',revision:1,hash:en1.hash,destinationId:'site-demo',expectedHeadRevision:1});
+ assert.equal(published.status,'created');
+ assert.equal(published.englishHeadRevision,1);
+ await store.submit(f.owner,{requestId:randomUUID(),workId:f.workId,workspaceId:'research',sectionId:'methods',baseRevisions:{en:1},editions:[{locale:'en',title:'Newer private English',bodyMarkdown:'Must not be implied by stale head publish.'}]},{publish:false});
+ await assert.rejects(sitePublish.publish(f.ctx,{requestId:randomUUID(),workId:f.workId,locale:'en',revision:1,hash:en1.hash,destinationId:'site-demo',expectedHeadRevision:1}),{code:'revision_conflict'});
+ const en2=await store.edition(f.ctx,f.workId,'en',2);
+ const headPublish=await sitePublish.publish(f.ctx,{requestId:randomUUID(),workId:f.workId,locale:'en',revision:2,hash:en2.hash,destinationId:'site-demo',expectedHeadRevision:2});
+ assert.equal(headPublish.status,'created');
+ assert.equal(headPublish.englishHeadRevision,2);
+ assert.equal((await store.edition(f.ctx,f.workId,'zh-CN',1)).hash,zhBefore.hash);
+ assert.equal((await db.$queryRawUnsafe('SELECT count(*)::int AS n FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND "destinationId"=$3',f.owner.orgId,f.workId,'site-demo'))[0].n,2);
+ assert.doesNotMatch(JSON.stringify(headPublish),/Must not be implied|完整的中文正文/);
+});

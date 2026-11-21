@@ -4,9 +4,10 @@ const {Pool,Client}=require('pg'),{randomUUID}=require('node:crypto');
 const {RssdStore}=require('./store.cjs');
 const {RssdPublisher}=require('./publisher.cjs');
 const {RssdPostiz}=require('./postiz.cjs');
-const {RssdCoordination,STORE_ONLY_TRANSLATE_VERSION,STORE_ONLY_TRANSLATE_GUARANTEES,supportsStoreOnlyTranslate,EXISTING_ENGLISH_SITE_PUBLISH_VERSION,EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES,supportsExistingEnglishSitePublish}=require('./coordination.cjs');
+const {RssdCoordination,STORE_ONLY_TRANSLATE_VERSION,STORE_ONLY_TRANSLATE_GUARANTEES,supportsStoreOnlyTranslate,EXISTING_ENGLISH_SITE_PUBLISH_VERSION,EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES,supportsExistingEnglishSitePublish,supportsExistingEnglishSitePublishHeadCompare}=require('./coordination.cjs');
 const {RssdMcp}=require('./mcp.cjs');
-const {RssdExistingSitePublish,RECEIPT_FIELDS,resolveArticleId}=require('./existing-site-publish.cjs');
+const {RssdExistingSitePublish,RECEIPT_FIELDS,resolveArticleId,publishFingerprint}=require('./existing-site-publish.cjs');
+const p=require('./protocol.cjs');
 const schema='rssd_en_site_'+randomUUID().replaceAll('-','');let pool,db,store,sitePublish,coord,control;
 function adapter(client){return {$queryRawUnsafe:async(sql,...a)=>(await client.query(sql,a)).rows,$executeRawUnsafe:async(sql,...a)=>(await client.query(sql,a)).rowCount,$transaction:async fn=>{const c=await pool.connect();try{await c.query('BEGIN');const r=await fn(adapter(c));await c.query('COMMIT');return r;}catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}}};}
 function fakeSite(){
@@ -98,6 +99,29 @@ test('existing English site publish binds shared articleId, does not rewrite edi
  assert.equal(f.remote.posts,1);
 });
 
+test('pre-upgrade receipts without expectedHeadRevision replay exactly; mismatched parameters still conflict',async()=>{
+ const f=await fixture();
+ const requestId=randomUUID(),publicationId=randomUUID();
+ const legacyHash=p.hash({workId:f.workId,locale:'en',revision:1,hash:f.en.hash,destinationId:'site-enter',articleId:f.articleId});
+ assert.equal(publishFingerprint({workId:f.workId,locale:'en',revision:1,hash:f.en.hash,destinationId:'site-enter',articleId:f.articleId}),legacyHash);
+ assert.notEqual(publishFingerprint({workId:f.workId,locale:'en',revision:1,hash:f.en.hash,destinationId:'site-enter',articleId:f.articleId,expectedHeadRevision:1}),legacyHash);
+ const legacyResult={
+  requestId,status:'created',workId:f.workId,workspaceId:'enter',locale:'en',revision:1,hash:f.en.hash,
+  destinationId:'site-enter',destinationKind:'site',publicationId,publicationState:'queued',articleId:f.articleId,
+ };
+ await db.$executeRawUnsafe(`INSERT INTO rssd_publications ("orgId",id,"workId","workspaceId",locale,revision,"destinationId",state,payload)
+  VALUES ($1,$2,$3,'enter','en',1,'site-enter','queued',$4::jsonb)`,f.owner.orgId,publicationId,f.workId,JSON.stringify({hash:f.en.hash,intent:'existingEnglishSitePublish'}));
+ await db.$executeRawUnsafe(`INSERT INTO rssd_existing_site_publishes ("orgId","requestId","workspaceId","workId",locale,revision,"destinationId","editionHash","articleId","publicationId","payloadHash",result)
+  VALUES ($1,$2,'enter',$3,'en',1,'site-enter',$4,$5,$6,$7,$8::jsonb)`,
+  f.owner.orgId,requestId,f.workId,f.en.hash,f.articleId,publicationId,legacyHash,JSON.stringify(legacyResult));
+ const input={requestId,workId:f.workId,locale:'en',revision:1,hash:f.en.hash,destinationId:'site-enter',articleId:f.articleId};
+ const replay=await sitePublish.publish(f.ctx,input);
+ assert.deepEqual(replay,{...legacyResult,englishHeadRevision:null});
+ assert.deepEqual(await sitePublish.receipt(f.ctx,requestId),replay);
+ await assert.rejects(sitePublish.publish(f.ctx,{...input,expectedHeadRevision:1}),{code:'request_conflict'});
+ await assert.rejects(sitePublish.publish(f.ctx,{...input,hash:f.zh.hash}),{code:'request_conflict'});
+});
+
 test('wrong language, revision, hash, destination, articleId and extra fields are rejected',async()=>{
  const f=await fixture();
  await assert.rejects(sitePublish.publish(f.ctx,{...f.input,locale:'zh-CN'}),{code:'english_only'});
@@ -159,6 +183,8 @@ test('overview advertises existingEnglishSitePublish separately from store-only;
  assert.equal(device.contracts.existingEnglishSitePublish.version,EXISTING_ENGLISH_SITE_PUBLISH_VERSION);
  assert.deepEqual(device.contracts.existingEnglishSitePublish.guarantees,[...EXISTING_ENGLISH_SITE_PUBLISH_GUARANTEES]);
  assert.equal(supportsExistingEnglishSitePublish(device),true);
+ assert.equal(supportsExistingEnglishSitePublishHeadCompare(device),true);
+ assert.ok(device.contracts.existingEnglishSitePublish.headCompare.guarantees.includes('englishHeadRevision'));
  assert.equal(supportsExistingEnglishSitePublish({contracts:{storeOnlyTranslate:device.contracts.storeOnlyTranslate}}),false);
  const mcp=new RssdMcp(store,coord,sitePublish);
  const listed=(await mcp.handle(f.ctx,{jsonrpc:'2.0',id:1,method:'tools/list'})).result.tools;

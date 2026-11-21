@@ -1,5 +1,6 @@
 'use strict';
 const {randomUUID, randomBytes} = require('node:crypto');
+const {isDeepStrictEqual} = require('node:util');
 const p = require('./protocol.cjs');
 const {validateWritingDelivery}=require('./writing-defaults.cjs');
 const encoded = value => JSON.stringify(value);
@@ -367,6 +368,8 @@ class RssdStore {
         }
         return null;
       }
+      // Test-only hook: pause after the claim transaction holds the demand row.
+      if(typeof this._testAfterDemandLocked==='function')await this._testAfterDemandLocked({kind:'claim',id:demand.id,db});
       const {row,section}=await this.demandSection(db,ctx,demand);
       const destinations=[];
       for(const target of section.policy.targets){
@@ -414,6 +417,131 @@ class RssdStore {
       const result=await one(db,`UPDATE rssd_demands SET state=$3,"workerId"=$4,"claimToken"=$5,payload=$6::jsonb,
         generation=generation+$7,"updatedAt"=CURRENT_TIMESTAMP WHERE "orgId"=$1 AND id=$2 RETURNING *`,ctx.orgId,id,state,clear?null:demand.workerId,clear?null:demand.claimToken,encoded(payload),clear?1:0);
       await audit(db,ctx,'demand.'+input.action,{id,generation:result.generation});return safeDemand(result);
+    });
+  }
+  /**
+   * Owner-only atomic handoff of a queued store-only translate to another device.
+   * Preserves source binding and all metadata; never cancels, never mutates editions/drafts.
+   * Compare-and-swap on id + queued + generation + creator; concurrent claim/cancel fails closed.
+   * Durable per-requestId fingerprints live in rssd_store_only_transfers so a lost-response replay
+   * never re-transfers after a later handoff, and never implies the historical owner is still current.
+   */
+  async transferStoreOnlyOwnership(ctx, id, input = {}) {
+    admin(ctx);
+    p.id(id);
+    const requestId = p.id(input.requestId);
+    const expectedGeneration = p.integer(input.expectedGeneration, 'expectedGeneration', 0);
+    const expectedStoreOnlyWorkerId = p.id(input.expectedStoreOnlyWorkerId);
+    const toWorkerId = p.id(input.toWorkerId);
+    if (input.expectedState != null && input.expectedState !== 'queued') {
+      p.fail('Only queued store-only demands can transfer', 400, 'invalid_request');
+    }
+    if (expectedStoreOnlyWorkerId === toWorkerId) {
+      p.fail('toWorkerId must differ from expectedStoreOnlyWorkerId', 400, 'invalid_request');
+    }
+    const fingerprint = p.hash({
+      demandId: id,
+      expectedGeneration,
+      expectedStoreOnlyWorkerId,
+      toWorkerId,
+      expectedState: 'queued',
+    });
+    return this.transaction(async db => {
+      await lock(db, ctx.orgId + ':store-only-transfer:' + id);
+      const demand = await one(db, 'SELECT * FROM rssd_demands WHERE "orgId"=$1 AND id=$2 FOR UPDATE', ctx.orgId, id);
+      if (!demand) p.fail('Demand not found', 404, 'not_found');
+      scope(ctx, demand.workspaceId);
+      if (!isStoreOnlyPayload(demand.payload)) p.fail('Demand is not a store-only translate', 409, 'not_store_only');
+      // Test-only hook: pause after the transfer transaction holds the demand row.
+      if (typeof this._testAfterDemandLocked === 'function') await this._testAfterDemandLocked({kind: 'transfer', id, db});
+
+      const prior = await one(db,
+        'SELECT * FROM rssd_store_only_transfers WHERE "orgId"=$1 AND "requestId"=$2',
+        ctx.orgId, requestId);
+      if (prior) {
+        if (prior.demandId !== id) p.fail('Transfer request belongs to another demand', 409, 'request_conflict');
+        if (prior.payloadHash !== fingerprint) {
+          p.fail('Transfer request identity was reused with different content', 409, 'request_conflict');
+        }
+        const live = {
+          demandId: demand.id,
+          state: demand.state,
+          generation: demand.generation,
+          storeOnlyWorkerId: demand.payload.storeOnlyWorkerId || null,
+          workerId: demand.workerId || null,
+        };
+        return {
+          status: 'existing',
+          replay: true,
+          demand: prior.result.demand,
+          liveOwnership: live,
+        };
+      }
+
+      if (demand.state !== 'queued' || demand.workerId) {
+        p.fail('Demand is not queued for transfer', 409, demand.state === 'claimed' || demand.state === 'blocked' ? 'claim_conflict' : 'not_queued');
+      }
+      if (['completed', 'cancelled'].includes(demand.state)) p.fail('Demand is already closed', 409);
+      if (demand.generation !== expectedGeneration) {
+        p.fail('Demand generation changed', 409, 'revision_conflict');
+      }
+      if (demand.payload.storeOnlyWorkerId !== expectedStoreOnlyWorkerId) {
+        p.fail('Store-only creator does not match', 409, 'ownership_conflict');
+      }
+
+      const target = await one(db,
+        'SELECT id,"workspaceIds","revokedAt" FROM rssd_workers WHERE "orgId"=$1 AND id=$2',
+        ctx.orgId, toWorkerId);
+      if (!target || target.revokedAt) p.fail('Target device not found', 404, 'not_found');
+      if (!Array.isArray(target.workspaceIds) || !target.workspaceIds.includes(demand.workspaceId)) {
+        p.fail('Target device lacks workspace access', 403, 'forbidden');
+      }
+
+      const sourceBefore = demand.payload.source;
+      const sourceHashBefore = demand.payload.sourceHash;
+      const titleBefore = demand.title;
+      const payload = {
+        ...demand.payload,
+        storeOnly: true,
+        storeOnlyWorkerId: toWorkerId,
+        lastTransferRequestId: requestId,
+        transferredFromWorkerId: expectedStoreOnlyWorkerId,
+        transferredAt: new Date().toISOString(),
+      };
+      // Refuse any accidental source rebind in this path.
+      if (!isDeepStrictEqual(payload.source, sourceBefore) || payload.sourceHash !== sourceHashBefore) {
+        p.fail('Transfer must preserve source binding', 500, 'identity_conflict');
+      }
+
+      const result = await one(db, `UPDATE rssd_demands SET payload=$4::jsonb, generation=generation+1, "updatedAt"=CURRENT_TIMESTAMP
+        WHERE "orgId"=$1 AND id=$2 AND state='queued' AND "workerId" IS NULL AND generation=$3
+          AND payload->>'storeOnly'='true' AND payload->>'storeOnlyWorkerId'=$5
+        RETURNING *`,
+        ctx.orgId, id, expectedGeneration, encoded(payload), expectedStoreOnlyWorkerId);
+      if (!result) p.fail('Demand changed during transfer', 409, 'revision_conflict');
+      if (result.title !== titleBefore || !isDeepStrictEqual(result.payload.source, sourceBefore) || result.payload.sourceHash !== sourceHashBefore) {
+        p.fail('Transfer must preserve demand identity', 500, 'identity_conflict');
+      }
+      const receipt = {
+        status: 'transferred',
+        replay: false,
+        demand: safeDemand(result),
+        liveOwnership: {
+          demandId: result.id,
+          state: result.state,
+          generation: result.generation,
+          storeOnlyWorkerId: result.payload.storeOnlyWorkerId,
+          workerId: result.workerId || null,
+        },
+      };
+      await execute(db, `INSERT INTO rssd_store_only_transfers ("orgId","requestId","demandId","payloadHash",result)
+        VALUES ($1,$2,$3,$4,$5::jsonb)`, ctx.orgId, requestId, id, fingerprint, encoded(receipt));
+      await audit(db, ctx, 'demand.transfer_store_only', {
+        id, requestId, generation: result.generation,
+        fromWorkerId: expectedStoreOnlyWorkerId, toWorkerId,
+        source: result.payload.source, sourceHash: result.payload.sourceHash,
+      });
+      return receipt;
     });
   }
   async work(ctx,id) {
