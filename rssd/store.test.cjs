@@ -1774,7 +1774,10 @@ test('owner store-only ownership transfer persists request receipts, preserves e
  assert.equal(staleReplay.liveOwnership.storeOnlyWorkerId,f.ctx.workerId,'live ownership reports the current owner');
  assert.notEqual(staleReplay.demand.payload.storeOnlyWorkerId,staleReplay.liveOwnership.storeOnlyWorkerId);
 
- await assert.rejects(store.claim(successorCtx,{demandId:created.id,storeOnly:true}),{code:'forbidden'});
+ // Ownership of a queued store-only translate is only a preference: any authorized device may claim it.
+ const borrowed=await store.claim(successorCtx,{demandId:created.id,storeOnly:true});
+ assert.equal(borrowed.payload.storeOnlyWorkerId,successor.id);
+ await store.changeDemand(successorCtx,created.id,{action:'release',claimToken:borrowed.claimToken});
  const claim=await store.claim(f.ctx,{demandId:created.id,storeOnly:true});
  assert.equal(claim.payload.storeOnlyWorkerId,f.ctx.workerId);
  await assert.rejects(store.transferStoreOnlyOwnership(f.owner,created.id,{
