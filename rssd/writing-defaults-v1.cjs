@@ -19,7 +19,21 @@ function documents(values,{reference=false}={}){
  if(new Set(keys).size!==keys.length)fail('写作技能重复');
 }
 function imagePolicy(v){if(!record(v)||!Number.isInteger(v.minimum)||v.minimum<0||v.minimum>20||!['actual-object','source-or-illustration'].includes(v.sourceMode)||v.dataFigures!=='computed-only')fail('栏目配图规则无效');}
-function deliveryPolicy(v){if(v!==undefined&&(!record(v)||v.version!==1||v.format!=='notebook-v2-flat'||v.altLength!==true))fail('写作交付检查版本无效');}
+// Version 2 adds the caption checks below. Snapshots frozen under version 1 keep the checks they were claimed with.
+function deliveryPolicy(v){if(v!==undefined&&(!record(v)||![1,2].includes(v.version)||v.format!=='notebook-v2-flat'||v.altLength!==true||(v.version===2)!==(v.captions===true)||Object.keys(v).some(k=>!['version','format','altLength','captions'].includes(k))))fail('写作交付检查版本无效');}
+// A public caption is a short title of one sentence, then optionally the maker and the linked source of that
+// picture, and nothing else: no licence, no notes, no reference marks (rssd-writing-base/references/images.md).
+// Chinese: 图：图题。作者，[来源](链接). English: Title. Creator, [Source](link), with an optional "Figure: ".
+const creditLink=String.raw`\[[^\[\]]+\]\((https?:\/\/(?:[^\s()]|\([^\s()]*\))+)\)`;
+const zhCaption=new RegExp(String.raw`^图：[^。！？\n]+[。！？](?:([^，\[\]\n]+)，`+creditLink+')?$','u');
+const enCaption=new RegExp(String.raw`^(?:Figure: )?[^\s\[\]][^\n\[\]]*?[.!?](?: ([^,\[\]\n]+), `+creditLink+')?$','u');
+function captionIssue(text,actualObject){
+ const caption=text.trim(),m=caption.match(zhCaption)||caption.match(enCaption);
+ if(!m)return '图注只能写一句图题，再加作者和带链接的来源，不写许可、说明或引用标号';
+ if(m[2]&&/\/api\/rssd\/v1\/media\//.test(m[2]))return '图注的来源链接须指向该图自己的出处页，不能是本站媒体地址';
+ if(actualObject&&!m[1])return '本栏需要真实对象的照片，图注须写明作者和带链接的来源；示意图、生成图不能代替';
+ return null;
+}
 function bodyLengthPolicy(v){
  if(!record(v)||Object.keys(v).some(k=>!['unit','minimum','target','maximum'].includes(k))||!['han','words'].includes(v.unit)||['minimum','target','maximum'].some(k=>!Number.isSafeInteger(v[k])||v[k]<1||v[k]>200000)||v.minimum>v.target||v.target>v.maximum)fail('本篇正文篇幅须明确单位、最少/目标/最多数量');
  return structuredClone(v);
@@ -118,11 +132,14 @@ function measurements(value){
 function deliveryIssues(value,context){
  const effective=context?.baseline?compose(context.baseline,context.adjustment):compose(context),issues=[];
  const n=value?.notebook||value,blocks=(Array.isArray(n?.blocks)?n.blocks:[]).filter(record),images=blocks.filter(b=>b.type==='image'&&b.state==='ready'&&b.text);
- if(images.length<effective.images.minimum)issues.push('正文图片少于本栏要求的 '+effective.images.minimum+' 张');
+ const captions=effective.baseline.delivery?.captions===true,distinct=new Set(images.map(b=>b.text.trim())).size;
+ if((captions?distinct:images.length)<effective.images.minimum)issues.push('正文图片少于本栏要求的 '+effective.images.minimum+' 张'+(captions&&distinct<images.length?'（同一张图重复使用只算一张）':''));
  for(const image of images){
   if(typeof image.alt!=='string'||!image.alt.trim())issues.push('图片缺少 alt：'+image.id);
   else if(effective.baseline.delivery?.altLength){const length=[...image.alt.trim()].length;if(length<effective.images.altMin||length>effective.images.altMax)issues.push('图片 alt 长度须为 '+effective.images.altMin+'–'+effective.images.altMax+' 个Unicode码点，当前 '+length+'：'+image.id);}
-  if(!blocks.some(b=>b.type==='annotation'&&b.role==='caption'&&b.targetId===image.id&&b.state==='ready'&&b.text?.trim()))issues.push('图片缺少关联图注：'+image.id);
+  const caption=blocks.find(b=>b.type==='annotation'&&b.role==='caption'&&b.targetId===image.id&&b.state==='ready'&&typeof b.text==='string'&&b.text.trim());
+  if(!caption)issues.push('图片缺少关联图注：'+image.id);
+  else if(captions){const issue=captionIssue(caption.text,effective.images.sourceMode==='actual-object');if(issue)issues.push(issue+'：'+image.id);}
  }
  if(effective.bodyLength){const m=measurements(value),p=effective.bodyLength,count=p.unit==='han'?m.bodyHan:m.bodyWords;if(count<p.minimum||count>p.maximum)issues.push('公开正文篇幅须为 '+p.minimum+'–'+p.maximum+' '+(p.unit==='han'?'汉字':'词')+'（目标 '+p.target+'），当前 '+count+'；标题、图注、参考文献和私有备注不计入');}
  return issues;
