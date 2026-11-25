@@ -54,9 +54,9 @@ class RssdAnnotations {
   if(metadata.record)p.fail('Calendar, history and resource records are not annotated',409,'not_annotatable');
   const workType=metadata.workType==='note'?'note':'article';
   // The section's writing family comes from the published writing defaults; without them only the common
-  // questions are asked.
-  let family;
-  try{const catalog=await this.store.writingDefaults?.catalog();family=catalog?.workspaces.find(w=>w.workspaceId===work.workspaceId)?.sections.find(s=>s.id===work.sectionId)?.familyId;}catch{family=undefined;}
+  // questions are asked. An article written in another family its section offers records that family.
+  let family=typeof metadata.writingDefaults?.familyAdjustment==='string'?metadata.writingDefaults.familyAdjustment:undefined;
+  if(!family)try{const catalog=await this.store.writingDefaults?.catalog();family=catalog?.workspaces.find(w=>w.workspaceId===work.workspaceId)?.sections.find(s=>s.id===work.sectionId)?.familyId;}catch{family=undefined;}
   const cards=workType==='article'&&Boolean(await one(this.db,`SELECT 1 AS found FROM rssd_renditions WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 AND revision=$4 AND payload->>'representation'='raster' LIMIT 1`,ctx.orgId,work.id,locale,revision));
   return {workId:work.id,workspaceId:work.workspaceId,sectionId:work.sectionId,locale,revision,latestPublishedRevision:newest?.revision??revision,editionHash:edition.hash,title:edition.payload.title,
    work:{workType,...(family&&workType==='article'?{family}:{}),...(cards?{cards:true}:{}),...(workType==='note'&&metadata.adaptedFrom?{adapted:true}:{})}};

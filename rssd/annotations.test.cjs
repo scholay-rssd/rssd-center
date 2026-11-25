@@ -40,6 +40,9 @@ test('only a published revision of an article or a note is annotated, with the q
  // A card set made for the published revision adds the card questions.
  await db.$executeRawUnsafe(`INSERT INTO rssd_renditions ("orgId",id,"workspaceId","workId",locale,revision,variant,summary,payload) VALUES ($1,$2,'research',$3,'zh-CN',1,'cards','{}'::jsonb,'{"representation":"raster"}'::jsonb)`,f.owner.orgId,randomUUID(),f.workId);
  assert.deepEqual((await annotations.describe(f.ctx,{workId:f.workId})).target.work,{workType:'article',family:'method',cards:true});
+ // An article written in another family its section offers is asked that family's questions.
+ const chosen=await fixture({metadata:{writingDefaults:{familyAdjustment:'scholay-walkthrough'}}});await chosen.publish(1);
+ assert.deepEqual((await annotations.describe(chosen.ctx,{workId:chosen.workId})).target.work,{workType:'article',family:'scholay-walkthrough'});
  // A section the writing defaults do not list gets the common questions only; a note gets the note questions.
  const plain=randomUUID();await f.save(1,'plain',plain);await f.publish(1,plain);
  assert.deepEqual((await annotations.describe(f.ctx,{workId:plain})).target.work,{workType:'article'});

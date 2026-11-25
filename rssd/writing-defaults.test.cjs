@@ -54,3 +54,20 @@ test('a section that takes notes freezes its note form with the claim',async t=>
  assert.equal(rules.compose(baseline,{workType:'note'}).workType,'note');
  assert.equal(rules.compose(baseline).instructions.includes('作品类型：笔记'),false);
 });
+test('a section that offers another writing family freezes it with the claim, and delivery follows the chosen family',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'center-writing-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ const {hash,...body}=fixture('fixture.family'),section=body.workspaces[0].sections[0];
+ section.delivery={version:2,format:'notebook-v2-flat',altLength:true,captions:true};Object.assign(section.images,{altMin:1,altMax:200});
+ section.alternates=[{familyId:'walkthrough',skillIds:['fixture-skill'],requiredElements:['actual object','interface steps'],images:{minimum:1,sourceMode:'source-or-illustration',dataFigures:'computed-only',altMin:1,altMax:200}}];
+ const input=join(root,'input.json'),active=join(root,'active.json'),service=new WritingDefaults({file:active});
+ await writeFile(input,JSON.stringify({...body,hash:rules.hash(body)}));await publish(input,active);
+ const b=await service.freeze({workspaceId:'fixture',sectionId:'section',kind:'write',generation:0,payload:{}});
+ assert.deepEqual(b.alternates.map(a=>a.familyId),['walkthrough']);assert.match(b.alternates[0].instructions,/文体：walkthrough/);
+ // A demonstration caption names no maker or source: refused in the default actual-object form, accepted in the chosen one.
+ const image={id:'image',type:'image',state:'ready',text:'https://example.org/fixture.png',alt:'Synthetic fixture image'};
+ const ref={baselineHash:b.hash,catalogHash:b.catalogHash,sourceCommit:b.source.commit,adjustmentOrigin:'task'};
+ const edition={bodyMarkdown:'![Fixture](https://example.org/fixture.png)',metadata:{writingDefaults:ref,notebook:{blocks:[image,{type:'annotation',role:'caption',targetId:'image',state:'ready',text:'图：界面演示：第一轮回答。'}]}}};
+ assert.throws(()=>validateWritingDelivery(edition,b),e=>e.code==='writing_delivery_incomplete');
+ ref.familyAdjustment='walkthrough';assert.doesNotThrow(()=>validateWritingDelivery(edition,b));
+ ref.familyAdjustment='unknown';assert.throws(()=>validateWritingDelivery(edition,b),e=>e.code==='writing_defaults_conflict');
+});
