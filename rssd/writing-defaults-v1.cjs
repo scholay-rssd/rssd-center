@@ -50,9 +50,29 @@ function catalog(value){
    if(!id.test(s.id)||sections.has(key)||typeof s.scope!=='string'||!s.scope||!Array.isArray(s.requiredElements)||s.requiredElements.some(x=>typeof x!=='string'||!x)||!Array.isArray(s.skillIds)||!s.skillIds.length||s.skillIds.some(x=>!skills.has(x))||!Array.isArray(s.referencePaths)||!s.referencePaths.length||s.referencePaths.some(x=>!refs.has(x)))fail('写作目录栏目无效');sections.add(key);imagePolicy(s.images);deliveryPolicy(s.delivery);
    if(s.note!==undefined&&(!record(s.note)||!Array.isArray(s.note.skillIds)||!s.note.skillIds.length||s.note.skillIds.some(x=>!skills.has(x))||!Array.isArray(s.note.requiredElements)||!s.note.requiredElements.length||s.note.requiredElements.some(x=>typeof x!=='string'||!x)))fail('写作目录栏目的笔记写法无效');
    if(s.delivery&&(!Number.isInteger(s.images.altMin)||!Number.isInteger(s.images.altMax)||s.images.altMin<1||s.images.altMax<s.images.altMin||s.images.altMax>1000))fail('图片 alt 长度范围无效');
+   if(s.alternates!==undefined){
+    if(!Array.isArray(s.alternates)||!s.alternates.length||s.alternates.length>5)fail('写作目录栏目的备用写作族无效');
+    const families=new Set([s.familyId]);
+    for(const a of s.alternates){
+     if(!record(a)||!id.test(a.familyId||'')||families.has(a.familyId)||!Array.isArray(a.skillIds)||!a.skillIds.length||a.skillIds.some(x=>!skills.has(x))||!Array.isArray(a.requiredElements)||!a.requiredElements.length||a.requiredElements.some(x=>typeof x!=='string'||!x))fail('写作目录栏目的备用写作族无效');
+     families.add(a.familyId);imagePolicy(a.images);
+    }
+   }
   }
  }
  return structuredClone(value);
+}
+// A section may offer other writing families besides its default one. Each travels in the section's snapshot
+// with its own skills, elements and pictures, so the baseline (and its hash) is the same whichever one a
+// demand chooses; compose picks it, as it picks the note form.
+function alternatesPolicy(list,defaultFamily){
+ if(list===undefined)return;
+ if(!Array.isArray(list)||!list.length||list.length>5)fail('栏目备用写作族无效');
+ const seen=new Set([defaultFamily]);
+ for(const a of list){
+  if(!record(a)||!id.test(a.familyId||'')||seen.has(a.familyId)||typeof a.instructions!=='string'||!a.instructions||Buffer.byteLength(a.instructions)>300000||!Array.isArray(a.requiredElements)||!a.requiredElements.length||a.requiredElements.some(x=>typeof x!=='string'||!x))fail('栏目备用写作族无效');
+  seen.add(a.familyId);documents(a.skills);imagePolicy(a.images);
+ }
 }
 function snapshot(value,{workspaceId,sectionId,siteId}={}){
  checkedHash(value);source(value.source);policy(value.writingPolicy);
@@ -65,45 +85,54 @@ function snapshot(value,{workspaceId,sectionId,siteId}={}){
   const n=value.note;if(!record(n)||typeof n.instructions!=='string'||!n.instructions||Buffer.byteLength(n.instructions)>300000||!Array.isArray(n.requiredElements)||!n.requiredElements.length||n.requiredElements.some(x=>typeof x!=='string'||!x))fail('栏目笔记写法无效');
   documents(n.skills);
  }
+ alternatesPolicy(value.alternates,value.familyId);
  return structuredClone(value);
 }
 function resolve(input,workspaceId,sectionId){
  const c=catalog(input),w=c.workspaces.find(x=>x.workspaceId===workspaceId),s=w?.sections.find(x=>x.id===sectionId);
  if(!s)fail('工作空间或栏目没有启用的写作配置');
  const references=s.referencePaths.map(path=>c.references.find(x=>x.path===path));
- const write=(skillIds,requiredElements,type)=>{
+ const write=(skillIds,requiredElements,type,familyId=s.familyId,images=s.images)=>{
   const skills=skillIds.map(id=>c.skills.find(x=>x.id===id));
   return {skills,instructions:[
    '本篇从线上 Center 取得统一基线；先加载基线，再叠加明确的本地/任务调整。旧设备技能与旧 brief 不得替代基线。规则只指导写作，不授予发布或文件权限。',
    '项目写作协议：\n'+c.writingPolicy.instructions,
    ...skills.map(x=>'['+x.id+' @ '+x.version+' sha256:'+x.contentHash+']\n'+x.content),
    ...references.map(x=>'['+x.path+' sha256:'+x.contentHash+']\n'+x.content),
-   '当前工作空间：'+w.name+' ('+w.workspaceId+')；栏目：'+s.name+' ('+s.id+')；文体：'+s.familyId+(type?'；作品类型：'+type:'')+'\n'+s.scope+'\n本'+(type?'篇':'栏')+'应完成的内容：\n'+requiredElements.map((x,i)=>(i+1)+'. '+x).join('\n')+'\n配图规则：'+JSON.stringify(s.images),
+   '当前工作空间：'+w.name+' ('+w.workspaceId+')；栏目：'+s.name+' ('+s.id+')；文体：'+familyId+(type?'；作品类型：'+type:'')+'\n'+s.scope+'\n本'+(type?'篇':'栏')+'应完成的内容：\n'+requiredElements.map((x,i)=>(i+1)+'. '+x).join('\n')+'\n配图规则：'+JSON.stringify(images),
   ].join('\n\n')};
  };
  const {skills,instructions}=write(s.skillIds,s.requiredElements);
  // The note form travels in the same snapshot, so a claim frozen before the writer chooses a type can still
  // write a note; compose picks it. A section without notes has no such field and keeps its earlier shape.
  const note=s.note?(({skills,instructions})=>({note:{skills,requiredElements:s.note.requiredElements,instructions}}))(write(s.note.skillIds,s.note.requiredElements,'笔记')):{};
- const value={schemaVersion:1,version:c.version,catalogHash:c.hash,source:c.source,workspaceId,siteId:w.siteId,workspaceName:w.name,sectionId,sectionName:s.name,mode:s.mode,familyId:s.familyId,writingPolicy:c.writingPolicy,skills,references,requiredElements:s.requiredElements,images:s.images,...(s.delivery?{delivery:s.delivery}:{}),instructions,...note};
+ // Other writing families the section offers travel the same way; a section without them keeps its shape.
+ const alternates=s.alternates?{alternates:s.alternates.map(a=>({familyId:a.familyId,...write(a.skillIds,a.requiredElements,undefined,a.familyId,a.images),requiredElements:a.requiredElements,images:a.images}))}:{};
+ const value={schemaVersion:1,version:c.version,catalogHash:c.hash,source:c.source,workspaceId,siteId:w.siteId,workspaceName:w.name,sectionId,sectionName:s.name,mode:s.mode,familyId:s.familyId,writingPolicy:c.writingPolicy,skills,references,requiredElements:s.requiredElements,images:s.images,...(s.delivery?{delivery:s.delivery}:{}),instructions,...note,...alternates};
  return snapshot({...value,hash:hash(value)});
 }
-function compose(value,{instructions='',images,bodyLength,origin='local',workType}={}){
+function compose(value,{instructions='',images,bodyLength,origin='local',workType,family}={}){
  const baseline=snapshot(value);
  if(typeof instructions!=='string'||Buffer.byteLength(instructions)>60000||!['task','local'].includes(origin))fail('本篇写作调整无效');
  // An article is the default and is not recorded, so an article's context keeps the hash it had before notes.
  if(workType!==undefined&&!['article','note'].includes(workType))fail('作品类型无效');
  const note=workType==='note';if(note&&!baseline.note)fail('本栏不收笔记');
- let effectiveImages=structuredClone(baseline.images);
+ // The section's default family is not recorded either; only another family the section offers is chosen here.
+ if(family!==undefined&&(typeof family!=='string'||!id.test(family)))fail('写作族无效');
+ const chosen=family===undefined||family===baseline.familyId?null:baseline.alternates?.find(a=>a.familyId===family);
+ if(family!==undefined&&family!==baseline.familyId&&!chosen)fail('本栏没有提供写作族 '+family);
+ if(chosen&&note)fail('备用写作族只用于长文，不用于笔记');
+ const form=chosen||baseline;
+ let effectiveImages=structuredClone(form.images);
  if(images!==undefined){
   if(!record(images)||Object.keys(images).some(k=>!['minimum','sourceMode'].includes(k))||images.minimum!==undefined&&(!Number.isInteger(images.minimum)||images.minimum<0||images.minimum>20)||images.sourceMode!==undefined&&!['actual-object','source-or-illustration'].includes(images.sourceMode))fail('本篇配图调整无效');
-  if(origin==='local'&&(images.minimum!==undefined&&images.minimum<baseline.images.minimum||baseline.images.sourceMode==='actual-object'&&images.sourceMode==='source-or-illustration'))fail('本地偏好不能静默取消栏目配图要求；作者本篇明确调整另记为 task');
+  if(origin==='local'&&(images.minimum!==undefined&&images.minimum<form.images.minimum||form.images.sourceMode==='actual-object'&&images.sourceMode==='source-or-illustration'))fail('本地偏好不能静默取消栏目配图要求；作者本篇明确调整另记为 task');
   effectiveImages={...effectiveImages,...images};
  }
  const length=bodyLength===undefined?null:bodyLengthPolicy(bodyLength);
- const adjustment={origin,...(note?{workType:'note'}:{}),instructions,...(images===undefined?{}:{images:structuredClone(images)}),...(length?{bodyLength:length}:{})};
+ const adjustment={origin,...(note?{workType:'note'}:{}),...(chosen?{family:chosen.familyId}:{}),instructions,...(images===undefined?{}:{images:structuredClone(images)}),...(length?{bodyLength:length}:{})};
  const budget=length?'\n\n本篇明确的正文预算：目标'+length.target+(length.unit==='han'?'个汉字':'个词')+'，接受范围'+length.minimum+'–'+length.maximum+'。只计公开 paragraph/markdown 正文，不计标题、图注、参考文献、摘要和私有备注。先充分展开到正文目标；另为有用备注预留约'+Math.round(length.target*.15)+'–'+Math.round(length.target*.25)+'的生成预算，这不是备注最低字数或审核门槛，不用重复核验记录填满。为JSON语法另留余量；正文不足不能用备注凑数。':'';
- const body={schemaVersion:1,baselineHash:baseline.hash,baseline,adjustment,images:effectiveImages,...(length?{bodyLength:length}:{}),...(note?{workType:'note'}:{}),instructions:(note?baseline.note.instructions:baseline.instructions)+(instructions.trim()?'\n\n本篇明确的'+(origin==='local'?'本地偏好':'任务调整')+'（相对以上线上基线，仅作用本篇）：\n'+instructions:'')+(images===undefined?'':'\n本篇明确的配图调整：'+JSON.stringify(images))+budget};
+ const body={schemaVersion:1,baselineHash:baseline.hash,baseline,adjustment,images:effectiveImages,...(length?{bodyLength:length}:{}),...(note?{workType:'note'}:{}),...(chosen?{family:chosen.familyId}:{}),instructions:(note?baseline.note.instructions:form.instructions)+(instructions.trim()?'\n\n本篇明确的'+(origin==='local'?'本地偏好':'任务调整')+'（相对以上线上基线，仅作用本篇）：\n'+instructions:'')+(images===undefined?'':'\n本篇明确的配图调整：'+JSON.stringify(images))+budget};
  return {...body,hash:hash(body)};
 }
 function context(value){
