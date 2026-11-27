@@ -80,10 +80,15 @@ class RssdPublisher {
     row.receipt={...row.receipt,...receipt};
   }
   async request(url,{token,method='GET',body}={}){
-    const response=await this.fetch(url,{method,redirect:'error',headers:{Accept:'application/json',...(token?{Authorization:'Bearer '+token}:{}),...(body?{'Content-Type':'application/json'}:{})},body:body?json(body):undefined,signal:AbortSignal.timeout(20000)});
-    if(!response.ok)throw Object.assign(Error('Destination returned HTTP '+response.status),{status:response.status});
-    const reader=response.body.getReader();let size=0;const chunks=[];try{for(;;){const r=await reader.read();if(r.done)break;size+=r.value.length;if(size>8*1024*1024)throw Error('Destination response is too large');chunks.push(r.value);}}finally{await reader.cancel();}
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    // Each failure names the step it happened at (method and path; the credential travels in a header), so a
+    // retried publication shows which request of the exchange did not complete.
+    const step=method+' '+new URL(url).pathname;
+    try{
+      const response=await this.fetch(url,{method,redirect:'error',headers:{Accept:'application/json',...(token?{Authorization:'Bearer '+token}:{}),...(body?{'Content-Type':'application/json'}:{})},body:body?json(body):undefined,signal:AbortSignal.timeout(DESTINATION_TIMEOUT_MS)});
+      if(!response.ok)throw Object.assign(Error('Destination returned HTTP '+response.status),{status:response.status});
+      const reader=response.body.getReader();let size=0;const chunks=[];try{for(;;){const r=await reader.read();if(r.done)break;size+=r.value.length;if(size>8*1024*1024)throw Error('Destination response is too large');chunks.push(r.value);}}finally{await reader.cancel();}
+      return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    }catch(error){if(error&&typeof error==='object'&&!error.step)error.step=step;throw error;}
   }
   /** Whether the site's receiver says it understands work types, note links and card sets. A receiver from before
    * its status endpoint answers 404, or 401 because its credential check runs first; either way it does not, and
@@ -179,7 +184,7 @@ class RssdPublisher {
   }
   async tick({orgId=null}={}){if(this.running)return null;this.running=true;let row;try{row=await this.claim(orgId);if(!row)return null;return await this.dispatch(row);}catch(error){
     if(!row)throw error;const classified=classifyDestinationError(error);
-    return this.finish(row,{state:classified.blocked?'blocked':'queued',receipt:{...row.receipt,failureCode:classified.code},error:classified.message,delay:Math.min(300000,10000*Math.max(1,row.attempts))});
+    return this.finish(row,{state:classified.blocked?'blocked':'queued',receipt:{...row.receipt,failureCode:classified.code,failureDetail:classified.detail||null},error:classified.message,delay:Math.min(300000,10000*Math.max(1,row.attempts))});
   }finally{this.running=false;}}
 }
 function classifyDestinationError(error){
@@ -188,13 +193,27 @@ function classifyDestinationError(error){
   if(error instanceof p.ProtocolError&&error.status>=500)return {blocked:false,code:error.code||'center_unavailable',message:error.message};
   if(error instanceof p.ProtocolError)return {blocked:true,code:error.code||'invalid_request',message:error.message};
   const status=error.status;
+  const detail=failureDetail(error),at=detail?' ('+detail+')':'';
   if(status===401||status===403)return {blocked:true,code:'destination_auth',message:'Destination rejected the publication (HTTP '+status+')'};
   if([400,409,422].includes(status))return {blocked:true,code:'destination_rejected',message:'Destination rejected the publication (HTTP '+status+')'};
-  if(typeof status==='number'&&status>=500)return {blocked:false,code:'destination_http',message:'Destination returned HTTP '+status+'; original request will be queried before retry'};
+  if(typeof status==='number'&&status>=500)return {blocked:false,code:'destination_http',detail,message:'Destination returned HTTP '+status+at+'; original request will be queried before retry'};
   if(error.code==='ENOSPC')return {blocked:true,code:'destination_storage',message:'Destination storage is full'};
-  if(error.name==='AbortError'||error.name==='TimeoutError'||['ECONNREFUSED','ENOTFOUND','EAI_AGAIN','ETIMEDOUT','ECONNRESET'].includes(error.code)||/fetch failed|network|unreachable|interrupted/i.test(error.message||''))
-    return {blocked:false,code:'destination_network',message:'Destination network error; original request will be queried before retry'};
-  if(error instanceof SyntaxError)return {blocked:false,code:'destination_protocol',message:'Destination response could not be parsed; original request will be queried before retry'};
-  return {blocked:false,code:'destination_unavailable',message:'Destination unavailable; original request will be queried before retry'};
+  // A destination that accepted the connection but did not answer in time is slow, not unreachable.
+  if(error.name==='AbortError'||error.name==='TimeoutError'||['UND_ERR_HEADERS_TIMEOUT','UND_ERR_BODY_TIMEOUT'].includes(error.code||error.cause?.code))
+    return {blocked:false,code:'destination_timeout',detail,message:'Destination did not answer within '+DESTINATION_TIMEOUT_MS/1000+' seconds'+at+'; original request will be queried before retry'};
+  if(['ECONNREFUSED','ENOTFOUND','EAI_AGAIN','ETIMEDOUT','ECONNRESET','EPIPE','EHOSTUNREACH','ENETUNREACH','UND_ERR_SOCKET','UND_ERR_CONNECT_TIMEOUT'].includes(error.code||error.cause?.code)||/fetch failed|network|unreachable|interrupted|terminated/i.test(error.message||''))
+    return {blocked:false,code:'destination_network',detail,message:'Destination network error'+at+'; original request will be queried before retry'};
+  if(error instanceof SyntaxError)return {blocked:false,code:'destination_protocol',detail,message:'Destination response could not be parsed'+at+'; original request will be queried before retry'};
+  return {blocked:false,code:'destination_unavailable',detail,message:'Destination unavailable'+at+'; original request will be queried before retry'};
 }
-module.exports={RssdPublisher,CredentialCipher,classifyDestinationError};
+const DESTINATION_TIMEOUT_MS=20000;
+/** What was observed, without the error's own text, which may quote a response: the step, the error's name and
+ * the system error codes of it and its cause, such as `GET /api/.../submissions/<id>: TypeError ECONNRESET`. */
+function failureDetail(error){
+  const name=/^[A-Za-z]{1,40}$/.test(error?.name||'')?error.name:null;
+  const codes=[error?.code,error?.cause?.code].filter((code,i,all)=>typeof code==='string'&&/^[A-Z][A-Z0-9_]{1,40}$/.test(code)&&all.indexOf(code)===i);
+  const step=typeof error?.step==='string'&&/^[A-Z]{3,7} \/[\w\-./%~]{0,300}$/.test(error.step)?error.step:null;
+  const observed=[name,...codes].filter(Boolean).join(' ');
+  return [step,observed].filter(Boolean).join(': ')||null;
+}
+module.exports={RssdPublisher,CredentialCipher,classifyDestinationError,failureDetail};

@@ -809,6 +809,15 @@ test('destination failures keep original identities and classify the observed ca
   const opaque=classifyDestinationError(Error('unclassified'));
   assert.equal(opaque.code,'destination_unavailable');assert.match(opaque.message,/queried before retry/);
   assert.equal(JSON.stringify(opaque).includes('fixture-only'),false);
+  const slow=classifyDestinationError(Object.assign(new DOMException('The operation was aborted due to timeout','TimeoutError'),{step:'GET /api/rssd-receiver/v1/sites/metho/submissions/publication-1'}));
+  assert.equal(slow.blocked,false);assert.equal(slow.code,'destination_timeout');
+  assert.equal(slow.detail,'GET /api/rssd-receiver/v1/sites/metho/submissions/publication-1: TimeoutError');
+  assert.match(slow.message,/did not answer within 20 seconds \(GET \/api\/rssd-receiver\/v1\/sites\/metho\/submissions\/publication-1: TimeoutError\)/);
+  const reset=classifyDestinationError(Object.assign(new TypeError('fetch failed'),{cause:Object.assign(Error('socket hang up fixture-only'),{code:'ECONNRESET'}),step:'POST /api/rssd-receiver/v1/sites/metho/submissions'}));
+  assert.equal(reset.code,'destination_network');assert.equal(reset.detail,'POST /api/rssd-receiver/v1/sites/metho/submissions: TypeError ECONNRESET');
+  assert.equal(JSON.stringify(reset).includes('fixture-only'),false);
+  assert.equal(classifyDestinationError(Object.assign(Error('x'),{step:'GET https://token@host/'})).detail,'Error');
+  assert.equal(classifyDestinationError(Object.assign(new TypeError('terminated'),{cause:{code:'UND_ERR_SOCKET'}})).code,'destination_network');
   const protocol=classifyDestinationError(new p.ProtocolError('Article references media missing from its edition manifest',400,'missing_media'));
   assert.equal(protocol.blocked,true);assert.equal(protocol.code,'missing_media');
 });
