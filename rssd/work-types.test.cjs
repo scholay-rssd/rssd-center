@@ -160,7 +160,7 @@ const cardEdition={locale:'zh-CN',title:'缅因猫',bodyMarkdown:'正文。',sum
 const livePacket=extra=>publication({version:1,requestId:'publication-1',siteId:'pets',workspaceId:'pets',sectionId:'daily-cat',workId:'maine-coon',locale:'zh-CN',revision:2,
   contentHash:p.hash(cardEdition),content:publicContent(cardEdition),route:'/news/maine-coon/',...extra});
 
-function cardsFixture({status=['work-types-v1','card-updates-v1'],live=livePacket(),newest='rendition-1',pending=false,existing=false,edition=cardEdition,headState='success',enabled=true}={}){
+function cardsFixture({status=['work-types-v1','card-updates-v1'],live=livePacket(),newest='rendition-1',pending=false,existing=false,edition=cardEdition,headState='success',enabled=true,bilingual=false}={}){
   const cipher=new CredentialCipher(secret),writes=[],stored=new Map();
   const destination={id:destinationId,orgId,kind:'site',enabled,workspaceIds:['pets'],config:{origin:'https://pet.example',siteId:'pets',sealedToken:cipher.seal('site-token',orgId+':'+destinationId)}};
   const site={head:{siteId:'pets',workId:'maine-coon',locale:'zh-CN',revision:2,route:'/news/maine-coon/',operation:'publish',operationSequence:1,contentHash:p.hash(cardEdition),state:headState},live,receipts:new Map()};
@@ -192,6 +192,7 @@ function cardsFixture({status=['work-types-v1','card-updates-v1'],live=livePacke
       if(/FROM rssd_renditions/.test(sql))return newest?[{id:newest}]:[];
       if(/UNION ALL SELECT id FROM rssd_editorial_actions/.test(sql))return pending?[{id:'publication-9'}]:[];
       if(/INSERT INTO rssd_editorial_actions/.test(sql)){if(existing)return [];inserted={requestKey:values[3],payload:JSON.parse(values[8])};return [{id:values[1]}];}
+      if(bilingual&&/FROM rssd_editorial_actions WHERE "orgId"=\$1 AND "workspaceId"=\$2 AND "requestKey"=\$3/.test(sql))return [{id:'action-cards-1',state:'queued',action:'cards',locale:'zh-CN',payload:inserted.payload,receipt:{}}];
       if(/FROM rssd_editorial_actions WHERE "orgId"=\$1 AND id=\$2 FOR UPDATE/.test(sql))return [{leaseToken:'lease'}];
       if(/FROM rssd_works/.test(sql))return [{id:'maine-coon',workspaceId:'pets',sectionId:'daily-cat'}];
       if(/FROM rssd_editions/.test(sql))return [{locale:'zh-CN',revision:2,payload:edition,hash:p.hash(edition)}];
@@ -202,7 +203,7 @@ function cardsFixture({status=['work-types-v1','card-updates-v1'],live=livePacke
   const mediaStore={row:async(ctx,id)=>({id,workspaceId:'pets',manifest:media[id.slice(6)]}),bytes:async(ctx,id)=>({bytes:Buffer.from('png '+id)})};
   // A later draft (revision 3) exists; revision 2 is live.
   const entry={workId:'maine-coon',locale:'zh-CN',articleId:'maine-coon',revision:3,publishedVersion:2,sectionId:'daily-cat',url:'/news/maine-coon/',visibility:null,visibilityGeneration:0,deletedAt:null};
-  class Editorial{constructor(nested,mediaStore){this.store=nested;this.media=mediaStore;}async workspace(){return {id:'pets',siteId:'pets'};}async entries(){return [entry];}async find(){return entry;}}
+  class Editorial{constructor(nested,mediaStore){this.store=nested;this.media=mediaStore;}async workspace(){return {id:'pets',siteId:'pets'};}async entries(){return [entry];}async find(ctx,workspaceId,id,options){if(bilingual&&options?.locale!==entry.locale)throw new p.ProtocolError('Several editions claim this manuscript identity',409,'identity_conflict');return entry;}}
   const publisher=new RssdPublisher(store,{secret,fetchImpl,media:mediaStore});
   const actions=new RssdEditorialActions(store,mediaStore,publisher,new Editorial(store,mediaStore));
   const row=()=>({orgId,id:'action-cards-1',workspaceId:'pets',requestKey:inserted.requestKey,workId:'maine-coon',locale:'zh-CN',destinationId,action:'cards',payload:{...inserted.payload},receipt:{},packet:null,leaseToken:'lease',attempts:1,createdAt:new Date()});
@@ -235,6 +236,18 @@ test('a card set saved for the live revision is queued once and reaches the webs
   const upsert=f.writes.find(w=>/INSERT INTO rssd_publications/.test(w.sql));
   assert.equal(upsert.values[5],2);
   assert.equal(JSON.parse(upsert.values[8]).operationSequence,2);
+});
+
+test('a card update for a bilingual work resolves the locale of the queued action',async()=>{
+  const f=cardsFixture({bilingual:true});await f.actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN'});
+  assert.equal((await f.actions.dispatch(f.row())).state,'published');
+  assert.equal(f.site.live.locale,'zh-CN');assert.equal(f.site.live.operation,'cards');
+});
+
+test('a bilingual card action status resolves its own locale',async()=>{
+  const f=cardsFixture({bilingual:true});await f.actions.queueCards(orgId,{workspaceId:'pets',workId:'maine-coon',locale:'zh-CN'});
+  const status=await f.actions.status({orgId,admin:true,workspaceIds:null},'pets','cards-rendition-1');
+  assert.equal(status.status,'queued');assert.equal(status.publishedVersion,2);
 });
 
 test('no card update for a note, a site that is not set up, or an edition published before card sets were sent',async()=>{

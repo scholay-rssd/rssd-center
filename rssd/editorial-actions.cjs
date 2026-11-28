@@ -28,7 +28,7 @@ class RssdEditorialActions {
    const old=legacy.action,doc=legacy.source.document,latest=JSON.parse(legacy.source.revisions.at(-1).payload),job=(legacy.source.jobs||[]).find(j=>j.id===old.job_id)||null;
    return {requestKey:key,action:old.action,articleId:doc.kind==='news'?latest.id:'record-'+legacy.documentId,version:doc.latest_revision,publishedVersion:doc.published_revision,url:doc.permalink,job,deleted:Boolean(legacy.source.tombstone),status:job?.status||'success',centerManaged:true,legacy:true};
   }
-  const current=await this.editorial.find(ctx,workspaceId,row.payload.articleId,{allowDeleted:true});
+  const current=await this.editorial.find(ctx,workspaceId,row.payload.articleId,{allowDeleted:true,locale:row.locale});
   const status=row.state==='published'?'success':row.state==='dispatching'?'running':row.state==='queued'?'queued':'failed';
   return {requestKey:key,action:row.action,articleId:row.payload.articleId,version:current?.revision||row.payload.revision,
    publishedVersion:current?.publishedVersion??null,url:row.payload.route,job:{id:row.id,status,error:row.error,release:row.receipt.release||row.receipt.releaseId||null},
@@ -126,7 +126,7 @@ class RssdEditorialActions {
   await lock(db,row.orgId+':work:'+row.workId);
   await q(db,'SELECT id FROM rssd_publications WHERE "orgId"=$1 AND "workId"=$2 AND locale=$3 FOR UPDATE',row.orgId,row.workId,row.locale);
   const nested=new RssdStore(db);nested.transaction=fn=>fn(db);const editorial=new this.editorial.constructor(nested,this.media);
-  const current=await editorial.find({orgId:row.orgId,admin:true,workspaceIds:null},row.workspaceId,row.payload.articleId,{allowDeleted:true});
+  const current=await editorial.find({orgId:row.orgId,admin:true,workspaceIds:null},row.workspaceId,row.payload.articleId,{allowDeleted:true,locale:row.locale});
   // A card update only needs its revision to stay live and visible; a later draft does not stop it.
   const draftMoved=row.action!=='cards'&&current?.revision!==row.payload.revision;
   if(!current||draftMoved||current.deletedAt&&row.action==='cards'||(current.publishedVersion??null)!==row.payload.expectedPublishedVersion||(current.visibilityGeneration||0)!==row.payload.expectedVisibilityGeneration)p.fail('A newer edition or visibility decision superseded this action; its original request is retained',409,'stale_action');
